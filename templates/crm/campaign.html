@@ -1,0 +1,88 @@
+{% extends "crm/base.html" %}
+{% block title %}{{ c.name }} – Blitzkrieg{% endblock %}
+{% block page_title %}📣 {{ c.name }}{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('crm_campaigns') }}" class="btn btn-secondary btn-sm">← Kampanie</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.bk-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .bk-grid { grid-template-columns: minmax(0, 1fr); } }
+.bk-stats { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.bk-stat b { display: block; font-size: 20px; }
+.bk-stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.bk-pre { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; background: var(--panel2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.bk-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0 4px; }
+.bk-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bk-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.bk-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.r-czeka { background: var(--panel2); color: var(--muted); border: 1px solid var(--border); }
+.r-wyslany { background: #22c55e22; color: var(--green); }
+.r-blad { background: #ef444422; color: var(--red); }
+.bk-msg { border-radius: var(--radius); padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
+.bk-msg.ok { background: #22c55e18; border: 1px solid #22c55e66; color: var(--green); }
+.bk-msg.err { background: #ef444418; border: 1px solid #ef444466; color: var(--red); }
+.bk-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if msg %}<div class="bk-msg {{ msg[0] }}">{{ msg[1] }}</div>{% endif %}
+
+<div class="bk-stats">
+  <div class="bk-stat"><b>{{ {'szkic': 'Szkic', 'trwa': '🚀 Trwa', 'pauza': '⏸ Pauza', 'koniec': '✅ Koniec'}[c.status] }}</b><span>status</span></div>
+  <div class="bk-stat"><b>{{ st.counts.wyslany }} / {{ st.total }}</b><span>wysłane</span></div>
+  <div class="bk-stat"><b>{{ st.counts.czeka }}</b><span>w kolejce</span></div>
+  {% if st.counts.blad %}<div class="bk-stat"><b style="color:var(--red)">{{ st.counts.blad }}</b><span>błędy</span></div>{% endif %}
+  <div class="bk-stat"><b>{{ c.rate_per_hour }}/h</b><span>co {{ st.interval_min }} min, {{ c.hour_from }}:00–{{ c.hour_to }}:00</span></div>
+  {% if st.counts.czeka %}<div class="bk-stat"><b>~{{ st.hours_left }} h</b><span>wysyłki{% if st.days_left > 1 %} (~{{ st.days_left }} dni){% endif %}</span></div>{% endif %}
+</div>
+
+<div class="bk-grid">
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-envelope"></i> Podgląd{% if preview_rec %} — tak zobaczy to {{ preview_rec.email }}{% endif %}</div>
+    <div class="panel-body">
+      <div class="bk-hint" style="margin-bottom:8px">Od: <b>{{ sender.get('full_name', '') }} &lt;{{ sender.get('email', '') }}&gt;</b></div>
+      {% if preview %}
+      <div class="bk-pre" style="margin-bottom:8px"><b>{{ preview[0] }}</b></div>
+      <div class="bk-pre">{{ preview[1] }}</div>
+      {% endif %}
+      <form method="post" class="bk-actions">
+        <button class="btn btn-secondary" name="action" value="test">✉️ Wyślij test do mnie</button>
+        {% if c.status in ['szkic', 'pauza'] and st.counts.czeka %}
+        <button class="btn btn-primary" name="action" value="start"
+                onclick="return confirm('Odpalić Blitzkrieg? {{ st.counts.czeka }} maili, {{ c.rate_per_hour }} na godzinę.')">
+          🚀 {{ 'Blitzkrieg!' if c.status == 'szkic' else 'Wznów' }}</button>
+        {% endif %}
+        {% if c.status == 'trwa' %}<button class="btn btn-secondary" name="action" value="pauza">⏸ Pauza</button>{% endif %}
+        {% if c.status != 'trwa' %}
+        <button class="btn btn-danger" name="action" value="usun" onclick="return confirm('Usunąć kampanię? Wysłanych maili to nie cofnie.')">🗑 Usuń</button>
+        {% endif %}
+      </form>
+      <div class="bk-hint">Treści nie da się już zmienić — jeśli chcesz inną, usuń kampanię i utwórz nową.
+        Każdy wysłany mail zapisuje się w komentarzach leada.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-people"></i> Odbiorcy ({{ st.total }})</div>
+    <div class="panel-body" style="max-height:620px;overflow:auto">
+      <table class="bk-table">
+        {% for r in c.recipients %}
+        <tr>
+          <td><span class="bk-badge r-{{ r.status }}">{{ {'czeka': 'czeka', 'wyslany': 'wysłany', 'blad': 'błąd', 'pominiety': 'pominięty'}[r.status] }}</span></td>
+          <td>{% if r.lead_id %}<a href="{{ url_for('crm_lead_detail', lead_id=r.lead_id) }}">{{ r.company }}</a>{% else %}{{ r.company }}{% endif %}
+            <div style="color:var(--muted);font-size:11.5px">{{ r.name or '' }} {{ r.email }}{% if r.error %} · {{ r.error }}{% endif %}</div></td>
+          <td style="color:var(--muted);white-space:nowrap">{{ r.sent_at.strftime('%d.%m %H:%M') if r.sent_at and r.status == 'wyslany' else '' }}</td>
+          <td>{% if r.status == 'czeka' and c.status in ['szkic', 'pauza'] %}
+            <form method="post"><input type="hidden" name="rid" value="{{ r.id }}">
+              <button class="btn btn-ghost btn-sm" name="action" value="usun_odbiorce" title="Usuń z kampanii">✕</button></form>
+          {% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

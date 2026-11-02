@@ -1,0 +1,204 @@
+{% extends "crm/base.html" %}
+{% import "crm/_journey.html" as jr with context %}
+{% block title %}Customer Journey – 33bots LT CRM{% endblock %}
+{% block page_title %}Customer Journey{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('crm_journey') }}{% if not only %}?tylko=akcja{% endif %}" class="btn btn-{{ 'primary' if only else 'secondary' }} btn-sm" title="Pokaż tylko klientów, przy których trzeba teraz coś zrobić">
+  {{ 'Wszyscy' if only else 'Do zrobienia: ' ~ todo }}
+</a>
+<a href="#archiwum" class="btn btn-secondary btn-sm">Archiwum ({{ archive|length }})</a>
+<a href="{{ url_for('crm_journey_docs') }}" class="btn btn-secondary btn-sm">Dokumenty</a>
+<form method="post" action="{{ url_for('crm_journey_scan') }}" style="margin:0"><button class="btn btn-secondary btn-sm" title="CRM i tak sprawdza skrzynki co kilka minut">Sprawdź skrzynki</button></form>
+<a href="{{ url_for('crm_journey_settings') }}" class="btn btn-secondary btn-sm" title="Ustawienia: terminy, kolory, wzór umowy, faktury">Ustawienia</a>
+{% endblock %}
+
+{% block extra_head %}
+{{ jr.styles() }}
+<style>
+.jr-alert { font-size: 12.5px; margin-bottom: 12px; }
+.jr-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .jr-board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .jr-board { grid-template-columns: 1fr; } }
+.jr-col { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; min-height: 160px; }
+.jr-col.over { border-color: var(--accent); }
+.jr-colhead { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 2px 2px 10px; }
+.jr-colhead b { color: var(--text); font-size: 13px; }
+.jr-empty { font-size: 12px; color: var(--muted); padding: 4px 2px; }
+.jr-card { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; cursor: grab; }
+.jr-card:last-child { margin-bottom: 0; }
+.jr-card.u-red { border-color: var(--red); }
+.jr-card.u-yellow { border-left-color: var(--yellow); }
+.jr-card.u-ok { border-left-color: var(--green); }
+.jr-card.u-nodate { border-left-color: var(--muted); }
+.jr-top { display: flex; align-items: baseline; gap: 8px; }
+.jr-name { font-weight: 600; font-size: 13.5px; color: var(--text); }
+.jr-name:hover { text-decoration: underline; }
+.jr-val { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.jr-arch { width: 100%; border-collapse: collapse; }
+.jr-arch th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.jr-arch td { font-size: 12.5px; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.jr-arch td a.jr-doclink { display: block; }
+.jr-arch tr.more { display: none; }
+.jr-arch.all tr.more { display: table-row; }
+.jr-wrap { overflow-x: auto; }
+.jr-help { font-size: 12.5px; line-height: 1.7; }
+.jr-help summary { cursor: pointer; font-weight: 600; padding: 10px 14px; }
+.jr-help ol { padding: 0 18px 12px 34px; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not boxes %}
+<div class="jr-alert jr-warn">CRM nie czyta jeszcze żadnej skrzynki — ustaw w Railway INBOX_IMAP_USER/INBOX_IMAP_PASS (kontakt@) i SMTP_PASS_&lt;IMIĘ&gt;. Do tego czasu odhaczaj ręcznie (przeciągnij kartę).</div>
+{% elif scan.errors %}
+<div class="jr-alert" style="color:var(--red)">Skrzynki z błędem logowania: {{ scan.errors|join(', ') }}</div>
+{% endif %}
+
+<div class="jr-board">
+  {% for key, label, hint in columns %}
+  <div class="jr-col" data-col="{{ key }}">
+    <div class="jr-colhead" title="{{ hint }}">{{ label }} <b>{{ cols[key]|length }}</b></div>
+    {% for v in cols[key] %}
+    {% set lead = v.lead %}
+    <div class="jr-card u-{{ v.urgency or 'none' }}" id="j{{ lead.id }}" draggable="true" data-lead="{{ lead.id }}">
+      <div class="jr-top">
+        <a class="jr-name" href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}#journey">{{ lead.company }}</a>
+        {% if lead.value_pln %}<span class="jr-val">{{ lead.value_pln|pln }} {{ lead.currency or 'EUR' }}</span>{% endif %}
+      </div>
+      <div class="jr-sub">{{ jr.when(v) }}{% if USERS_BY_ID.get(lead.assigned_to) %} · {{ USERS_BY_ID[lead.assigned_to].name }}{% endif %}</div>
+      {% set files = files_by_lead.get(lead.id, {}) %}
+      {{ jr.state_box(v, url_for('crm_journey') ~ '#j' ~ lead.id, files) }}
+      {{ jr.suggestions(pending_by_lead.get(lead.id, []), url_for('crm_journey') ~ '#j' ~ lead.id) }}
+      {% set shown = files.values()|map(attribute='id')|list %}
+      {% for d in unseen_by_lead.get(lead.id, []) if d.id not in shown %}
+      <div class="jr-line" onclick="event.stopPropagation()">Nowy dokument:
+        <a class="jr-doclink" href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) if d.pdf else url_for('crm_journey_doc_file', doc_id=d.id) }}" target="_blank" onclick="setTimeout(() => location.reload(), 800)">{{ d.filename|truncate(40) }}</a>
+      </div>
+      {% endfor %}
+      {% if not v.st.needs_review %}{{ jr.action_buttons(v) }}{% endif %}
+    </div>
+    {% else %}
+    <div class="jr-empty">{{ 'Nic do zrobienia.' if only else 'Pusto.' }}</div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="panel" id="archiwum" style="margin-top:16px">
+  <div class="panel-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span>Archiwum — zrealizowane ({{ archive|length }})</span>
+    <span style="font-size:11px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)">
+      {% if archive_scan %}umowy i bazy z dawnych maili: przejrzane {{ archive_scan }}{% elif boxes %}CRM przegląda dawne maile w poszukiwaniu umów i baz wiedzy — dokumenty będą się tu pojawiać{% endif %}
+    </span>
+    <input type="text" id="jr-find" placeholder="Szukaj klienta…" style="margin-left:auto;width:220px;font-size:12px;padding:5px 8px" oninput="archiveFind(this.value)">
+  </div>
+  <div class="panel-body" style="padding:0">
+    {% if archive %}
+    <div class="jr-wrap">
+    <table class="jr-arch" id="jr-arch">
+      <thead><tr><th>Klient</th><th>Wydarzenie</th><th>Opiekun</th><th>Umowa</th><th>Baza wiedzy</th><th>Faktura</th></tr></thead>
+      <tbody>
+      {% for a in archive %}
+      {% set j = a.j %}
+      <tr class="{{ 'more' if loop.index > 40 }}" data-name="{{ a.lead.company|lower }}">
+        <td><a class="jr-name" style="font-size:12.5px" href="{{ url_for('crm_lead_detail', lead_id=a.lead.id) }}#journey">{{ a.lead.company }}</a></td>
+        <td style="white-space:nowrap">{% if a.first %}{{ a.first.strftime('%d.%m.%Y') }}{% if a.last != a.first %} – {{ a.last.strftime('%d.%m') }}{% endif %}{% else %}<span class="jr-sub">—</span>{% endif %}</td>
+        <td class="jr-sub">{{ USERS_BY_ID[a.lead.assigned_to].name if USERS_BY_ID.get(a.lead.assigned_to) else '—' }}</td>
+        <td>
+          {% for d in a.contracts %}<a class="jr-doclink" target="_blank" href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) if d.pdf else url_for('crm_journey_doc_file', doc_id=d.id) }}" title="{{ d.filename }}">{{ d.filename|truncate(30) }}{{ ' (?)' if d.check }}</a>{% endfor %}
+          {% if not a.contracts %}
+            {% if j.contract_status == 'podpisana' %}<span class="jr-ok">podpisana</span>
+            {% elif a.sent %}<a class="jr-doclink" target="_blank" href="{{ url_for('crm_journey_doc_pdf', doc_id=a.sent[-1].id) if a.sent[-1].pdf else url_for('crm_journey_doc_file', doc_id=a.sent[-1].id) }}">wysłana, bez podpisanej</a>
+            {% else %}<span class="jr-sub">brak</span>{% endif %}
+          {% endif %}
+        </td>
+        <td>
+          {% for d in a.kb %}<a class="jr-doclink" target="_blank" href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) if d.pdf else url_for('crm_journey_doc_file', doc_id=d.id) }}" title="{{ d.filename }}">{{ d.filename|truncate(30) }}{{ ' (?)' if d.check }}</a>{% endfor %}
+          {% if not a.kb %}{% if j.kb_status == 'otrzymana' %}<span class="jr-ok">jest</span>{% else %}<span class="jr-sub">brak</span>{% endif %}{% endif %}
+        </td>
+        <td style="white-space:nowrap">
+          {% if j.invoice_number %}{{ j.invoice_number }}
+          {% elif j.invoice_uuid and j.invoice_uuid.startswith('task:') %}<span class="jr-sub">wystawiam…</span>
+          {% elif a.invoiced %}<span class="jr-ok">wystawiona</span>
+          {% else %}<button type="button" class="btn btn-secondary btn-sm" onclick="openInvoice({{ a.lead.id }})" title="inFakt → KSeF → PDF mailem do klienta (sprawdzisz dane przed wystawieniem)">Wystaw fakturę</button>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if archive|length > 40 %}<div style="padding:10px 14px"><button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('jr-arch').classList.add('all'); this.remove()">Pokaż wszystkie ({{ archive|length }})</button></div>{% endif %}
+    {% else %}
+    <div class="jr-empty" style="padding:14px">Jeszcze nic — zrealizowani klienci trafiają tu sami.</div>
+    {% endif %}
+  </div>
+</div>
+
+<details class="panel jr-help" style="margin-top:16px">
+  <summary>Jak to działa</summary>
+  <ol>
+    <li>Lead przechodzi na <b>Wygrany</b> → karta w „Umowa do wysłania”. W szarym polu kliknij <b>„Wyślij umowę”</b> (pod Umową): CRM ma gotowego, prostego maila z umową (DOCX do uzupełnienia i podpisu). Pod Bazą wiedzy <b>„Wyślij instrukcję”</b> — osobny mail z instrukcją w PDF. Popraw, jeśli trzeba, i wyślij. <b>CRM nigdy nie wysyła sam</b> — zawsze człowiek klika.</li>
+    <li>Maile wychodzą ze skrzynki <b>opiekuna leada</b> (imię na karcie). Kopia trafia do komentarzy i dokumentów klienta.</li>
+    <li>CRM co kilka minut czyta skrzynki ({{ boxes|map(attribute=0)|join(', ') if boxes else 'brak podpiętych' }}{% if scan.at %}; ostatnio {{ to_local(scan.at).strftime('%d.%m %H:%M') }} — {{ scan.info }}{% endif %}). Gdy klient <b>odeśle umowę</b> albo <b>bazę wiedzy</b>, karta sama idzie dalej, a dokument (jako PDF) ląduje przy kliencie.</li>
+    <li>Na każdej karcie jest szare pole: <b>Umowa</b> (nie wysłana / wysłana / podpisana) i <b>Baza wiedzy</b> (brak / prośba wysłana / jest) — zielony = jest, żółty = czekamy, czerwony = brak. Zmiana od razu przesuwa kartę. Pod spodem plik, który odesłał klient („bez pliku” = nie ma go w CRM — w leadzie jest przycisk „Szukaj umowy i bazy w skrzynkach”).</li>
+    <li><b>Podpisane</b> = umowa jest, brakuje bazy wiedzy (karta na czerwono). Baza wiedzy „jest” → karta przechodzi do <b>Odhaczone</b>: wszystko klepnięte.</li>
+    <li>Klient milczy? Po {{ cfg.remind_first }} dniach pojawia się gotowe <b>przypomnienie o umowie</b> (do akceptu), potem co {{ cfg.remind_every }} dni. O bazie wiedzy — od {{ cfg.kb_remind_from }} dni przed wydarzeniem; potrzebna najpóźniej {{ cfg.kb_deadline }} dni przed.</li>
+    <li>Kolor karty bez podpisanej umowy: czerwony ≤ {{ cfg.red }} dni do wydarzenia, żółty ≤ {{ cfg.yellow }} dni. Zielony pasek = odhaczone.</li>
+    <li><b>Wyjątki</b> (umowa podpisana na miejscu, baza przez telefon): przeciągnij kartę do właściwej kolumny — CRM przyjmie to bez pytań.</li>
+    <li>Po wydarzeniu lead jest <b>Zrealizowany</b> i trafia do <b>Archiwum</b> — tam są umowy i bazy wiedzy wszystkich dawnych realizacji. Fakturę wystawisz przyciskiem <b>Wystaw fakturę</b> w archiwum albo w karcie leada.</li>
+  </ol>
+</details>
+
+{% if recent %}
+<details class="panel jr-help" style="margin-top:12px">
+  <summary>Ostatnio wykryte w skrzynkach</summary>
+  <div class="jr-wrap">
+  <table class="jr-arch">
+    {% for m in recent %}
+    <tr>
+      <td style="white-space:nowrap" class="jr-sub">{{ to_local(m.received_at).strftime('%d.%m %H:%M') if m.received_at }}</td>
+      <td>{% if m.lead %}<a href="{{ url_for('crm_lead_detail', lead_id=m.lead_id) }}#journey" class="jr-doclink">{{ m.lead.company }}</a>{% endif %}</td>
+      <td>{{ mail_results.get(m.result, m.result) }}{% if m.pending %} <span class="jr-sub">— do potwierdzenia</span>{% elif m.confidence == 'odrzucone' %} <span class="jr-sub">(odrzucone)</span>{% endif %}</td>
+      <td class="jr-sub">{{ (m.subject or '')|truncate(60) }}</td>
+      <td class="jr-sub" style="white-space:nowrap">{{ m.mailbox }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</details>
+{% endif %}
+
+{{ jr.modal() }}
+{{ jr.invoice_modal() }}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// przeciągnięcie = ręczne ustawienie kroku (np. umowa podpisana na miejscu) — CRM przyjmuje bez pytań
+let jrDrag = null;
+document.querySelectorAll('.jr-card').forEach(c => {
+  c.addEventListener('dragstart', () => { jrDrag = c; c.style.opacity = '.4'; });
+  c.addEventListener('dragend', () => { c.style.opacity = '1'; jrDrag = null; });
+});
+document.querySelectorAll('.jr-col').forEach(col => {
+  col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
+  col.addEventListener('dragleave', () => col.classList.remove('over'));
+  col.addEventListener('drop', async e => {
+    e.preventDefault(); col.classList.remove('over');
+    if (!jrDrag) return;
+    const card = jrDrag;
+    col.appendChild(card);
+    await fetch(`/crm/journey/${card.dataset.lead}/przenies`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({col: col.dataset.col})});
+    location.reload();
+  });
+});
+function archiveFind(q) {
+  q = q.trim().toLowerCase();
+  const t = document.getElementById('jr-arch');
+  if (!t) return;
+  t.classList.toggle('all', !!q);
+  t.querySelectorAll('tbody tr').forEach(r => { r.style.display = !q || r.dataset.name.includes(q) ? '' : 'none'; });
+}
+</script>
+{% endblock %}

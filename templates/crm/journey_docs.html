@@ -1,0 +1,40 @@
+{% extends "crm/base.html" %}
+{% block title %}Dokumenty klientów – 33bots LT CRM{% endblock %}
+{% block page_title %}Dokumenty klientów{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('crm_journey') }}" class="btn btn-secondary btn-sm">← Tablica</a>
+{% endblock %}
+
+{% block content %}
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+  <a href="{{ url_for('crm_journey_docs') }}" class="btn btn-{{ 'primary' if not kind else 'secondary' }} btn-sm">Wszystkie</a>
+  {% for k, label in doc_kinds.items() %}
+  <a href="{{ url_for('crm_journey_docs', rodzaj=k) }}" class="btn btn-{{ 'primary' if kind == k else 'secondary' }} btn-sm">{{ label }}</a>
+  {% endfor %}
+</div>
+<div class="panel">
+  <div class="panel-body" style="padding:0">
+    {% if docs %}
+    <table style="width:100%;font-size:12.5px">
+      <thead><tr><th style="text-align:left;padding:8px">Kiedy</th><th style="text-align:left">Klient</th><th style="text-align:left">Rodzaj</th><th style="text-align:left">Plik</th><th style="text-align:left">Skąd</th></tr></thead>
+      <tbody>
+      {% for d in docs %}
+      <tr style="border-top:1px solid var(--border)">
+        <td style="padding:7px 8px;white-space:nowrap;color:var(--muted)">{{ to_local(d.received_at or d.created_at).strftime('%d.%m.%Y') }}</td>
+        <td><a href="{{ url_for('crm_lead_detail', lead_id=d.lead_id) }}#journey" style="text-decoration:underline">{{ d.lead.company }}</a></td>
+        <td>{{ doc_kinds.get(d.kind, d.kind) }}{% if not d.seen %}<span style="color:var(--accent);font-size:10.5px;font-weight:700;margin-left:4px">NOWY</span>{% endif %}{% if d.status == 'do_sprawdzenia' %} <span style="color:var(--muted)">· do potwierdzenia</span>{% endif %}</td>
+        <td>
+          {% if d.pdf %}<a href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) }}" target="_blank" style="text-decoration:underline">PDF</a> · {% endif %}
+          <a href="{{ url_for('crm_journey_doc_file', doc_id=d.id) }}" style="text-decoration:underline">{{ d.filename|truncate(40) }}</a>
+        </td>
+        <td style="color:var(--muted);font-size:11.5px">{{ d.source|truncate(60) }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:16px;color:var(--muted)">Brak dokumentów.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

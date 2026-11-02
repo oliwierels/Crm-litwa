@@ -1,0 +1,86 @@
+{% extends "crm/base.html" %}
+{% block title %}Customer Journey — ustawienia – 33bots LT CRM{% endblock %}
+{% block page_title %}Customer Journey — ustawienia{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('crm_journey') }}" class="btn btn-secondary btn-sm">← Tablica</a>
+{% endblock %}
+
+{% block content %}
+<div style="display:grid;gap:14px;max-width:820px">
+  {% if msg %}<div class="panel" style="border-color:#22c55e66"><div class="panel-body" style="color:var(--green)">✅ {{ msg }}</div></div>{% endif %}
+  {% if err %}<div class="panel" style="border-color:#ef444466"><div class="panel-body" style="color:var(--red)">⚠️ {{ err }}</div></div>{% endif %}
+  {% if unknown %}<div class="panel" style="border-color:#eab30866"><div class="panel-body" style="color:var(--yellow)">Nieznane pola we wzorze (zostaną puste): {{ unknown|join(', ') }}</div></div>{% endif %}
+
+  <form method="post" class="panel">
+    <input type="hidden" name="action" value="zapisz">
+    <div class="panel-header"><i class="bi bi-sliders"></i> Kto prowadzi i terminy</div>
+    <div class="panel-body gap10">
+      <div>
+        <label>Kto prowadzi posprzedaż — faktury oraz maile przy leadach bez opiekuna (umowa i baza wiedzy wychodzą od opiekuna leada)</label>
+        <select name="owner">{% for u in users %}<option value="{{ u.id }}" {{ 'selected' if u.id == owner.id }}>{{ u.full_name or u.name }}{% if not u.email %} — brak e-maila w Profilu{% endif %}</option>{% endfor %}</select>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+        <div><label>Pierwsze przypomnienie o umowie — dni po wysłaniu</label><input type="number" name="remind_first" min="1" max="365" value="{{ cfg.remind_first }}"></div>
+        <div><label>Kolejne przypomnienia — co ile dni</label><input type="number" name="remind_every" min="1" max="365" value="{{ cfg.remind_every }}"></div>
+        <div><label>Baza wiedzy najpóźniej — dni przed wydarzeniem</label><input type="number" name="kb_deadline" min="1" max="365" value="{{ cfg.kb_deadline }}"></div>
+        <div><label>Przypominaj o bazie wiedzy od — dni przed wydarzeniem</label><input type="number" name="kb_remind_from" min="1" max="365" value="{{ cfg.kb_remind_from }}"></div>
+        <div><label>Umowa niepodpisana: czerwony, gdy do wydarzenia ≤ dni</label><input type="number" name="red" min="1" max="365" value="{{ cfg.red }}"></div>
+        <div><label>Umowa niepodpisana: żółty, gdy ≤ dni</label><input type="number" name="yellow" min="1" max="365" value="{{ cfg.yellow }}"></div>
+        <div><label>VAT w umowie (%)</label><input type="text" name="vat" value="{{ vat }}"></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:10px;font-weight:600">Faktura po wydarzeniu (inFakt)
+        <span style="font-weight:400;font-size:11.5px;color:{{ 'var(--green)' if infakt else 'var(--yellow)' }}">— {{ '✅ klucz INFAKT_API_KEY ustawiony' if infakt else '⚠️ brak INFAKT_API_KEY w Railway (inFakt → Ustawienia konta → API → klucz z uprawnieniem do faktur)' }}</span></div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+        <div><label>Konto bankowe na fakturze (puste = domyślne z inFakt)</label><input type="text" name="bank_account" value="{{ bank_account }}" placeholder="PL61 1090 …"></div>
+        <div><label>Bank</label><input type="text" name="bank_name" value="{{ bank_name }}" placeholder="np. mBank"></div>
+        <div><label>Termin płatności — dni od wystawienia</label><input type="number" name="payment_days" min="0" max="120" value="{{ payment_days }}"></div>
+        <label style="display:flex;gap:6px;align-items:center;margin-top:18px"><input type="checkbox" name="ksef" value="1" style="width:auto" {{ 'checked' if ksef }}> Domyślnie wysyłaj fakturę do KSeF</label>
+      </div>
+      <div><label>Link do opinii (np. Google) — trafia do prośby o opinię po wydarzeniu</label><input type="text" name="review_link" value="{{ review_link }}" placeholder="https://g.page/r/…"></div>
+      <div style="font-size:11.5px;color:var(--muted)">Podpisana umowa bez bazy wiedzy jest zawsze czerwona; z bazą — odhaczona (zielony pasek).</div>
+      <button class="btn btn-primary">Zapisz</button>
+    </div>
+  </form>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-file-earmark-word"></i> Wzór umowy (DOCX)</div>
+    <div class="panel-body gap10" style="font-size:12.5px">
+      <div>Teraz: <b>{{ 'wgrany plik „' ~ template_name ~ '”' if template_name else 'nasz tekst umowy z CRM' }}</b>.
+        CRM wpisuje do wzoru to, co wie (daty, miejsce, cena, robot), a dane klienta zostawia wykropkowane — klient uzupełnia je sam.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_journey_template_docx') }}">Pobierz obecny wzór (DOCX z polami)</a>
+        {% if template_name %}
+        <form method="post"><input type="hidden" name="action" value="domyslny"><button class="btn btn-ghost btn-sm" data-msg="Wrócić do naszego tekstu umowy z CRM?" onclick="return confirm(this.dataset.msg)">Wróć do wzoru z CRM</button></form>
+        {% endif %}
+      </div>
+      <form method="post" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="hidden" name="action" value="wzor">
+        <input type="file" name="wzor" accept=".docx" required style="width:auto">
+        <button class="btn btn-primary btn-sm">Wgraj własny wzór</button>
+      </form>
+      <details>
+        <summary style="cursor:pointer;color:var(--muted)">Pola, które można wstawić we wzorze — np. <code>{{ '{{ nazwa_wydarzenia }}' }}</code></summary>
+        <table style="margin-top:8px;font-size:11.5px">
+          {% for key, desc in fields %}<tr><td style="padding:2px 10px 2px 0;font-family:monospace">{{ '{{ ' ~ key ~ ' }}' }}</td><td style="color:var(--muted)">{{ desc }}</td></tr>{% endfor %}
+        </table>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">Pole musi być w jednym akapicie; formatowanie akapitu z polem bierze się z jego początku.</div>
+      </details>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-envelope-check"></i> Skrzynki i konwersja</div>
+    <div class="panel-body" style="font-size:12.5px;line-height:1.7">
+      {% if boxes %}
+        CRM czyta: <b>{{ boxes|map(attribute=0)|join(', ') }}</b> (Odebrane i Wysłane).
+        {% if scan.at %}<br>Ostatnio: {{ to_local(scan.at).strftime('%d.%m %H:%M') }} — {{ scan.info }}{% endif %}
+        {% if scan.errors %}<br><span style="color:var(--red)">Błędy: {{ scan.errors|join(', ') }}</span>{% endif %}
+      {% else %}
+        <span style="color:var(--yellow)">⚠️ Żadna skrzynka nie jest podpięta.</span>
+      {% endif %}
+      <br>Skrzynka kontakt@ = zmienne <code>INBOX_IMAP_USER</code> / <code>INBOX_IMAP_PASS</code>; osobiste = <code>SMTP_PASS_JERZY</code>, <code>SMTP_PASS_BARTEK</code>, <code>SMTP_PASS_OLIWIER</code> (to samo hasło co do wysyłki; inne można podać jako <code>IMAP_PASS_&lt;IMIĘ&gt;</code>). Ustawia się je w Railway → Variables.
+      <br>Konwersja Word → PDF: {% if soffice %}<span style="color:var(--green)">✅ LibreOffice dostępny</span>{% else %}<span style="color:var(--yellow)">LibreOffice niedostępny — DOCX zamieniany na PDF jako sam tekst</span>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,78 @@
+{# Panel Customer Journey na stronie leada: status umowy i bazy wiedzy, co zrobić, dokumenty. Wymaga: jv, jr (makra) #}
+{% set j = jv.j %}
+{% set back_here = url_for('crm_lead_detail', lead_id=lead.id) ~ '#journey' %}
+{% set archived = lead.stage == 'Zrealizowany' %}
+{% set sender = USERS_BY_ID.get(lead.assigned_to) %}
+<div class="panel" id="journey" style="{{ 'border-color:var(--red)' if jv.urgency == 'red' }}">
+  <div class="panel-header" style="display:flex;align-items:center;gap:6px">
+    <span>Customer Journey</span>
+    <a href="{{ url_for('crm_journey') }}{{ '#archiwum' if archived else '#j' ~ lead.id }}" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;text-decoration:underline">tablica →</a>
+  </div>
+  <div class="panel-body">
+    <div style="font-weight:600;font-size:13px">{{ journey_columns[jv.col] }}</div>
+    <div class="jr-sub">{{ jr.when(jv) }}</div>
+    {{ jr.state_box(jv, back_here, jfiles) }}
+    {{ jr.suggestions(pending_mails, back_here) }}
+    {% if not jv.st.needs_review %}{{ jr.action_buttons(jv) }}{% endif %}
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+      {% if not archived and j.contract_status != 'do_wyslania' %}<button type="button" class="btn btn-secondary btn-sm" onclick="openJourneyMail({{ lead.id }}, 'umowa')">Wyślij umowę ponownie</button>{% endif %}
+      {% if not archived and j.kb_status != 'brak' %}<button type="button" class="btn btn-secondary btn-sm" onclick="openJourneyMail({{ lead.id }}, 'baza')">Wyślij instrukcję bazy ponownie</button>{% endif %}
+      <button type="button" class="btn btn-secondary btn-sm" onclick="journeySearch({{ lead.id }}, this)" title="Przejrzy wszystkie maile z adresami tego klienta (do 2 lat wstecz) i doda odesłane umowy i bazy wiedzy do dokumentów">Szukaj umowy i bazy w skrzynkach</button>
+    </div>
+    <div id="jr-search-msg" class="jr-sub" style="margin-top:4px"></div>
+    {% if not archived %}<div class="jr-sub" style="margin-top:4px">Maile wychodzą od: {{ (sender.full_name or sender.name) if sender else 'osoby z ustawień Customer Journey (lead bez opiekuna)' }}{% if j.contract_status == 'podpisana' %} · umowa {{ 'odesłana mailem' if j.contract_signed_via == 'mail' else 'oznaczona ręcznie' }}{% endif %}</div>{% endif %}
+
+    {% if archived %}
+    <div class="jr-sec">Po wydarzeniu</div>
+    {% if j.invoice_uuid and not j.invoice_uuid.startswith('task:') %}
+      <div style="font-size:12.5px;margin-bottom:4px"><span class="jr-ok">Faktura {{ j.invoice_number }}</span> <span class="jr-sub">{{ to_local(j.invoice_at).strftime('%d.%m.%Y') if j.invoice_at }}</span></div>
+    {% else %}
+      <button type="button" class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:6px" onclick="openInvoice({{ lead.id }})">Wystaw fakturę (inFakt → PDF mailem)</button>
+    {% endif %}
+    {% for key, label in journey_after %}
+    <label class="jr-kb" style="margin-top:3px">
+      <input type="checkbox" {{ 'checked' if jv.after.get(key) }} onchange="journeyCheck({{ lead.id }}, 'po', '{{ key }}', this.checked)"> {{ label }}
+    </label>
+    {% endfor %}
+    {% endif %}
+
+    <div class="jr-sec">Dokumenty ({{ lead.journey_documents|length }})</div>
+    {% for d in lead.journey_documents|reverse %}
+    <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <div>
+        <b>{{ journey_doc_kinds.get(d.kind, d.kind) }}</b>{% if not d.seen %}<span class="jr-new">NOWY</span>{% endif %}
+        {% if d.status == 'do_sprawdzenia' %}<span class="jr-sub"> · do potwierdzenia</span>{% endif %}
+      </div>
+      <div class="jr-sub">{{ to_local(d.received_at or d.created_at).strftime('%d.%m.%Y') }} · {{ d.source }}</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:3px;flex-wrap:wrap">
+        {% if d.pdf %}<a href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) }}" target="_blank" class="jr-doclink">PDF</a>{% endif %}
+        <a href="{{ url_for('crm_journey_doc_file', doc_id=d.id) }}" class="jr-doclink" title="{{ d.filename }}">{{ d.filename|truncate(28) }}</a>
+        {% if not d.pdf and d.data %}<span class="jr-sub">PDF w drodze…</span>{% endif %}
+        <form method="post" action="{{ url_for('crm_journey_doc_action', doc_id=d.id, action='rodzaj') }}" style="margin-left:auto">
+          <input type="hidden" name="back" value="{{ back_here }}">
+          <select name="rodzaj" onchange="this.form.submit()" style="font-size:11px;padding:2px 4px;width:auto" title="Zmień, jeśli CRM źle rozpoznał">
+            {% for k, label in journey_doc_kinds.items() %}<option value="{{ k }}" {{ 'selected' if k == d.kind }}>{{ label }}</option>{% endfor %}
+          </select>
+        </form>
+        <form method="post" action="{{ url_for('crm_journey_doc_action', doc_id=d.id, action='usun') }}">
+          <input type="hidden" name="back" value="{{ back_here }}">
+          <button class="btn btn-secondary btn-sm" style="padding:1px 7px;font-size:11px" data-msg="Usunąć dokument {{ d.filename }}?" onclick="return confirm(this.dataset.msg)" title="Usuń">✕</button>
+        </form>
+      </div>
+    </div>
+    {% else %}
+    <div class="jr-sub">Na razie brak — wysłana umowa i to, co odeśle klient, pojawią się tutaj.</div>
+    {% endfor %}
+    <form method="post" action="{{ url_for('crm_journey_upload', lead_id=lead.id) }}" enctype="multipart/form-data" style="display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:10px">
+      <input type="hidden" name="back" value="{{ back_here }}">
+      <select name="rodzaj" style="font-size:12px">
+        <option value="umowa_podpisana">Umowa podpisana (odhaczy umowę)</option>
+        <option value="baza_wiedzy">Baza wiedzy (odhaczy bazę)</option>
+        <option value="umowa_wyslana">Umowa wysłana</option>
+        <option value="inny">Inny dokument</option>
+      </select>
+      <input type="file" name="plik" required style="font-size:12px">
+      <button class="btn btn-secondary btn-sm">Dodaj dokument</button>
+    </form>
+  </div>
+</div>

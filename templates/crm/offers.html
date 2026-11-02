@@ -1,0 +1,54 @@
+{% extends "crm/base.html" %}
+{% block title %}Oferty – 33bots LT CRM{% endblock %}
+{% block page_title %}📄 Oferty{% endblock %}
+
+{% block extra_head %}
+<style>
+.of-row { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel2); margin-bottom: 8px; text-decoration: none; color: inherit; flex-wrap: wrap; }
+.of-row:hover { border-color: var(--accent); }
+.of-price { font-weight: 700; font-size: 14px; min-width: 110px; }
+.of-main { flex: 1; min-width: 220px; }
+.of-sub { font-size: 12px; color: var(--muted); }
+.of-empty { color: var(--muted); font-size: 12.5px; padding: 4px 0; }
+.of-section { margin-bottom: 16px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="panel of-section">
+  <div class="panel-header" style="color:var(--yellow)"><i class="bi bi-hourglass-split"></i> Do sprawdzenia i wysłania ({{ drafts|length }})</div>
+  <div class="panel-body">
+    {% for o in drafts %}
+    <a class="of-row" href="{{ url_for('crm_offer_review', oid=o.id) }}">
+      <span class="of-price">{{ o.price }}</span>
+      <span class="of-main">
+        <div style="font-weight:600">{{ o.lead.company if o.lead else o.filename }}</div>
+        <div class="of-sub">{{ o.to_addr }} · {{ o.subject }}</div>
+      </span>
+      <span class="of-sub">od {{ USERS_BY_ID.get(o.sender_id, {}).get('name', '') }} · {{ o.created_at.strftime('%d.%m, %H:%M') }}</span>
+      <span class="btn btn-primary btn-sm">Sprawdź →</span>
+    </a>
+    {% else %}
+    <div class="of-empty">Brak ofert czekających na wysyłkę. Poproś Claude o ofertę — pojawi się tutaj do sprawdzenia.</div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel of-section">
+  <div class="panel-header"><i class="bi bi-send-check"></i> Wysłane (ostatnie 50)</div>
+  <div class="panel-body">
+    {% for o in sent %}
+    <a class="of-row" href="{{ url_for('crm_offer_review', oid=o.id) }}">
+      <span class="of-price">{{ o.price }}</span>
+      <span class="of-main">
+        <div style="font-weight:600">{{ o.lead.company if o.lead else o.filename }}</div>
+        <div class="of-sub">{{ o.to_addr }} · {{ o.subject }}</div>
+      </span>
+      <span class="of-sub">{{ USERS_BY_ID.get(o.sender_id, {}).get('name', '') }} · {{ o.sent_at.strftime('%d.%m.%Y') }}</span>
+    </a>
+    {% else %}
+    <div class="of-empty">Jeszcze nic nie wysłano.</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

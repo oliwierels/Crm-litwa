@@ -1,0 +1,43 @@
+{% extends "crm/base.html" %}
+{% block title %}Blitzkrieg – 33bots LT CRM{% endblock %}
+{% block page_title %}📣 Blitzkrieg{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('crm_campaign_new') }}" class="btn btn-primary btn-sm">＋ Nowa kampania</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.bk-row { display: flex; gap: 14px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel2); margin-bottom: 8px; text-decoration: none; color: inherit; flex-wrap: wrap; }
+.bk-row:hover { border-color: var(--accent); }
+.bk-name { font-weight: 600; font-size: 14px; }
+.bk-sub { font-size: 12px; color: var(--muted); }
+.bk-badge { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
+.bk-szkic { background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+.bk-trwa { background: #22c55e22; color: var(--green); }
+.bk-pauza { background: #f59e0b22; color: var(--yellow); }
+.bk-koniec { background: #5b5ef422; color: var(--accent); }
+.bk-bar { height: 6px; background: var(--panel); border-radius: 3px; overflow: hidden; width: 160px; }
+.bk-bar span { display: block; height: 100%; background: var(--accent); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.6">
+  Jedna wiadomość do wybranych leadów (np. życzenia świąteczne). Każdy dostaje osobny mail z Twojej skrzynki,
+  w równych odstępach — domyślnie 5 na godzinę i tylko w dzień — żeby domena nie wylądowała w spamie.
+</div>
+{% for c in camps %}
+{% set s = stats[c.id] %}
+<a class="bk-row" href="{{ url_for('crm_campaign', cid=c.id) }}">
+  <span class="bk-badge bk-{{ c.status }}">{{ {'szkic': 'szkic', 'trwa': '🚀 trwa', 'pauza': '⏸ pauza', 'koniec': '✅ koniec'}[c.status] }}</span>
+  <div style="flex:1;min-width:220px">
+    <div class="bk-name">{{ c.name }}</div>
+    <div class="bk-sub">{{ c.subject }} · od {{ USERS_BY_ID.get(c.sender_id, {}).get('name', '') }} · {{ c.rate_per_hour }}/h</div>
+  </div>
+  <div class="bk-bar" title="{{ s.counts.wyslany }} z {{ s.total }}"><span style="width:{{ (100 * s.counts.wyslany / s.total) if s.total else 0 }}%"></span></div>
+  <div class="bk-sub">{{ s.counts.wyslany }}/{{ s.total }} wysłane{% if s.counts.blad %} · {{ s.counts.blad }} błędów{% endif %}</div>
+</a>
+{% else %}
+<div style="color:var(--muted);font-size:13px">Nie ma jeszcze kampanii. Kliknij „Nowa kampania”.</div>
+{% endfor %}
+{% endblock %}

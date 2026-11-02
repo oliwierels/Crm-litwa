@@ -1,0 +1,68 @@
+{% extends "crm/base.html" %}
+{% block title %}Profil – 33bots LT CRM{% endblock %}
+{% block page_title %}👤 Profil · {{ user.name }}{% endblock %}
+
+{% block extra_head %}
+<style>
+.pf-wrap { max-width: 560px; display: flex; flex-direction: column; gap: 14px; }
+.pf-msg { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; line-height: 1.5; }
+.pf-ok { background: #22c55e1a; border: 1px solid #22c55e55; color: var(--green); }
+.pf-warn { background: #eab3081a; border: 1px solid #eab30855; color: #fde68a; }
+.pf-err { color: var(--red); font-size: 12px; margin-top: 4px; }
+.pf-hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+.pf-wrap code { background: var(--panel2); border-radius: 3px; padding: 0 4px; color: var(--text); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="pf-wrap">
+  {% if msg %}<div class="pf-msg pf-ok">✅ {{ msg }}</div>{% endif %}
+
+  <div class="pf-msg {{ 'pf-ok' if can_send else 'pf-warn' }}">
+    {% if can_send %}✅ Możesz przygotowywać i wysyłać oferty z Claude'a od siebie — te dane są w stopce PDF i w mailu.
+    {% else %}⚠️ Uzupełnij firmowy e-mail i telefon — bez nich oferta z Claude'a nie może iść od Ciebie
+      (te dane są w stopce PDF i w mailu do klienta).{% endif %}
+  </div>
+
+  <form method="post" class="panel">
+    <div class="panel-header"><i class="bi bi-person"></i> Twoje dane w CRM</div>
+    <div class="panel-body gap10">
+      <div>
+        <label>Imię i nazwisko</label>
+        <input type="text" name="full_name" value="{{ values.full_name }}" maxlength="120" required>
+        {% if errors.full_name %}<div class="pf-err">{{ errors.full_name }}</div>{% endif %}
+      </div>
+      <div>
+        <label>Firmowy e-mail</label>
+        <input type="email" name="email" value="{{ values.email }}" maxlength="120" placeholder="np. imie.nazwisko@33bots.pl">
+        {% if errors.email %}<div class="pf-err">{{ errors.email }}</div>{% endif %}
+      </div>
+      <div>
+        <label>Telefon</label>
+        <input type="tel" name="phone" value="{{ values.phone }}" maxlength="20" placeholder="+48 …">
+        {% if errors.phone %}<div class="pf-err">{{ errors.phone }}</div>{% endif %}
+      </div>
+      <div><button class="btn btn-primary btn-sm">💾 Zapisz</button></div>
+      <div class="pf-hint">Puste pole = wartość domyślna{% if defaults.email or defaults.phone %} ({{ defaults.full_name }}{% if defaults.email %}, {{ defaults.email }}{% endif %}{% if defaults.phone %}, {{ defaults.phone }}{% endif %}){% endif %}.
+        Profil dotyczy konta zaznaczonego w menu na dole (teraz: {{ user.name }}).</div>
+    </div>
+  </form>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-envelope"></i> Skrzynka do wysyłki</div>
+    <div class="panel-body" style="font-size:12.5px;line-height:1.6">
+      {% if mailbox %}
+        Maile od Ciebie wychodzą ze skrzynki <b>{{ mailbox }}</b>.
+        {% if values.email and mailbox|lower != values.email|lower %}
+        <div class="pf-hint">To wspólna skrzynka. Żeby wysyłać ze swojej ({{ values.email }}), dodaj w Railway → web → Variables
+          zmienną <code>{{ mailbox_key }}</code> z hasłem do tej skrzynki.</div>
+        {% endif %}
+      {% else %}
+        <span style="color:#fde68a">⚠️ Brak skrzynki — maile od Ciebie się nie wyślą.</span>
+        <div class="pf-hint">Dodaj w Railway → web → Variables zmienną <code>{{ mailbox_key }}</code> z hasłem do Twojej
+          skrzynki ({{ values.email or 'firmowy e-mail z profilu' }}) albo wspólną skrzynkę <code>SMTP_USER</code> / <code>SMTP_PASS</code>.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

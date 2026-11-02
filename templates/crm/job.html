@@ -1,0 +1,47 @@
+{% extends "crm/base.html" %}
+{% block title %}{{ job.kind }} – 33bots LT CRM{% endblock %}
+{% block page_title %}✨ {{ job.kind }}{% endblock %}
+
+{% block content %}
+<div class="panel" style="max-width:640px">
+  <div class="panel-body" style="padding:28px;text-align:center">
+    <div id="job-spin" style="font-size:34px;line-height:1;margin-bottom:12px">⏳</div>
+    <div id="job-text" style="font-size:14px">{{ job.kind }}… to zwykle trwa 10–40 sekund.</div>
+    <div id="job-sub" style="font-size:12px;color:var(--muted);margin-top:6px">Możesz zostać na tej stronie — przejdę dalej sam.</div>
+    <div id="job-actions" style="margin-top:16px;display:none"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const url = "{{ url_for('crm_job', jid=jid) }}?format=json";
+  const text = document.getElementById("job-text"), sub = document.getElementById("job-sub"),
+        spin = document.getElementById("job-spin"), actions = document.getElementById("job-actions");
+  let tries = 0;
+  function poll() {
+    fetch(url, {cache: "no-store"}).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => {
+      if (j.status === "done") {
+        spin.textContent = "✅"; text.textContent = j.info || "Gotowe";
+        if (j.url) { setTimeout(() => { window.location.href = j.url; }, 600); }
+        return;
+      }
+      if (j.status === "error") {
+        spin.textContent = "⚠️"; text.textContent = j.error || "Coś poszło nie tak.";
+        sub.textContent = "";
+        actions.style.display = "block";
+        const a = document.createElement("a");
+        a.className = "btn btn-secondary btn-sm"; a.textContent = "← Wróć";
+        a.href = j.url || document.referrer || "{{ url_for('crm_offers') }}";
+        actions.appendChild(a);
+        return;
+      }
+      if (++tries > 150) { text.textContent = "Trwa to dłużej niż zwykle — odśwież stronę za chwilę."; return; }
+      setTimeout(poll, 2000);
+    }).catch(() => { if (++tries < 150) setTimeout(poll, 3000); });
+  }
+  poll();
+})();
+</script>
+{% endblock %}

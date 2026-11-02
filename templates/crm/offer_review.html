@@ -1,0 +1,96 @@
+{% extends "crm/base.html" %}
+{% block title %}Oferta {{ offer.price }} – 33bots LT CRM{% endblock %}
+{% block page_title %}📄 {% if offer.sent_at %}Oferta wysłana{% else %}Oferta do sprawdzenia{% endif %}{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('crm_offers') }}" class="btn btn-secondary btn-sm">← Wszystkie oferty</a>
+{% if offer.lead %}<a href="{{ url_for('crm_lead_detail', lead_id=offer.lead_id) }}" class="btn btn-secondary btn-sm">Lead: {{ offer.lead.company }}</a>{% endif %}
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.of-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .of-grid { grid-template-columns: minmax(0, 1fr); } }
+.of-field { margin-bottom: 12px; }
+.of-field label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+.of-meta { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+.of-meta b { color: var(--text); font-weight: 600; }
+.of-body { min-height: 380px; line-height: 1.55; font-size: 13.5px; resize: vertical; }
+.of-pre { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; background: var(--panel2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.of-pdf { width: 100%; height: 82vh; min-height: 600px; border: 1px solid var(--border); border-radius: var(--radius); background: #0A0C10; }
+.of-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.of-alert { border-radius: var(--radius); padding: 10px 12px; font-size: 13px; margin-bottom: 14px; line-height: 1.5; }
+.of-alert.err { background: #ef444418; border: 1px solid #ef444466; color: var(--red); }
+.of-alert.ok { background: #22c55e18; border: 1px solid #22c55e66; color: var(--green); }
+.of-alert.warn { background: #f59e0b18; border: 1px solid #f59e0b66; color: var(--yellow); }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if error %}<div class="of-alert err">⚠️ Nie wysłano: {{ error }}</div>{% endif %}
+{% if offer.sent_at %}
+<div class="of-alert ok">✅ Wysłano {{ offer.sent_at.strftime('%d.%m.%Y, %H:%M') }} UTC do <b>{{ offer.to_addr }}</b>
+  {% if changes %} · w leadzie: {{ changes|join(', ') }}{% endif %}</div>
+{% if warning %}<div class="of-alert warn">Mail wyszedł, ale {{ warning }}.</div>{% endif %}
+{% endif %}
+
+<div class="of-grid">
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-envelope"></i> Mail do klienta</div>
+    <div class="panel-body">
+      <div class="of-meta" style="margin-bottom:12px">
+        Od: <b>{{ sender.get('full_name', '') }} &lt;{{ sender.get('email', '') }}&gt;</b><br>
+        Załącznik: <a href="{{ url_for('crm_offer_pdf', oid=offer.id, filename=offer.filename) }}" target="_blank" style="text-decoration:underline">{{ offer.filename }}</a>
+        · cena <b>{{ offer.price }} netto</b><br>
+        {% if offer.lead %}Po wysyłce w leadzie <b>{{ offer.lead.company }}</b>:
+          {% if offer.lead.stage == 'Nowy' %}etap → Oferta, {% endif %}
+          {% if offer_val[0] is not none %}wartość {{ '{:,.0f}'.format(offer_val[0]).replace(',', ' ') }} {{ offer_val[1] or offer.lead.currency or 'EUR' }}, {% endif %}
+          {% if opts.get('followup_days', 3) %}follow-up za {{ opts.get('followup_days', 3) }} dni{% else %}bez follow-upu{% endif %}
+        {% else %}Oferta nie jest przypięta do leada.{% endif %}
+      </div>
+
+      {% if offer.sent_at %}
+        <div class="of-field"><label>Do</label><div class="of-pre">{{ offer.to_addr }}</div></div>
+        <div class="of-field"><label>Temat</label><div class="of-pre">{{ offer.subject }}</div></div>
+        <div class="of-field"><label>Treść</label><div class="of-pre">{{ offer.body }}</div></div>
+      {% else %}
+      <form method="post" id="offer-form">
+        <div class="of-field"><label for="to_addr">Do</label>
+          <input type="email" multiple id="to_addr" name="to_addr" value="{{ offer.to_addr }}" required>
+          {% if offer.lead and offer.lead.emails|length > 1 %}
+          <script>document.addEventListener('DOMContentLoaded', () => recipientPicker(document.getElementById('to_addr'), {{ offer.lead.emails|tojson }}));</script>
+          {% endif %}</div>
+        <div class="of-field"><label for="subject">Temat</label>
+          <input type="text" id="subject" name="subject" value="{{ offer.subject }}" required></div>
+        <div class="of-field"><label for="body">Treść — możesz poprawić przed wysyłką</label>
+          <textarea id="body" name="body" class="of-body" required>{{ offer.body }}</textarea></div>
+        <div class="of-actions">
+          <button class="btn btn-primary" name="action" value="wyslij"
+                  onclick="return confirm('Wysłać ofertę z PDF w załączniku do: ' + document.getElementById('to_addr').value + '?')">
+            📨 Wyślij do klienta</button>
+          <button class="btn btn-secondary" name="action" value="zapisz">💾 Zapisz zmiany</button>
+          <button class="btn btn-danger" name="action" value="odrzuc" formnovalidate
+                  data-msg="Odrzucić tę ofertę? Szkic zostanie usunięty." onclick="return confirm(this.dataset.msg)">🗑 Odrzuć</button>
+        </div>
+      </form>
+      {% if offer.lead_id and ai_ready %}
+      <form method="post" action="{{ url_for('crm_offer_ai_fix', oid=offer.id) }}" style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+        <div class="of-field"><label for="feedback">✨ Popraw z Claude — mail i PDF</label>
+          <textarea id="feedback" name="feedback" rows="3" required placeholder="np. zmień cenę na 6 000 zł, dodaj godziny 18–22, skróć mail"></textarea></div>
+        <button class="btn btn-secondary btn-sm">✨ Przygotuj nową wersję</button>
+        <span class="of-meta">Nowa wersja zastąpi tę.</span>
+      </form>
+      {% else %}
+      <div class="of-meta" style="margin-top:10px">Treść PDF zmienisz, prosząc Claude o nową wersję oferty — tę wtedy odrzuć.</div>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-file-earmark-pdf"></i> Podgląd PDF</div>
+    <div class="panel-body">
+      <iframe class="of-pdf" src="{{ url_for('crm_offer_pdf', oid=offer.id, filename=offer.filename) }}#view=FitH" title="Podgląd oferty PDF"></iframe>
+    </div>
+  </div>
+</div>
+{% endblock %}

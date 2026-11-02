@@ -1,0 +1,176 @@
+{% extends "crm/base.html" %}
+{% block title %}Nowa kampania – 33bots LT CRM{% endblock %}
+{% block page_title %}📣 Nowa kampania Blitzkrieg{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('crm_campaigns') }}" class="btn btn-secondary btn-sm">← Kampanie</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.bk-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .bk-grid { grid-template-columns: minmax(0, 1fr); } }
+.bk-field { margin-bottom: 12px; }
+.bk-field > label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+.bk-stages { display: flex; flex-wrap: wrap; gap: 6px; }
+.bk-stage { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 16px; font-size: 12.5px; cursor: pointer; background: var(--panel2); }
+.bk-stage input { width: auto; margin: 0; }
+.bk-list { max-height: 460px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.bk-lead { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
+.bk-lead:last-child { border-bottom: none; }
+.bk-lead input { width: auto; margin: 0; }
+.bk-lead.off { opacity: .45; cursor: default; }
+.bk-lead.ai { background: #7c3aed14; }
+.bk-lead .st { font-size: 10.5px; padding: 1px 7px; border-radius: 8px; margin-left: auto; white-space: nowrap; }
+.bk-body { min-height: 300px; line-height: 1.55; font-size: 13.5px; resize: vertical; }
+.bk-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.bk-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.bk-err { background: #ef444418; border: 1px solid #ef444466; color: var(--red); border-radius: var(--radius); padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if error %}<div class="bk-err">⚠️ {{ error }}</div>{% endif %}
+<form method="post" id="bk-form">
+<div class="bk-grid">
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-people"></i> Do kogo</div>
+    <div class="panel-body">
+      <div class="bk-field"><label>✨ Wybierz z Claude (opcjonalnie)</label>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="bk-audience" name="audience" value="{{ form.audience }}" maxlength="500"
+                 placeholder="np. tylko agencje eventowe ze zrealizowanych"
+                 onkeydown="if (event.key === 'Enter') { event.preventDefault(); bkPick(); }">
+          <button type="button" id="bk-pick-btn" class="btn btn-secondary btn-sm" onclick="bkPick()" {{ '' if ai_ready else 'disabled title="Brak ANTHROPIC_API_KEY"' }}>✨ Wybierz</button>
+        </div>
+        <div class="bk-hint" id="bk-pick-msg" style="margin-top:4px">Claude przejrzy leady z e-mailem (firma, domena maila, etap, notatki) i zaznaczy pasujące — potem możesz poprawić listę ręcznie.</div>
+      </div>
+      <div class="bk-field"><label>Całe etapy</label>
+        <div class="bk-stages">
+          {% for s in stages %}
+          <label class="bk-stage" style="border-color:{{ stage_colors[s] }}66">
+            <input type="checkbox" name="stages" value="{{ s }}" {{ 'checked' if s in form.stages }} onchange="bkCount()">
+            {{ s }} <span style="color:var(--muted)">({{ stage_counts[s] }})</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="bk-field"><label>…i/lub konkretne leady</label>
+        <input type="text" id="bk-search" placeholder="Szukaj firmy, osoby, maila…" oninput="bkFilter()" style="margin-bottom:6px">
+        <div class="bk-list">
+          {% for l in leads %}
+          {% set has_mail = email_re.match((l.contact_email or '').strip()) %}
+          <label class="bk-lead {{ '' if has_mail else 'off' }}" data-q="{{ (l.company ~ ' ' ~ (l.contact_name or '') ~ ' ' ~ (l.contact_email or '') ~ ' ' ~ l.stage)|lower }}" data-stage="{{ l.stage }}">
+            <input type="checkbox" name="lead_ids" value="{{ l.id }}" {{ 'checked' if l.id in form.lead_ids }} {{ '' if has_mail else 'disabled' }} onchange="bkCount()">
+            <span><b>{{ l.company }}</b>{% if l.contact_name %} · {{ l.contact_name }}{% endif %}<br>
+              <span style="color:var(--muted);font-size:11.5px">{{ l.contact_email or 'brak e-maila' }}</span></span>
+            <span class="st" style="background:{{ stage_colors[l.stage] }}22;color:{{ stage_colors[l.stage] }}">{{ l.stage }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="bk-hint" style="margin-top:6px">Wybrano: <b id="bk-count">0</b> adresów (bez duplikatów, tylko leady z e-mailem).</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-envelope"></i> Wiadomość</div>
+    <div class="panel-body">
+      <div class="bk-field"><label>Nazwa kampanii (tylko dla Was)</label>
+        <input type="text" name="name" value="{{ form.name }}" placeholder="np. Życzenia świąteczne 2026"></div>
+      <div class="bk-field"><label>✨ Napisz z Claude (opcjonalnie)</label>
+        <div style="display:flex;gap:6px">
+          <input type="text" name="instruction" value="{{ form.instruction }}" placeholder="np. życzenia świąteczne + zaproszenie do rezerwacji terminów na 2027">
+          <button class="btn btn-secondary btn-sm" name="action" value="ai" {{ '' if ai_ready else 'disabled title="Brak ANTHROPIC_API_KEY"' }}>✨ Napisz</button>
+        </div></div>
+      <div class="bk-field"><label>Temat</label>
+        <input type="text" name="subject" value="{{ form.subject }}" placeholder="np. Wesołych Świąt od 33bots"></div>
+      <div class="bk-field"><label>Treść</label>
+        <textarea name="body" class="bk-body">{{ form.body }}</textarea>
+        <div class="bk-hint">{imie} = imię osoby kontaktowej (gdy brak: „Dzień dobry,”), {firma} = nazwa firmy z leada.</div></div>
+      <label class="bk-hint" style="display:flex;gap:6px;align-items:center;margin-bottom:12px">
+        <input type="checkbox" name="footer" value="1" style="width:auto" {{ 'checked' if form.footer }}>
+        Dopisz stopkę „Jeśli nie chce Pan/Pani otrzymywać takich wiadomości, wystarczy odpisać NIE”</label>
+      <div class="bk-row3">
+        <div class="bk-field"><label>Nadawca</label>
+          <select name="sender">{% for u in users if u.phone and u.email %}<option value="{{ u.name }}" {{ 'selected' if u.name == form.sender }}>{{ u.full_name }}</option>{% endfor %}</select></div>
+        <div class="bk-field"><label>Maili na godzinę</label>
+          <input type="number" name="rate" min="1" max="{{ max_rate }}" value="{{ form.rate }}"></div>
+        <div class="bk-field"><label>Godziny wysyłki</label>
+          <div style="display:flex;gap:4px;align-items:center"><input type="number" name="hour_from" min="0" max="23" value="{{ form.hour_from }}">–<input type="number" name="hour_to" min="1" max="24" value="{{ form.hour_to }}"></div></div>
+      </div>
+      <div class="bk-hint" style="margin-bottom:12px">5/h to mail co 12 minut. Wysyłka idzie tylko w podanych godzinach (czas polski), a potem wznawia się sama następnego dnia.</div>
+      <button class="btn btn-primary" name="action" value="zapisz">Dalej: podgląd i odbiorcy →</button>
+      <div class="bk-hint" style="margin-top:6px">Nic jeszcze nie wyjdzie — na następnym ekranie zobaczysz podgląd, wyślesz test do siebie i dopiero wtedy odpalisz Blitzkrieg.</div>
+    </div>
+  </div>
+</div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function bkFilter() {
+  const q = document.getElementById("bk-search").value.trim().toLowerCase();
+  document.querySelectorAll(".bk-lead").forEach(el => { el.style.display = !q || el.dataset.q.includes(q) ? "" : "none"; });
+}
+function bkCount() {
+  const stages = new Set([...document.querySelectorAll('input[name=stages]:checked')].map(i => i.value));
+  let n = 0;
+  document.querySelectorAll(".bk-lead").forEach(el => {
+    const cb = el.querySelector("input");
+    if (!cb.disabled && (cb.checked || stages.has(el.dataset.stage))) n++;
+  });
+  document.getElementById("bk-count").textContent = n;
+}
+// Claude wybiera odbiorców w tle — formularz się nie przeładowuje, więc treść maila zostaje
+const PICK_URL = "{{ url_for('crm_campaign_pick') }}";
+async function bkPick() {
+  const input = document.getElementById("bk-audience"), msg = document.getElementById("bk-pick-msg"),
+        btn = document.getElementById("bk-pick-btn");
+  if (btn.disabled) return;
+  if (!input.value.trim()) { msg.textContent = "Napisz, do kogo ma trafić kampania — np. „agencje eventowe ze zrealizowanych”."; return; }
+  btn.disabled = true;
+  msg.textContent = "✨ Claude przegląda leady… (zwykle kilkanaście sekund)";
+  try {
+    const fd = new FormData();
+    fd.append("audience", input.value);
+    const start = await (await fetch(PICK_URL, { method: "POST", body: fd })).json();
+    if (start.error) throw new Error(start.error);
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const job = await (await fetch(start.poll)).json();
+      if (job.status === "pending") continue;
+      if (job.status === "error") throw new Error(job.error || "Claude nie wybrał odbiorców");
+      const ids = job.lead_ids || [];
+      bkApply(ids);
+      msg.textContent = "✨ Claude zaznaczył: " + ids.length + ". " + (job.info || "") +
+        " Wybrani są na górze listy — sprawdź, odznacz albo dodaj ręcznie.";
+      return;
+    }
+    throw new Error("Claude nie zdążył w 3 minuty — spróbuj jeszcze raz.");
+  } catch (e) {
+    msg.textContent = "⚠️ " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+function bkApply(ids) {
+  const chosen = new Set(ids.map(String));
+  document.querySelectorAll("input[name=stages]").forEach(i => { i.checked = false; });
+  const list = document.querySelector(".bk-list");
+  const picked = [];
+  document.querySelectorAll(".bk-lead").forEach(el => {
+    const cb = el.querySelector("input");
+    cb.checked = !cb.disabled && chosen.has(cb.value);
+    el.classList.toggle("ai", cb.checked);
+    if (cb.checked) picked.push(el);
+  });
+  picked.reverse().forEach(el => list.prepend(el));  // wybrani na górę, w kolejności listy
+  document.getElementById("bk-search").value = "";
+  bkFilter();
+  list.scrollTop = 0;
+  bkCount();
+}
+bkCount();
+</script>
+{% endblock %}

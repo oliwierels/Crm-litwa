@@ -1,0 +1,5 @@
+Poppins (Poppins-*.ttf) — Copyright 2020 The Poppins Project Authors (https://github.com/itfoundry/Poppins).
+Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
+
+DejaVu Sans Mono (DejaVuSansMono*.ttf) — Bitstream Vera Fonts copyright, DejaVu changes are in the public domain.
+License: https://dejavu-fonts.github.io/License.html

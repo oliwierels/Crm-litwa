@@ -1,0 +1,322 @@
+{% extends "crm/base.html" %}
+{% block title %}Statystyki – 33bots LT CRM{% endblock %}
+{% block page_title %}Statystyki{% endblock %}
+
+{% block extra_head %}
+<style>
+.flow-wrap { position: relative; min-height: 380px; }
+.flow-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.flow-node { position: absolute; border-radius: 8px; padding: 5px 9px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
+.flow-node .fn-label { font-size: 10px; line-height: 1.2; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flow-node .fn-value { font-size: 13px; line-height: 1.2; font-weight: 700; }
+.flow-node .fn-pct { font-size: 10px; line-height: 1.15; opacity: .8; }
+.flow-node.fn-compact .fn-pct { display: none; }
+.flow-node.fn-tiny .fn-label { display: none; }
+.flow-node.fn-tiny .fn-value { font-size: 11px; }
+.flow-empty { padding: 40px; text-align: center; color: var(--muted); }
+.rev-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.rev-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; background: var(--panel2); }
+.rev-val { font-size: 20px; font-weight: 700; }
+.rev-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.undated { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px; line-height: 1.9; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="panel" style="margin-bottom:14px">
+  <div class="panel-header"><i class="bi bi-diagram-3"></i> Przepływ leadów przez etapy</div>
+  <div class="panel-body">
+    {% if flow.total %}
+    <div class="flow-wrap" id="flowWrap">
+      <svg class="flow-svg" id="flowSvg"></svg>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:6px">Grubość wstążki = liczba leadów. Cofnięcia etapu są pomijane — liczy się tylko realny postęp.</div>
+    {% else %}
+    <div class="flow-empty">Brak historii etapów — przepływ pojawi się, gdy leady zaczną zmieniać etapy</div>
+    {% endif %}
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr;gap:14px;max-width:1100px">
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-graph-up"></i> Ostatnie 12 miesięcy</div>
+    <div class="panel-body">
+      <div style="display:flex;gap:14px;font-size:11px;color:var(--muted);margin-bottom:10px">
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--accent);vertical-align:-1px"></span> Nowe leady</span>
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--green);vertical-align:-1px"></span> Wygrane</span>
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--red);vertical-align:-1px"></span> Stracone</span>
+        <span style="margin-left:auto" title="Lead liczy się raz — w miesiącu, w którym trafił na swój obecny etap. Wygrany, a potem oznaczony jako Stracony = tylko stracony. Cofnięty z Wygranego do Oferty = nie liczy się. Zrealizowany liczy się jako wygrany — w miesiącu wygranej.">ⓘ wg obecnego etapu leada</span>
+      </div>
+      <table>
+        <thead>
+          <tr><th style="width:60px">Miesiąc</th><th>Leady</th><th style="width:90px">Nowe / W / S</th><th style="width:180px">Wartość wygranych</th></tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr class="expand-row" onclick="toggleMonth('cm{{ loop.index }}', this)" title="Kliknij, żeby zobaczyć leady z tego miesiąca">
+            <td style="color:var(--muted);font-size:12px;white-space:nowrap"><span class="chev">▸</span> {{ r.label }}</td>
+            <td>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <div style="height:8px;border-radius:3px;background:var(--accent);width:{{ (100 * r.new / max_bar)|round(1) }}%;min-width:{{ '2px' if r.new else '0' }}"></div>
+                <div style="height:8px;border-radius:3px;background:var(--green);width:{{ (100 * r.won / max_bar)|round(1) }}%;min-width:{{ '2px' if r.won else '0' }}"></div>
+                <div style="height:8px;border-radius:3px;background:var(--red);width:{{ (100 * r.lost / max_bar)|round(1) }}%;min-width:{{ '2px' if r.lost else '0' }}"></div>
+              </div>
+            </td>
+            <td style="font-size:12px;white-space:nowrap">
+              <span style="color:var(--accent);font-weight:600">{{ r.new }}</span> /
+              <span style="color:var(--green);font-weight:600">{{ r.won }}</span> /
+              <span style="color:var(--red);font-weight:600">{{ r.lost }}</span>
+            </td>
+            <td style="color:var(--green);font-weight:600;font-size:12px">{{ r.won_value|money if r.won_value else '—' }}
+              {% if r.won_value %}<div style="font-weight:400;font-size:10.5px;color:var(--muted);line-height:1.5">
+                {% if r.won_done %}<span style="color:#14b8a6">🏁 {{ r.won_done|money }}</span>{% endif %}
+                {% if r.won_todo %}{{ ' · ' if r.won_done }}<span>⏳ {{ r.won_todo|money }}</span>{% endif %}
+              </div>{% endif %}
+            </td>
+          </tr>
+          <tr id="cm{{ loop.index }}" style="display:none">
+            <td colspan="4" style="background:var(--panel2);font-size:12px;padding:10px 14px;line-height:2">
+              {% if r.won_leads %}<div><span style="color:var(--green);font-weight:700">✅ Wygrane:</span>
+                {% for l in r.won_leads %}{% if l.stage == 'Zrealizowany' %}<span title="Zrealizowany">🏁</span>{% endif %}<a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="color:var(--green);text-decoration:underline">{{ l.company }}</a>{% if l.value_pln %} ({{ l.value_pln|pln }} {{ l.currency or 'EUR' }}){% endif %}{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
+              {% if r.lost_leads %}<div><span style="color:var(--red);font-weight:700">✖ Stracone:</span>
+                {% for l in r.lost_leads %}<a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="color:var(--red);text-decoration:underline">{{ l.company }}</a>{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
+              {% if r.new_leads %}<div><span style="color:var(--accent);font-weight:700">＋ Nowe:</span>
+                {% for l in r.new_leads %}<a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="text-decoration:underline">{{ l.company }}</a>{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
+              {% if not r.won_leads and not r.lost_leads and not r.new_leads %}<span style="color:var(--muted)">Brak leadów w tym miesiącu.</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel" id="przychod">
+    <div class="panel-header"><i class="bi bi-cash-stack"></i> Przychód: zrealizowany i do realizacji</div>
+    <div class="panel-body">
+      <div class="rev-sum">
+        <div class="rev-box" style="border-color:#14b8a655">
+          <div class="rev-val" style="color:#14b8a6">{{ rev_totals.done|money }}</div>
+          <div class="rev-lbl">🏁 Zrealizowany ({{ rev_totals.done_count }})</div>
+        </div>
+        <div class="rev-box" style="border-color:#7c3aed55">
+          <div class="rev-val" style="color:var(--purple)">{{ rev_totals.todo|money }}</div>
+          <div class="rev-lbl">⏳ Do realizacji — Wygrane ({{ rev_totals.todo_count }})</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
+        Wygrane leady w miesiącu, w którym odbywa się wynajem (pierwszy dzień) — łącznie z przyszłymi, już zabukowanymi.
+        Po ostatnim dniu wynajmu CRM sam przenosi lead z Wygranych do Zrealizowanych.
+        <span style="margin-left:10px;white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#14b8a6;vertical-align:-1px"></span> zrealizowane</span>
+        <span style="margin-left:8px;white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--purple);vertical-align:-1px"></span> do realizacji</span>
+      </div>
+      {% if real_rows %}
+      <table>
+        <thead>
+          <tr><th style="width:60px">Miesiąc</th><th>Wartość</th><th style="width:60px">Wynajmy</th><th style="width:150px">🏁 Zrealizowane</th><th style="width:150px">⏳ Do realizacji</th></tr>
+        </thead>
+        <tbody>
+          {% for r in real_rows %}
+          <tr class="expand-row" onclick="toggleMonth('rm{{ loop.index }}', this)" title="Kliknij, żeby zobaczyć wynajmy z tego miesiąca" {% if r.current %}style="background:var(--panel2)"{% endif %}>
+            <td style="color:{{ 'var(--text)' if r.current else 'var(--muted)' }};font-size:12px;white-space:nowrap;font-weight:{{ '700' if r.current else '400' }}"><span class="chev">▸</span> {{ r.label }}</td>
+            <td>
+              <div style="display:flex;height:10px;border-radius:3px;overflow:hidden;width:{{ (100 * r.pln / real_max)|round(1) }}%;min-width:{{ '2px' if r.pln else '0' }}">
+                {% if r.done_pln %}<div style="background:#14b8a6;flex:{{ r.done_pln }}"></div>{% endif %}
+                {% if r.todo_pln %}<div style="background:var(--purple);flex:{{ r.todo_pln }}"></div>{% endif %}
+              </div>
+            </td>
+            <td style="font-size:12px;color:var(--muted)">{{ r.count }}</td>
+            <td style="color:#14b8a6;font-weight:600;font-size:12px">{{ r.done|money if r.done else '—' }}</td>
+            <td style="color:var(--purple);font-weight:600;font-size:12px">{{ r.todo|money if r.todo else '—' }}</td>
+          </tr>
+          <tr id="rm{{ loop.index }}" style="display:none">
+            <td colspan="5" style="background:var(--panel2);font-size:12px;padding:10px 14px;line-height:2">
+              {% for l in r.leads %}
+              <div>
+                <span title="{{ l.stage }}">{{ '🏁' if l.stage == 'Zrealizowany' else '⏳' }}</span>
+                <a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="font-weight:600;text-decoration:underline">{{ l.company }}</a>
+                — {{ l.event_date.strftime('%d.%m') }}{% if l.event_end_date and l.event_end_date != l.event_date %}–{{ l.event_end_date.strftime('%d.%m') }}{% endif %}{% if l.rental_days and l.rental_days > 1 %} ({{ l.rental_days }} dni){% endif %}{% if l.location %} · 📍 {{ l.location }}{% endif %}
+                {% if l.value_pln %} · <span style="color:{{ '#14b8a6' if l.stage == 'Zrealizowany' else 'var(--purple)' }};font-weight:600">{{ l.value_pln|pln }} {{ l.currency or 'EUR' }}</span>{% endif %}
+              </div>
+              {% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div style="color:var(--muted);font-size:12px;padding:8px 0">Brak wygranych leadów z ustawioną datą wynajmu — jak tylko jakiś dojdzie, pojawi się tutaj.</div>
+      {% endif %}
+      {% if undated %}
+      <div class="undated">
+        <div style="font-weight:700;color:var(--yellow);margin-bottom:4px">⚠️ Bez daty wynajmu ({{ undated|length }}) — CRM nie wie, kiedy przenieść je do Zrealizowanych</div>
+        <div style="color:var(--muted);margin-bottom:6px">Ustaw dzień wynajmu w leadzie (po nim lead sam przejdzie do Zrealizowanych) albo przeciągnij go na kanbanie.</div>
+        {% for l in undated %}
+        <div>
+          <span title="{{ l.stage }}">{{ '🏁' if l.stage == 'Zrealizowany' else '⏳' }}</span>
+          <a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="font-weight:600;text-decoration:underline">{{ l.company }}</a>
+          {% if l.value_pln %} · {{ l.value_pln|pln }} {{ l.currency or 'EUR' }}{% endif %}
+          {% if l.event_date %} · <span style="color:var(--red)">błędna data wynajmu</span>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-signpost"></i> Źródła leadów</div>
+    <div class="panel-body">
+      <table>
+        <thead>
+          <tr><th>Źródło</th><th>Leadów</th><th>Wygranych</th><th>Skuteczność</th><th>Wartość wygranych</th></tr>
+        </thead>
+        <tbody>
+          {% for src, s in sources %}
+          <tr>
+            <td style="font-weight:600">{{ src }}</td>
+            <td>{{ s.total }}</td>
+            <td style="color:var(--green)">{{ s.won }}</td>
+            <td>{{ (100 * s.won / s.total)|round|int }}%</td>
+            <td style="color:var(--green);font-weight:600">{{ s.won_value|money if s.won_value else '—' }}</td>
+          </tr>
+          {% endfor %}
+          {% if not sources %}
+          <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">Brak danych — dodawaj leady ze źródłem, a tu pojawią się statystyki</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.expand-row { cursor: pointer; }
+.expand-row:hover td { background: var(--panel2); }
+.expand-row .chev { display: inline-block; color: var(--muted); font-size: 10px; transition: transform .12s; }
+.expand-row.open .chev { transform: rotate(90deg); }
+</style>
+<script>
+function toggleMonth(id, rowEl) {
+  const el = document.getElementById(id);
+  const open = el.style.display === 'none';
+  el.style.display = open ? '' : 'none';
+  rowEl.classList.toggle('open', open);
+}
+</script>
+{% if flow.total %}
+<script>
+const FLOW = {{ flow|tojson }};
+
+function renderFlow() {
+  const wrap = document.getElementById('flowWrap');
+  const svg = document.getElementById('flowSvg');
+  if (!wrap || !svg) return;
+  wrap.querySelectorAll('.flow-node').forEach(n => n.remove());
+  svg.innerHTML = '';
+
+  const W = wrap.clientWidth;
+  const nodeW = 100, marginTop = 16, marginBottom = 16;
+  const minH = 46, gap = 14;  // minH z zapasem na 3 linijki tekstu + oddech miedzy wezlami
+  const total = Math.max(FLOW.total, 1);
+
+  const cols = {};
+  FLOW.nodes.forEach(n => (cols[n.col] = cols[n.col] || []).push(n));
+  const colCount = Math.max(...Object.keys(cols).map(Number)) + 1;
+  // ostatnia kolumna (Wygrany/Stracony) zwykle zbiera najwięcej krzyżujących się wstążek —
+  // dajemy jej dodatkowy odstęp, żeby krzywe rozchodziły się łagodniej i mniej na siebie nachodziły
+  const lastGapBoost = 1.6;
+  const normalGaps = Math.max(colCount - 2, 0);
+  const gapUnit = (W - nodeW) / Math.max(normalGaps + lastGapBoost, 1);
+  const colX = c => c <= colCount - 2 ? c * gapUnit : normalGaps * gapUnit + lastGapBoost * gapUnit;
+
+  // wysokość canvasu dopasowana do ilości danych — więcej leadów/wstążek = więcej miejsca,
+  // żeby przy dużych zbiorach wstążki się na siebie nie kładły
+  const desiredPxPerUnit = 4.6;
+  const neededH = Math.max(...Object.values(cols).map(list => {
+    const heights = list.map(n => Math.max(n.value * desiredPxPerUnit, n.value > 0 ? minH : 0));
+    return heights.reduce((a, h) => a + h, 0) + gap * Math.max(list.length - 1, 0);
+  })) + marginTop + marginBottom;
+  const H = Math.min(Math.max(neededH, 420), 1100);
+  wrap.style.height = H + 'px';
+  const usableH = H - marginTop - marginBottom;
+  const pxPerUnit = usableH / total;
+
+  // wysokość i pozycja Y każdego węzła (wyśrodkowane w kolumnie)
+  const nodeBox = {};
+  Object.keys(cols).forEach(c => {
+    const list = cols[c];
+    const heights = list.map(n => Math.max(n.value * pxPerUnit, n.value > 0 ? minH : 0));
+    const contentH = heights.reduce((a, h) => a + h, 0) + gap * Math.max(list.length - 1, 0);
+    let y = marginTop + (usableH - contentH) / 2;
+    list.forEach((n, i) => {
+      nodeBox[n.id] = { x: colX(n.col), y, w: nodeW, h: heights[i], color: n.color, label: n.label, value: n.value };
+      y += heights[i] + gap;
+    });
+  });
+
+  // kolejność wstążek wewnątrz węzła — wg pozycji drugiego końca
+  const centerY = id => nodeBox[id].y + nodeBox[id].h / 2;
+  const outBy = {}, inBy = {};
+  FLOW.links.forEach(l => { (outBy[l.source] = outBy[l.source] || []).push(l); (inBy[l.target] = inBy[l.target] || []).push(l); });
+  Object.values(outBy).forEach(list => list.sort((a, b) => centerY(a.target) - centerY(b.target)));
+  Object.values(inBy).forEach(list => list.sort((a, b) => centerY(a.source) - centerY(b.source)));
+
+  const outCursor = {}, inCursor = {};
+  const svgNS = 'http://www.w3.org/2000/svg';
+
+  FLOW.links.forEach((l, idx) => {
+    const sb = nodeBox[l.source], tb = nodeBox[l.target];
+    const segH = Math.max((l.value / Math.max(l.source === 'Nowy lead' ? FLOW.total : sb.value, 1)) * sb.h, 1);
+    const tsegH = Math.max((l.value / Math.max(tb.value, 1)) * tb.h, 1);
+    const y0s = sb.y + (outCursor[l.source] || 0);
+    const y0t = tb.y + (inCursor[l.target] || 0);
+    outCursor[l.source] = (outCursor[l.source] || 0) + segH;
+    inCursor[l.target] = (inCursor[l.target] || 0) + tsegH;
+
+    const x0 = sb.x + sb.w, x1 = tb.x, xm = (x0 + x1) / 2;
+    const y1s = y0s + segH, y1t = y0t + tsegH;
+
+    // płaski kolor źródła zamiast gradientu i bez obrysu — przy wielu skrzyżowaniach
+    // to wygląda spokojniej niż mieniący się, obrysowany "warkocz" wstążek
+    const path = document.createElementNS(svgNS, 'path');
+    const d = `M${x0},${y0s} C${xm},${y0s} ${xm},${y0t} ${x1},${y0t} L${x1},${y1t} C${xm},${y1t} ${xm},${y1s} ${x0},${y1s} Z`;
+    path.setAttribute('d', d);
+    path.setAttribute('fill', sb.color);
+    path.setAttribute('fill-opacity', '.22');
+    const title = document.createElementNS(svgNS, 'title');
+    title.textContent = `${l.source} → ${l.target}: ${l.value} (${l.pct}%)`;
+    path.appendChild(title);
+    svg.appendChild(path);
+  });
+
+  Object.values(nodeBox).forEach(b => {
+    if (b.h <= 0) return;
+    const div = document.createElement('div');
+    div.className = 'flow-node';
+    if (b.h < 46) div.classList.add('fn-compact');
+    if (b.h < 26) div.classList.add('fn-tiny');
+    div.style.left = b.x + 'px';
+    div.style.top = b.y + 'px';
+    div.style.width = b.w + 'px';
+    div.style.height = b.h + 'px';
+    div.style.background = b.color + '26';
+    div.style.border = `1px solid ${b.color}77`;
+    div.style.borderLeft = `3px solid ${b.color}`;
+    const pct = (100 * b.value / total).toFixed(1);
+    div.title = `${b.label}: ${b.value} (${pct}%)`;
+    div.innerHTML = `<div class="fn-label" style="color:${b.color}">${b.label}</div><div class="fn-value" style="color:var(--text)">${b.value}</div><div class="fn-pct">${pct}%</div>`;
+    wrap.appendChild(div);
+  });
+}
+
+renderFlow();
+window.addEventListener('resize', renderFlow);
+</script>
+{% endif %}
+{% endblock %}

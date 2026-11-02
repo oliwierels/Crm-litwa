@@ -1,0 +1,124 @@
+{% extends "crm/base.html" %}
+{% block title %}Kalendarz – 33bots LT CRM{% endblock %}
+{% block page_title %}Kalendarz{% endblock %}
+
+{% block extra_head %}
+<style>
+#cal-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.fc { --fc-border-color: var(--border); --fc-page-bg-color: transparent; --fc-neutral-bg-color: var(--panel2); }
+.fc .fc-toolbar-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.fc .fc-button { background: var(--panel2) !important; border-color: var(--border) !important; color: var(--text) !important; border-radius: 6px !important; font-size: 12px !important; box-shadow: none !important; }
+.fc .fc-button:hover { border-color: var(--accent) !important; }
+.fc .fc-button-active { border-color: var(--accent) !important; }
+.fc-col-header-cell, .fc-daygrid-day-number { color: var(--muted) !important; font-size: 12px !important; }
+.fc-daygrid-day.fc-day-today { background: rgba(91,94,244,.06) !important; }
+.fc-event { border-radius: 4px !important; font-size: 11px !important; }
+.done-event { opacity: .35 !important; text-decoration: line-through !important; }
+
+#ep { display:none; position:fixed; z-index:300; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; width:280px; box-shadow:0 4px 24px rgba(0,0,0,.5); }
+#ep h4 { font-size:13px; font-weight:700; margin-bottom:10px; }
+#ep .row { font-size:12px; color:var(--muted); margin-bottom:4px; }
+#ep .row span { color:var(--text); }
+
+.legend { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.leg { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
+.leg-dot { width:10px; height:10px; border-radius:3px; }
+</style>
+{% endblock %}
+
+{% block topbar_actions %}
+<div class="legend">
+  <div class="leg"><div class="leg-dot" style="background:#ef4444"></div>Przeterminowane</div>
+  <div class="leg"><div class="leg-dot" style="background:#eab308"></div>Dziś</div>
+  <div class="leg"><div class="leg-dot" style="background:#5b5ef4"></div>Wkrótce</div>
+  <div class="leg"><div class="leg-dot" style="background:#22c55e"></div>Planowane</div>
+  <div class="leg"><div class="leg-dot" style="background:#7c3aed"></div>Wynajem (w toku)</div>
+  <div class="leg"><div class="leg-dot" style="background:#db2777"></div>Wynajem (wygrany)</div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="cal-wrap"><div id="calendar"></div></div>
+
+<div id="ep">
+  <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+    <h4 id="ep-title"></h4>
+    <button onclick="document.getElementById('ep').style.display='none'" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">×</button>
+  </div>
+  <div class="row"><span id="ep-company"></span></div>
+  <div class="row" id="ep-contact-row">Osoba: <span id="ep-contact"></span></div>
+  <div class="row">Data: <span id="ep-date"></span></div>
+  <div class="row" id="ep-notes-row">Notatka: <span id="ep-notes"></span></div>
+  <div style="display:flex;gap:6px;margin-top:12px">
+    <a id="ep-link" class="btn btn-primary btn-sm" style="flex:1;text-align:center">Otwórz</a>
+    <button id="ep-done" class="btn btn-secondary btn-sm" onclick="markDonePopup()">✓ Zrobione</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/locales/{{ ui_lang }}.global.min.js"></script>
+<script>
+let curId = null;
+const ep = document.getElementById('ep');
+
+function markDonePopup() {
+  if (!curId) return;
+  fetch(`/crm/api/activity/${curId}/done`, {method:'POST'}).then(() => { cal.refetchEvents(); ep.style.display='none'; });
+}
+
+const cal = new FullCalendar.Calendar(document.getElementById('calendar'), {
+  locale: '{{ ui_lang }}',
+  initialView: 'dayGridMonth',
+  headerToolbar: { left:'prev,next today', center:'title', right:'dayGridMonth,listWeek' },
+  height: 'auto',
+  events: '/crm/api/activities',
+  eventClick(info) {
+    const p = info.event.extendedProps;
+    const icons = {call:'📞',email:'✉️',online:'💻',meeting:'🤝',note:'📝'};
+
+    if (p.event_type === 'lead_event') {
+      curId = null;
+      document.getElementById('ep-title').textContent = '🗓️ Wydarzenie';
+      document.getElementById('ep-company').textContent = p.lead_company;
+      document.getElementById('ep-contact-row').style.display = p.lead_contact ? '' : 'none';
+      document.getElementById('ep-contact').textContent = p.lead_contact;
+      let dateTxt = new Date(info.event.start).toLocaleDateString('{{ 'lt-LT' if ui_lang == 'lt' else 'pl-PL' }}');
+      if (info.event.end) {
+        const endD = new Date(info.event.end); endD.setDate(endD.getDate() - 1); // end wyłączny
+        dateTxt += ' – ' + endD.toLocaleDateString('{{ 'lt-LT' if ui_lang == 'lt' else 'pl-PL' }}');
+      }
+      document.getElementById('ep-date').textContent = dateTxt;
+      const notes = [p.rental_days > 1 ? p.rental_days+' dni' : '', p.location ? '📍 '+p.location : '', p.robot_model, p.stage, p.value_pln ? p.value_pln+' '+(p.currency||'EUR') : ''].filter(Boolean).join(' · ');
+      document.getElementById('ep-notes-row').style.display = notes ? '' : 'none';
+      document.getElementById('ep-notes').textContent = notes;
+      document.getElementById('ep-done').style.display = 'none';
+    } else {
+      curId = p.id;
+      document.getElementById('ep-title').textContent = (icons[p.kind]||'•') + ' ' + p.kind.toUpperCase();
+      document.getElementById('ep-company').textContent = p.lead_company || 'Zadanie własne';
+      document.getElementById('ep-contact-row').style.display = p.lead_contact ? '' : 'none';
+      document.getElementById('ep-contact').textContent = p.lead_contact;
+      document.getElementById('ep-date').textContent = p.due_date_display;
+      document.getElementById('ep-notes-row').style.display = p.notes ? '' : 'none';
+      document.getElementById('ep-notes').textContent = p.notes;
+      document.getElementById('ep-done').style.display = '';
+      document.getElementById('ep-done').textContent = p.done ? '↩ Cofnij' : '✓ Zrobione';
+    }
+
+    const epLink = document.getElementById('ep-link');
+    epLink.style.display = p.lead_id ? '' : 'none';
+    if (p.lead_id) epLink.href = `/crm/leads/${p.lead_id}`;
+    const r = info.el.getBoundingClientRect();
+    ep.style.display = 'block';
+    ep.style.top = Math.min(r.bottom+6, window.innerHeight-240)+'px';
+    ep.style.left = Math.min(r.left, window.innerWidth-296)+'px';
+    info.jsEvent.stopPropagation();
+  }
+});
+cal.render();
+document.addEventListener('click', () => ep.style.display='none');
+ep.addEventListener('click', e => e.stopPropagation());
+</script>
+{% endblock %}

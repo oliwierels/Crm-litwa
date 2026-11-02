@@ -1,0 +1,75 @@
+{% extends "crm/base.html" %}
+{% block title %}Duplikaty – 33bots LT CRM{% endblock %}
+{% block page_title %}🔗 Duplikaty leadów{% endblock %}
+{% block topbar_actions %}
+<form method="post" action="{{ url_for('crm_duplicates_auto') }}">
+  <button class="btn btn-primary btn-sm" title="Scala tylko nietknięte kopie z importów (Nowy, bez kwoty, ofert i umów)">⚡ Scal bezpieczne automatycznie</button>
+</form>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.dp-msg { background:#22c55e1a; border:1px solid #22c55e55; color:var(--green); border-radius:var(--radius); padding:9px 12px; margin-bottom:12px; font-size:13px; }
+.dp-help { font-size:12px; color:var(--muted); margin-bottom:14px; max-width:900px; line-height:1.6; }
+.dp-group { margin-bottom:12px; }
+.dp-row { display:grid; grid-template-columns: 70px 60px minmax(0, 1.4fr) 100px 110px minmax(0, 1fr) 120px; gap:10px; align-items:center;
+          padding:8px 0; border-bottom:1px solid var(--border); font-size:12.5px; }
+.dp-row:last-child { border-bottom:none; }
+.dp-row label { margin:0; display:flex; gap:5px; align-items:center; font-size:11.5px; color:var(--text); cursor:pointer; }
+.dp-tag { font-size:10.5px; color:var(--muted); }
+.dp-safe { color:var(--green); font-size:11px; }
+@media (max-width: 900px) { .dp-row { grid-template-columns: 1fr 1fr; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if msg %}<div class="dp-msg">✅ {{ msg }}</div>{% endif %}
+<div class="dp-help">
+  Duplikat = ten sam telefon albo e-mail dodany najwyżej {{ window }} dni po sobie (np. ten sam lead z maila agencji i z ClickUp).
+  Scalenie przenosi do głównego leada komentarze, zadania, oferty, umowy, ekipy i brakujące dane kontaktowe, a kopię usuwa —
+  nic nie ginie. Nietknięte kopie z importów CRM scala sam co 10 minut; tu zostają te, które trzeba przejrzeć.
+</div>
+
+{% for group in groups %}
+<form method="post" action="{{ url_for('crm_duplicates_merge') }}" class="panel dp-group">
+  <div class="panel-body">
+    {% for l in group %}
+    <div class="dp-row">
+      <label title="Ten lead zostaje"><input type="radio" name="keeper" value="{{ l.id }}" {{ 'checked' if loop.first }}> główny</label>
+      <label title="Scal do głównego"><input type="checkbox" name="merge" value="{{ l.id }}" {{ 'checked' if not loop.first }} {{ 'disabled' if loop.first }}> scal</label>
+      <div><a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="font-weight:600;text-decoration:underline">#{{ l.id }} {{ l.company }}</a>
+        <div class="dp-tag">{{ l.contact_name or '' }} {{ l.contact_phone or '' }} {{ l.contact_email or '' }}</div></div>
+      <div><span class="stage-badge" style="background:{{ stage_colors.get(l.stage,'#888') }}22;color:{{ stage_colors.get(l.stage,'#888') }}">{{ l.stage }}</span>
+        {% if l.clickup_pending %}<div class="dp-tag">czeka w „Z ClickUp”</div>{% endif %}</div>
+      <div>{{ (l.value_pln|pln ~ ' ' ~ (l.currency or 'EUR')) if l.value_pln else '—' }}</div>
+      <div class="dp-tag">{{ l.source or '—' }} · dodany {{ to_local(l.created_at).strftime('%d.%m %H:%M') if l.created_at }}
+        · {{ l.activities|length }} wpisów</div>
+      <div>{% if not loop.first and untouched(l) %}<span class="dp-safe">nietknięta kopia</span>{% endif %}</div>
+    </div>
+    {% endfor %}
+    <div style="margin-top:8px;display:flex;justify-content:flex-end">
+      <button class="btn btn-secondary btn-sm" data-msg="Scalić zaznaczone leady do głównego? Kopie zostaną usunięte (ich komentarze, zadania i oferty przejdą do głównego)."
+              onclick="return confirm(this.dataset.msg)">🔗 Scal</button>
+    </div>
+  </div>
+</form>
+{% else %}
+<div class="panel"><div class="panel-body" style="color:var(--muted)">✅ Brak duplikatów.</div></div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// wybór innego leada jako głównego: on nie jest scalany, pozostałe tak
+document.querySelectorAll('form.dp-group').forEach(function (form) {
+  form.querySelectorAll('input[name=keeper]').forEach(function (radio) {
+    radio.addEventListener('change', function () {
+      form.querySelectorAll('.dp-row').forEach(function (row) {
+        var keep = row.querySelector('input[name=keeper]').checked, box = row.querySelector('input[name=merge]');
+        box.disabled = keep; box.checked = !keep;
+      });
+    });
+  });
+});
+</script>
+{% endblock %}

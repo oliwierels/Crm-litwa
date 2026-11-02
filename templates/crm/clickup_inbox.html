@@ -1,0 +1,200 @@
+{% extends "crm/base.html" %}
+{% block title %}Z ClickUp – 33bots LT CRM{% endblock %}
+{% block page_title %}Z ClickUp{% endblock %}
+
+{% block topbar_actions %}
+<form method="get" style="display:flex;gap:8px;align-items:center">
+  <input name="q" value="{{ search }}" style="width:220px" placeholder="Szukaj po firmie, osobie, telefonie, mailu...">
+  <button type="submit" class="btn btn-secondary btn-sm">Szukaj</button>
+  {% if search %}<a href="{{ url_for('crm_clickup_inbox') }}" class="btn btn-secondary btn-sm">Wyczyść</a>{% endif %}
+</form>
+{% endblock %}
+
+{% block content %}
+<div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+  Leady zaimportowane automatycznie z ClickUp, od najnowszych — dopóki ktoś ich nie
+  zaakceptuje, nie pojawiają się w kanbanie, liście, statystykach ani kalendarzu.
+  {% if search %}Pokazano {{ pending_leads|length }} z {{ total_pending }} wyników dla „{{ search }}”.{% endif %}
+</div>
+
+{% if pending_leads %}
+<div class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:90px">Wpadło</th>
+        <th>Firma</th>
+        <th>Kontakt</th>
+        <th>Robot</th>
+        <th>Wartość</th>
+        <th>Lokalizacja</th>
+        <th>Notatka</th>
+        <th>Przypisany</th>
+        <th style="width:220px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lead in pending_leads %}
+      <tr>
+        <td style="color:var(--muted);font-size:11px;white-space:nowrap">
+          {{ lead.created_at.strftime('%d.%m.%Y') if lead.created_at else '—' }}<br>
+          <span style="opacity:.7">{{ lead.created_at.strftime('%H:%M') if lead.created_at else '' }}</span>
+        </td>
+        <td>
+          <a href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}" style="font-weight:600;color:var(--text)">{{ lead.company }}</a>
+        </td>
+        <td style="font-size:12px">
+          {% if lead.contact_name %}<div>{{ lead.contact_name }}</div>{% endif %}
+          {% if lead.contact_phone %}<div style="color:var(--muted)">📞 {{ lead.contact_phone }}</div>{% endif %}
+          {% for addr in lead.emails %}<div style="color:var(--muted)">✉️ {{ addr }}</div>{% endfor %}
+          {% if not lead.contact_name and not lead.contact_phone and not lead.contact_email %}—{% endif %}
+        </td>
+        <td style="color:var(--muted);font-size:12px">{{ lead.robot_model or '—' }}</td>
+        <td style="color:var(--green);font-weight:600;font-size:12px">{{ (lead.value_pln|pln)+' '+(lead.currency or 'EUR') if lead.value_pln else '—' }}</td>
+        <td style="color:var(--muted);font-size:12px">{{ lead.location or '—' }}</td>
+        <td style="color:var(--muted);font-size:12px;max-width:220px;white-space:pre-wrap">{{ (lead.notes or '—')[:160] }}</td>
+        <td style="font-size:12px">
+          {% set au = USERS_BY_ID.get(lead.assigned_to) %}
+          {% if au %}<span style="color:{{ au.color }}">{{ au.name }}</span>{% else %}—{% endif %}
+        </td>
+        <td>
+          <div class="row" style="gap:6px;justify-content:flex-end">
+            <button type="button" class="btn btn-primary btn-sm"
+              data-lead-id="{{ lead.id }}"
+              data-company="{{ lead.company or '' }}"
+              data-contact-name="{{ lead.contact_name or '' }}"
+              data-contact-phone="{{ lead.contact_phone or '' }}"
+              data-contact-email="{{ lead.contact_email or '' }}"
+              data-contact-email2="{{ lead.contact_email2 or '' }}"
+              data-robot-model="{{ lead.robot_model or '' }}"
+              data-value-pln="{{ lead.value_pln or '' }}"
+              data-currency="{{ lead.currency or 'EUR' }}"
+              data-location="{{ lead.location or '' }}"
+              data-assigned-to="{{ lead.assigned_to or 1 }}"
+              data-event-date="{{ lead.event_date.strftime('%Y-%m-%d') if lead.event_date else '' }}"
+              data-event-end-date="{{ lead.event_end_date.strftime('%Y-%m-%d') if lead.event_end_date else '' }}"
+              onclick="openAccept(this)"><i class="bi bi-check2"></i> Dodaj do CRM</button>
+            <form method="POST" action="{{ url_for('crm_delete_lead', lead_id=lead.id) }}" onsubmit="return confirm('Odrzucić tego leada z ClickUp? Nie będzie można go cofnąć.')">
+              <button type="submit" class="btn btn-danger btn-sm" style="white-space:nowrap" title="Odrzuć leada"><i class="bi bi-x-lg"></i> Odrzuć</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="panel"><div class="panel-body" style="color:var(--muted);text-align:center;padding:32px">
+  {% if search %}Brak wyników dla „{{ search }}”.{% else %}Brak nowych leadów z ClickUp. Jak tylko wpadnie nowy task na skonfigurowanej liście, pojawi się tutaj.{% endif %}
+</div></div>
+{% endif %}
+
+<!-- OKNO AKCEPTACJI -->
+<div class="modal-bg" id="acceptModal" onclick="if(event.target===this)closeAccept()">
+  <div class="modal">
+    <div class="modal-head">
+      Dodaj do CRM
+      <button class="modal-close" onclick="closeAccept()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
+        Uzupełnij brakujące dane przed dodaniem leada do CRM — resztę (etap, notatkę) da się doedytować później.
+      </div>
+      <form id="acceptForm" method="POST">
+        <div class="gap10">
+          <div><label>Firma *</label><input name="company" id="a-company" required></div>
+          <div class="grid2">
+            <div><label>Osoba kontaktowa</label><input name="contact_name" id="a-contact_name" placeholder="Imię Nazwisko"></div>
+            <div><label>Telefon</label><input name="contact_phone" id="a-contact_phone" placeholder="+48 600..."></div>
+          </div>
+          <div class="grid2">
+            <div><label>E-mail</label><input type="email" name="contact_email" id="a-contact_email" placeholder="kontakt@firma.pl"></div>
+            <div><label>Drugi e-mail</label><input type="email" name="contact_email2" id="a-contact_email2" placeholder="opcjonalnie"></div>
+          </div>
+          <div class="grid2">
+            <div>
+              <label>Robot</label>
+              <select name="robot_model" id="a-robot_model">
+                <option value="">— wybierz —</option>
+                {% for m in robot_models %}<option>{{ m }}</option>{% endfor %}
+              </select>
+            </div>
+            <div>
+              <label>Wartość</label>
+              <div class="row" style="gap:6px">
+                <input type="number" name="value_pln" id="a-value_pln" placeholder="15000" style="flex:1">
+                <select name="currency" id="a-currency" style="width:74px">
+                  {% for c in currencies %}<option>{{ c }}</option>{% endfor %}
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="grid2">
+            <div><label>Lokalizacja</label><input name="location" id="a-location" placeholder="np. Warszawa"></div>
+            <div>
+              <label>Przypisz do</label>
+              <select name="assigned_to" id="a-assigned_to">
+                {% for u in users %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label>Dni wynajmu <span style="color:var(--purple);font-size:10px">→ kalendarz (niekoniecznie po kolei, np. tylko 1 i 10; można różne miasta na różne dni)</span></label>
+            <div class="evt-chips" id="a-evt-chips" data-prefix="a"></div>
+            <div class="row" style="gap:6px;margin-top:6px">
+              <input type="date" id="a-evt-add" min="{{ event_date_min }}" max="{{ event_date_max }}" style="flex:1" title="Dzień (albo początek zakresu)" onkeydown="evtDaysKeydown(event,'a')">
+              <input type="date" id="a-evt-add-end" min="{{ event_date_min }}" max="{{ event_date_max }}" style="flex:1" title="Koniec zakresu (opcjonalnie)" onkeydown="evtDaysKeydown(event,'a')">
+            </div>
+            <div class="row" style="gap:6px;margin-top:6px">
+              <input type="text" id="a-evt-add-location" placeholder="Lokalizacja tego dnia (opcjonalnie, np. inne miasto)" style="flex:1" onkeydown="evtDaysKeydown(event,'a')">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="evtDaysAddRange('a')">+ Dodaj</button>
+            </div>
+            <input type="hidden" name="event_dates" id="a-evt-dates">
+            <input type="hidden" name="event_locations" id="a-evt-locations">
+          </div>
+          <div class="row mt8">
+            <button type="submit" class="btn btn-primary flex1">✓ Dodaj do CRM</button>
+            <button type="button" class="btn btn-secondary" onclick="closeAccept()">Anuluj</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openAccept(btn) {
+  const d = btn.dataset;
+  document.getElementById('acceptForm').action = `/crm/leads/${d.leadId}/clickup/accept?next=detail`;
+  document.getElementById('a-company').value = d.company || '';
+  document.getElementById('a-contact_name').value = d.contactName || '';
+  document.getElementById('a-contact_phone').value = d.contactPhone || '';
+  document.getElementById('a-contact_email').value = d.contactEmail || '';
+  document.getElementById('a-contact_email2').value = d.contactEmail2 || '';
+  document.getElementById('a-robot_model').value = d.robotModel || '';
+  document.getElementById('a-value_pln').value = d.valuePln || '';
+  document.getElementById('a-currency').value = d.currency || 'EUR';
+  document.getElementById('a-location').value = d.location || '';
+  document.getElementById('a-assigned_to').value = d.assignedTo || '1';
+  const initialDays = [];
+  if (d.eventDate) {
+    let start = new Date(d.eventDate + 'T00:00:00');
+    let end = d.eventEndDate ? new Date(d.eventEndDate + 'T00:00:00') : start;
+    if (start > end) { [start, end] = [end, start]; }
+    const pad = n => String(n).padStart(2, '0');
+    for (let cur = new Date(start); cur <= end; cur.setDate(cur.getDate() + 1)) {
+      initialDays.push(`${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-${pad(cur.getDate())}`);
+    }
+  }
+  evtDaysReset('a', initialDays);
+  document.getElementById('acceptModal').classList.add('open');
+  setTimeout(() => document.getElementById('a-value_pln').focus(), 40);
+}
+function closeAccept() {
+  document.getElementById('acceptModal').classList.remove('open');
+}
+</script>
+{% endblock %}

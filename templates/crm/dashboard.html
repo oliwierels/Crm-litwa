@@ -1,0 +1,326 @@
+{% extends "crm/base.html" %}
+{% block title %}Dashboard – 33bots LT CRM{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block topbar_actions %}
+<span style="font-size:12px;color:var(--muted)">{{ today.strftime('%d.%m.%Y') }}</span>
+<a href="{{ url_for('crm_dashboard') }}{% if not show_all %}?all=1{% endif %}" class="btn btn-secondary btn-sm" title="Przełącz: tylko moje zadania / zadania wszystkich">
+  {% if show_all %}👥 Zadania wszystkich{% else %}👤 Moje zadania ({{ user.name }}){% endif %}
+</a>
+<button class="btn btn-primary btn-sm" onclick="openQuick()">+ Nowy lead</button>
+{% endblock %}
+
+{% block content %}
+{% set ki = kind_icons %}
+
+<!-- STATS -->
+<div class="stats-row">
+  <div class="stat">
+    <div class="stat-val">{{ total_leads }}</div>
+    <div class="stat-label">Wszystkich leadów</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val" style="color:var(--red)">{{ overdue|length }}</div>
+    <div class="stat-label">Przeterminowane</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val" style="color:var(--yellow)">{{ today_acts|length }}</div>
+    <div class="stat-label">Dziś</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val" style="color:var(--accent);font-size:{{ '15px' if open_value|length > 1 else '22px' }}">{{ open_value|money }}</div>
+    <div class="stat-label">Pipeline (otwarte)</div>
+  </div>
+  <a class="stat" href="{{ url_for('crm_stats') }}#przychod" title="Leady na etapie Zrealizowany — ostatni dzień wynajmu już minął">
+    <div class="stat-val" style="color:#14b8a6;font-size:{{ '15px' if realized_value|length > 1 else '22px' }}">{{ realized_value|money }}</div>
+    <div class="stat-label">Przychód zrealizowany</div>
+  </a>
+  <a class="stat" href="{{ url_for('crm_stats') }}#przychod" title="Leady na etapie Wygrany — wynajem jeszcze przed nami">
+    <div class="stat-val" style="color:var(--green);font-size:{{ '15px' if to_realize_value|length > 1 else '22px' }}">{{ to_realize_value|money }}</div>
+    <div class="stat-label">Do realizacji (wygrane)</div>
+  </a>
+  <div class="stat">
+    <div class="stat-val" style="color:{% if win_rate is none %}var(--muted){% elif win_rate >= 50 %}var(--green){% else %}var(--yellow){% endif %}">{{ win_rate ~ '%' if win_rate is not none else '—' }}</div>
+    <div class="stat-label">Skuteczność (wygrane / zamknięte)</div>
+  </div>
+</div>
+
+{% if my_jobs is none and link_candidates %}
+<!-- zalogowany nie jest połączony z żadnym operatorem — połącz jednym kliknięciem -->
+<div class="panel" id="opLinkBar" style="margin-bottom:14px;border-color:#7c3aed66">
+  <div class="panel-body" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px">
+    <span>🚚 Jeździsz na realizacje jako operator? Połącz się, żeby widzieć tu swoje zlecenia:</span>
+    <form method="post" action="{{ url_for('crm_operator_link_me') }}" style="display:flex;gap:6px;align-items:center">
+      <select name="operator_id" style="width:auto">
+        {% for o in link_candidates %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
+      </select>
+      <button class="btn btn-primary btn-sm">To ja ({{ user.name }}) — połącz</button>
+    </form>
+    <button class="modal-close" style="margin-left:auto" title="Nie jestem operatorem — ukryj" onclick="hideOpLink()">×</button>
+  </div>
+</div>
+{% endif %}
+
+{% if my_jobs is not none %}
+<!-- MOJE ZLECENIA: realizacje, na które zalogowany jedzie jako operator -->
+<div class="panel" style="margin-bottom:14px;border-color:#7c3aed66">
+  <div class="panel-header" style="color:#a78bfa"><i class="bi bi-truck"></i> Moje zlecenia — jadę jako operator ({{ my_jobs|length }})
+    <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)">· połączone z: {{ my_ops|map(attribute='name')|join(', ') }}</span>
+    <a href="{{ url_for('crm_operator_jobs', oid=my_ops[0].id) }}" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)" title="Lista do otwarcia na telefonie, z nawigacją">📱 widok na telefon →</a>
+  </div>
+  <div class="panel-body" style="padding:0 16px">
+    {% for j in my_jobs[:8] %}
+    <div class="act-row">
+      <div class="act-icon">🤖</div>
+      <div class="act-body">
+        <a href="{{ url_for('crm_lead_detail', lead_id=j.lead.id) }}" class="act-title">{{ j.lead.company }}</a>
+        {% if j.tentative %}<span class="stage-badge" style="background:{{ stage_colors[j.lead.stage] }}22;color:{{ stage_colors[j.lead.stage] }};margin-left:4px">❔ {{ j.lead.stage }}</span>{% endif %}
+        <div class="act-meta">📍 {{ j.place or 'brak miejsca' }} · 🤖 {{ j.robot }}{% if j.partners %} · 👥 razem z: {{ j.partners|join(', ') }}{% endif %}</div>
+        {% if j.lead.contact_name or j.lead.contact_phone %}<div class="act-meta">👤 {{ j.lead.contact_name or '' }}{% if j.lead.contact_phone %} · 📞 <a href="tel:{{ j.lead.contact_phone|replace(' ', '') }}" style="text-decoration:underline">{{ j.lead.contact_phone }}</a>{% endif %}</div>{% endif %}
+        {% if j.notes %}<div class="act-meta">📝 {{ j.notes }}</div>{% endif %}
+        {% if j.prev_place %}<div class="act-meta">🛏 dzień wcześniej jesteś w: {{ j.prev_place }}</div>{% endif %}
+      </div>
+      <div class="act-right">
+        <div style="font-weight:600;color:{{ 'var(--yellow)' if j.when in ('dziś', 'jutro') else 'var(--text)' }}">{{ j.weekday }} {{ j.date.strftime('%d.%m') }}</div>
+        <div style="color:var(--muted)">{{ j.when }}</div>
+        {% if my_ops|length > 1 %}<div style="color:var(--muted)">jako {{ j.operator }}</div>{% endif %}
+      </div>
+    </div>
+    {% else %}
+    <div style="padding:14px 0;color:var(--muted)">Brak zaplanowanych zleceń — przypisania robi się w zakładce Logistyka.</div>
+    {% endfor %}
+    {% if my_jobs|length > 8 %}
+    <div style="padding:10px 0;font-size:12px"><a href="{{ url_for('crm_operator_jobs', oid=my_ops[0].id) }}" style="color:var(--accent)">＋ {{ my_jobs|length - 8 }} kolejnych →</a></div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+
+  <!-- LEFT: OVERDUE + TODAY -->
+  <div style="display:flex;flex-direction:column;gap:14px">
+
+    {% if overdue %}
+    <div class="panel">
+      <div class="panel-header" style="color:var(--red)"><i class="bi bi-exclamation-circle"></i> Przeterminowane ({{ overdue|length }})</div>
+      <div class="panel-body" style="padding:0 16px">
+        {% for a in overdue %}
+        <div class="act-row">
+          <div class="act-icon">{{ ki.get(a.kind,'•') }}</div>
+          <div class="act-body">
+            {% if a.lead %}<a href="{{ url_for('crm_lead_detail', lead_id=a.lead_id) }}" class="act-title u-overdue">{{ a.lead.company }}</a>{% else %}<span class="act-title u-overdue">🔧 Zadanie własne</span>{% endif %}
+            <div class="act-meta">{{ a.lead.contact_name or '' if a.lead else '' }}{% if a.notes %} · {{ a.notes[:50] }}{% endif %}</div>
+            {% if a.comments %}<div class="act-meta">💬 {{ a.comments[-1].text[:60] }}</div>{% endif %}
+          </div>
+          <div class="act-right">
+            <div class="u-overdue">{{ a.due_date.strftime('%d.%m') if a.due_date else '—' }}</div>
+            <div style="display:flex;gap:4px;margin-top:6px;justify-content:flex-end">
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" title="Nie odebrał — zapisze próbę i przełoży na jutro" onclick="noAnswer({{ a.id }},this)">📵 Nie odebrał</button>
+              {% if followup_ready(a) %}<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--accent)" title="Wyślij follow-up mailem do klienta — zobaczysz treść przed wysłaniem" onclick="openFollowup({{ a.id }})">📨 Wyślij</button>{% endif %}
+              <button class="btn btn-ghost btn-sm" style="font-size:10px" title="Dodaj komentarz" onclick="commentTask({{ a.id }})">💬</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px" title="Przełóż na jutro" onclick="postpone({{ a.id }},1,this)">+1d</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px" title="Przełóż o tydzień" onclick="postpone({{ a.id }},7,this)">+7d</button>
+              <button class="btn btn-primary btn-sm" style="font-size:11px" onclick="markDone({{ a.id }},this)">✓</button>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <div class="panel-header" style="color:var(--yellow)"><i class="bi bi-calendar-check"></i> Dziś ({{ today_acts|length }})</div>
+      <div class="panel-body" style="padding:0 16px">
+        {% if today_acts %}
+          {% for a in today_acts %}
+          <div class="act-row" id="act-{{ a.id }}">
+            <div class="act-icon">{{ ki.get(a.kind,'•') }}</div>
+            <div class="act-body">
+              {% if a.lead %}<a href="{{ url_for('crm_lead_detail', lead_id=a.lead_id) }}" class="act-title">{{ a.lead.company }}</a>{% else %}<span class="act-title">🔧 Zadanie własne</span>{% endif %}
+              <div class="act-meta">{{ a.lead.contact_name or '' if a.lead else '' }}{% if a.notes %} · {{ a.notes[:50] }}{% endif %}</div>
+              {% if a.comments %}<div class="act-meta">💬 {{ a.comments[-1].text[:60] }}</div>{% endif %}
+            </div>
+            <div class="act-right">
+              <div style="display:flex;gap:4px;justify-content:flex-end">
+                <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" title="Nie odebrał — zapisze próbę i przełoży na jutro" onclick="noAnswer({{ a.id }},this)">📵 Nie odebrał</button>
+                {% if followup_ready(a) %}<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--accent)" title="Wyślij follow-up mailem do klienta — zobaczysz treść przed wysłaniem" onclick="openFollowup({{ a.id }})">📨 Wyślij</button>{% endif %}
+                <button class="btn btn-ghost btn-sm" title="Dodaj komentarz" onclick="commentTask({{ a.id }})">💬</button>
+                <button class="btn btn-primary btn-sm" style="font-size:11px" onclick="markDone({{ a.id }},this)">✓ Zrobione</button>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div style="padding:14px 0;color:var(--muted)">Brak zadań na dziś</div>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: SOON + PIPELINE -->
+  <div style="display:flex;flex-direction:column;gap:14px">
+
+    <div class="panel">
+      <div class="panel-header" style="color:var(--accent)"><i class="bi bi-clock"></i> Nadchodzące ({{ soon_acts|length }})</div>
+      <div class="panel-body" style="padding:0 16px">
+        {% if soon_acts %}
+          {% for a in soon_acts %}
+          <div class="act-row">
+            <div class="act-icon">{{ ki.get(a.kind,'•') }}</div>
+            <div class="act-body">
+              {% if a.lead %}<a href="{{ url_for('crm_lead_detail', lead_id=a.lead_id) }}" class="act-title">{{ a.lead.company }}</a>{% else %}<span class="act-title">🔧 Zadanie własne</span>{% endif %}
+              <div class="act-meta">{% if a.lead %}{{ a.lead.contact_name or '' }}{% elif a.notes %}{{ a.notes[:50] }}{% endif %}</div>
+            </div>
+            <div class="act-right">
+              <div class="u-soon">{{ a.due_date.strftime('%d.%m') if a.due_date else '—' }}</div>
+              {% if followup_ready(a) %}<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--accent);margin-top:4px" title="Wyślij follow-up mailem do klienta — zobaczysz treść przed wysłaniem" onclick="openFollowup({{ a.id }})">📨 Wyślij</button>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div style="padding:14px 0;color:var(--muted)">Brak zadań w ciągu 3 dni</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if journey_todo %}
+    <div class="panel" style="border-color:#ef444444">
+      <div class="panel-header" style="color:var(--red);display:flex;align-items:center;gap:6px">
+        <span><i class="bi bi-signpost-2"></i> Customer Journey — do zrobienia ({{ journey_todo|length }})</span>
+        <a href="{{ url_for('crm_journey') }}?tylko=akcja" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;text-decoration:underline;color:var(--muted)">tablica →</a>
+      </div>
+      <div class="panel-body" style="padding:0 16px">
+        {% for v in journey_todo[:8] %}
+        <div class="act-row">
+          <div class="act-icon"><span style="width:9px;height:9px;border-radius:50%;background:{{ {'red': 'var(--red)', 'yellow': 'var(--yellow)'}.get(v.urgency, 'var(--muted)') }}"></span></div>
+          <div class="act-body">
+            <a href="{{ url_for('crm_lead_detail', lead_id=v.lead.id) }}#journey" class="act-title">{{ v.lead.company }}</a>
+            <div class="act-meta">{{ v.actions[0][1] }}{% if v.event %} · wydarzenie {{ v.event.strftime('%d.%m') }}{% if v.left is not none and v.left >= 0 %} (za {{ v.left }} dni){% endif %}{% endif %}</div>
+          </div>
+          <div class="act-right"><a class="btn btn-primary btn-sm" style="font-size:11px" href="{{ url_for('crm_journey') }}#j{{ v.lead.id }}">Otwórz</a></div>
+        </div>
+        {% endfor %}
+        {% if journey_todo|length > 8 %}<div style="padding:8px 0;font-size:12px;color:var(--muted)">…i jeszcze {{ journey_todo|length - 8 }} — zobacz tablicę</div>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if no_next_step %}
+    <div class="panel">
+      <div class="panel-header" style="color:var(--yellow);display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span><i class="bi bi-signpost-split"></i> Bez następnego kroku ({{ no_next_step|length }})</span>
+        <form method="post" action="{{ url_for('crm_backfill_steps') }}" style="margin:0">
+          <button type="submit" class="btn btn-ghost btn-sm" style="font-size:11px"
+                  data-msg="Dodać telefon wszystkim {{ no_next_step|length }} leadom bez kroku? Przypisany do opiekuna leada: tydzień po ofercie albo na dziś, jeśli oferty jeszcze nie było."
+                  onclick="return confirm(this.dataset.msg)">📞 Telefon wszystkim</button>
+        </form>
+      </div>
+      <div class="panel-body" style="padding:0 16px">
+        {% for lead in no_next_step %}
+        {% set idays = inactivity_fn(lead) %}
+        {% set ic = inactivity_color_fn(idays) %}
+        <div class="act-row">
+          <span class="dot dot-{{ ic }}" style="margin-top:6px"></span>
+          <div class="act-body">
+            <a href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}" class="act-title">{{ lead.company }}</a>
+            <div class="act-meta">
+              <span class="stage-badge" style="background:{{ stage_colors.get(lead.stage,'#888') }}18;color:{{ stage_colors.get(lead.stage,'#888') }}">{{ lead.stage }}</span>
+              · cisza od {{ idays }}d
+            </div>
+          </div>
+          <div class="act-right">
+            <a href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}" class="btn btn-ghost btn-sm" style="font-size:11px">+ Zaplanuj</a>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <div class="panel-header"><i class="bi bi-bar-chart-steps"></i> Pipeline</div>
+      <div class="panel-body">
+        {% for stage in stages %}
+        <a href="{{ url_for('crm_leads') }}?view=kanban" style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:8px;height:3px;border-radius:2px;background:{{ stage_colors[stage] }};display:inline-block"></span>
+            <span style="color:var(--muted);font-size:12px">{{ stage }}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            {% if stage_values[stage] %}<span style="font-size:11px;color:var(--muted)">{{ stage_values[stage]|money }}</span>{% endif %}
+            <span style="font-weight:700;color:{{ stage_colors[stage] }}">{{ stage_counts[stage] }}</span>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const bar = document.getElementById('opLinkBar');
+  try { if (bar && localStorage.getItem('hideOpLink-{{ user.id }}')) bar.style.display = 'none'; } catch (e) {}
+})();
+function hideOpLink() {
+  const bar = document.getElementById('opLinkBar');
+  if (bar) bar.style.display = 'none';
+  try { localStorage.setItem('hideOpLink-{{ user.id }}', '1'); } catch (e) {}
+}
+function markDone(id, btn) {
+  if (btn.disabled) return;  // blokada podwójnego kliknięcia — endpoint przełącza done/niedone
+  btn.disabled = true;
+  fetch(`/crm/api/activity/${id}/done`, {method:'POST'})
+    .then(r=>r.json()).then(res => {
+      if (!res || !res.ok || !res.done) { btn.disabled = false; return; }
+      const row = btn.closest('.act-row');
+      if (row) { row.style.opacity='.3'; row.style.pointerEvents='none'; }
+      btn.textContent = '✓ Zrobione';
+    }).catch(() => { btn.disabled = false; });
+}
+function signContract(id, btn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  fetch(`/crm/leads/${id}/contract/toggle`, {method:'POST', headers:{'Content-Type':'application/json'}})
+    .then(r=>r.json()).then(res => {
+      if (!res || !res.ok) { btn.disabled = false; return; }
+      const row = document.getElementById('contract-'+id);
+      if (row) { row.style.opacity='.3'; row.style.pointerEvents='none'; }
+      btn.textContent = '✓ Podpisana';
+    }).catch(() => { btn.disabled = false; });
+}
+function noAnswer(id, btn) {
+  fetch(`/crm/api/activity/${id}/no_answer`, {method:'POST'})
+    .then(r=>r.json()).then(res => {
+      if (!res || !res.ok) return;
+      const row = btn.closest('.act-row');
+      if (row) { row.style.opacity='.3'; row.style.pointerEvents='none'; }
+      btn.textContent = `📵 ${res.attempts}. próba → jutro`;
+    }).catch(() => {});
+}
+function commentTask(id) {
+  const t = prompt('Komentarz do zadania (np. "nie odebrał, próbować po 15:00"):');
+  if (!t || !t.trim()) return;
+  fetch(`/crm/activities/${id}/comments/add`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text: t.trim()})
+  }).then(() => location.reload());
+}
+function postpone(id, days, btn) {
+  fetch(`/crm/api/activity/${id}/postpone`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({days})
+  }).then(r=>r.json()).then(res => {
+    if (!res || !res.ok) return;
+    const row = btn.closest('.act-row');
+    if (row) { row.style.opacity='.3'; row.style.pointerEvents='none'; }
+    btn.textContent = '→ ' + res.display.slice(0,5);
+  }).catch(() => {});
+}
+</script>
+{% endblock %}

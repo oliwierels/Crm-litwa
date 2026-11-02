@@ -1,0 +1,71 @@
+{% extends "crm/base.html" %}
+{% block title %}Skrzynka kontakt@ – 33bots LT CRM{% endblock %}
+{% block page_title %}📥 Skrzynka {{ mailbox or 'kontakt@' }}{% endblock %}
+{% block topbar_actions %}
+{% if configured and ai_ready %}
+<form method="post" action="{{ url_for('crm_inbox_check') }}" style="display:inline">
+  <button class="btn btn-primary btn-sm">🔄 Sprawdź teraz</button>
+</form>
+{% endif %}
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.ib-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel2); margin-bottom: 8px; flex-wrap: wrap; }
+.ib-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.ib-lead { background: #22c55e22; color: var(--green); }
+.ib-dopisany { background: #5b5ef422; color: var(--accent); }
+.ib-pominiety { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.ib-blad { background: #ef444422; color: var(--red); }
+.ib-main { flex: 1; min-width: 260px; }
+.ib-sub { font-size: 12px; color: var(--muted); }
+.ib-row details summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.ib-body { white-space: pre-wrap; font-size: 12px; margin-top: 6px; max-height: 260px; overflow: auto; background: var(--panel); padding: 8px; border-radius: 6px; }
+.ib-actions { display: flex; gap: 6px; align-items: center; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not configured or not ai_ready %}
+<div class="panel" style="margin-bottom:14px;border-color:var(--yellow)">
+  <div class="panel-body" style="font-size:13px;line-height:1.7">
+    ⚙️ <b>Import zapytań jest wyłączony.</b> Railway → web → <b>Variables</b>:<br>
+    {% if not configured %}<code>INBOX_IMAP_USER</code> = kontakt@33bots.pl, <code>INBOX_IMAP_PASS</code> = hasło tej skrzynki<br>{% endif %}
+    {% if not ai_ready %}<code>ANTHROPIC_API_KEY</code> = klucz z console.anthropic.com → API Keys (płatne za użycie, osobno od abonamentu claude.ai)<br>{% endif %}
+  </div>
+</div>
+{% else %}
+<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">
+  CRM sprawdza skrzynkę co {{ poll_min }} min. Zapytania (także z formularza na stronie) od razu stają się leadami;
+  maile od klientów, którzy już są w CRM, dopisują się do ich leada. Maile w skrzynce zostają nieprzeczytane.
+</div>
+{% endif %}
+
+{% for m in msgs %}
+<div class="ib-row">
+  <span class="ib-badge ib-{{ m.status }}">
+    {% if m.status == 'lead' %}➕ nowy lead{% elif m.status == 'dopisany' %}↪ dopisany{% elif m.status == 'pominiety' %}pominięty{% else %}⚠️ błąd{% endif %}
+  </span>
+  <div class="ib-main">
+    <div style="font-weight:600;font-size:13px">{{ m.subject or '(bez tematu)' }}</div>
+    <div class="ib-sub">{{ m.from_addr }} · {{ m.received_at.strftime('%d.%m, %H:%M') if m.received_at }} UTC{% if m.reason %} · {{ m.reason }}{% endif %}</div>
+    <details><summary>Treść</summary><div class="ib-body">{{ m.body }}</div></details>
+  </div>
+  <div class="ib-actions">
+    {% if m.lead %}<a class="btn btn-secondary btn-sm" href="{{ url_for('crm_lead_detail', lead_id=m.lead_id) }}">{{ m.lead.company }} →</a>{% endif %}
+    {% if m.status in ['pominiety', 'blad'] and ai_ready %}
+    <form method="post" action="{{ url_for('crm_inbox_action', mid=m.id, action='lead') }}">
+      <button class="btn btn-secondary btn-sm" title="Claude wyciągnie dane i utworzy leada">➕ To jednak lead</button>
+    </form>
+    {% endif %}
+    {% if m.status == 'blad' and ai_ready %}
+    <form method="post" action="{{ url_for('crm_inbox_action', mid=m.id, action='ponow') }}">
+      <button class="btn btn-ghost btn-sm">↻ Ponów</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div style="color:var(--muted);font-size:13px">Jeszcze nic nie przeczytano.</div>
+{% endfor %}
+{% endblock %}

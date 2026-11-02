@@ -1,0 +1,489 @@
+{% extends "crm/base.html" %}
+{% block title %}Logistyka – 33bots LT CRM{% endblock %}
+{% block page_title %}🚚 Logistyka{% endblock %}
+
+{% block extra_head %}
+<style>
+.lg-range { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.lg-range input[type=date] { width:auto; padding:5px 8px; }
+.lg-check { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); margin:0; cursor:pointer; }
+.lg-presets { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+.lg-presets a { font-size:12px; padding:4px 10px; border:1px solid var(--border); border-radius:14px; color:var(--muted); }
+.lg-presets a:hover, .lg-presets a.on { color:var(--text); border-color:var(--accent); }
+.lg-cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+@media (max-width: 1000px) { .lg-cols { grid-template-columns:1fr; } }
+.lg-item { display:flex; gap:8px; align-items:flex-start; padding:7px 0; border-bottom:1px solid var(--border); font-size:12.5px; line-height:1.45; }
+.lg-item:last-child { border-bottom:none; }
+.lg-item .ic { flex-shrink:0; width:18px; text-align:center; }
+.lg-danger { color:#fca5a5; }
+.lg-warn { color:#fde68a; }
+.lg-info { color:var(--muted); }
+.lg-save { color:var(--green); font-weight:700; white-space:nowrap; }
+.lg-day { margin-bottom:10px; }
+.lg-day-head { font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; padding:6px 0; display:flex; gap:8px; align-items:center; }
+.lg-day-head .today { color:var(--yellow); }
+.lg-day.past { opacity:.55; }
+.lg-ev { background:var(--panel2); border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; margin-bottom:8px; }
+.lg-ev.tent { border-style:dashed; }
+.lg-ev-head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px; font-size:13px; }
+.lg-ev-head .co { font-weight:600; }
+.lg-ev-head .co:hover { text-decoration:underline; }
+.lg-tag { font-size:11px; color:var(--muted); }
+.lg-tag.bad { color:#fde68a; }
+.crew-form { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+.crew-form select { width:auto; min-width:140px; padding:5px 8px; }
+.crew-form input[type=text] { width:170px; padding:5px 8px; }
+.crew-form input.notes { width:220px; }
+.crew-num { font-size:11px; color:var(--muted); width:52px; flex-shrink:0; }
+.crew-form select.crew-size { min-width:0; width:92px; }
+.crew-form select[name=operator_id], .crew-form select[name=operator2_id] { width:170px; }
+.crew-form select[name=robot_id], .crew-form select[name=robot2_id] { width:185px; }
+.crew-second { display:flex; gap:6px; align-items:center; flex-wrap:wrap; flex-basis:100%; }
+.crew-second .crew-num { width:150px; text-align:right; padding-right:4px; }
+.crew-second[hidden] { display:none; }
+.lg-x { background:none; border:1px solid transparent; color:var(--muted); border-radius:5px; cursor:pointer; padding:3px 7px; font-size:14px; line-height:1; }
+.lg-x:hover { color:var(--red); border-color:var(--red); }
+.lg-route { padding:10px 0; border-bottom:1px solid var(--border); }
+.lg-route:last-child { border-bottom:none; }
+.lg-route-head { display:flex; gap:12px; flex-wrap:wrap; align-items:baseline; font-size:13px; }
+.lg-route-head b { font-size:14px; }
+.lg-trip { font-size:12px; color:var(--muted); margin-top:5px; padding-left:10px; border-left:2px solid var(--border); }
+.lg-trip .when { color:var(--text); font-weight:600; margin-right:6px; }
+.lg-row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:6px 0; border-bottom:1px solid var(--border); }
+.lg-row:last-child { border-bottom:none; }
+.lg-row input[type=text] { width:150px; padding:5px 8px; }
+.lg-row select { width:auto; padding:5px 8px; }
+.lg-empty { color:var(--muted); font-size:12px; padding:6px 0; }
+.lg-note { font-size:11px; color:var(--muted); margin-top:8px; line-height:1.5; }
+.lg-saved { outline:2px solid var(--green) !important; outline-offset:1px; transition:outline-color .8s; }
+#lg-toast { position:fixed; left:calc(var(--sidebar) + 20px); bottom:20px; z-index:500; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:7px 12px; font-size:12px; box-shadow:0 4px 18px rgba(0,0,0,.4); opacity:0; transform:translateY(6px); transition:opacity .2s, transform .2s; pointer-events:none; }
+#lg-toast.show { opacity:1; transform:none; }
+#lg-toast.ok { color:var(--green); }
+#lg-toast.err { color:var(--red); border-color:var(--red); }
+</style>
+{% endblock %}
+
+{% block topbar_actions %}
+<form method="get" class="lg-range">
+  <input type="date" name="od" value="{{ d_from.isoformat() }}" title="Od">
+  <span style="color:var(--muted)">–</span>
+  <input type="date" name="do" value="{{ d_to.isoformat() }}" title="Do">
+  <label class="lg-check" title="Pokaż też leady na etapie Oferta — żeby zawczasu widzieć kolizje">
+    <input type="checkbox" name="niepewne" value="1" {% if tentative %}checked{% endif %} onchange="this.form.submit()"> + niepotwierdzone
+  </label>
+  <button class="btn btn-secondary btn-sm">Pokaż</button>
+</form>
+{% endblock %}
+
+{% block content %}
+<div class="lg-page">
+{% set back = request.full_path.rstrip('?') %}
+{% set tq = '&niepewne=1' if tentative else '' %}
+
+<div class="lg-presets">
+  {% for label, a, b in presets %}
+  <a href="{{ url_for('crm_logistics') }}?od={{ a.isoformat() }}&do={{ b.isoformat() }}{{ tq }}" class="{{ 'on' if a == d_from and b == d_to }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="stats-row" id="lg-stats" data-anchor>
+  <div class="stat"><div class="stat-val">{{ plan.stats.event_days }}</div><div class="stat-label">Dni realizacji</div></div>
+  <div class="stat"><div class="stat-val" style="color:{{ 'var(--red)' if plan.stats.unassigned else 'var(--green)' }}">{{ plan.stats.unassigned }}</div><div class="stat-label">Bez operatora</div></div>
+  <div class="stat"><div class="stat-val">≈{{ fmt_km(plan.stats.km) }}</div><div class="stat-label">km łącznie</div></div>
+  <div class="stat"><div class="stat-val">≈{{ plan.stats.hours|round|int }} h</div><div class="stat-label">za kierownicą</div></div>
+  <div class="stat"><div class="stat-val">{{ plan.stats.nights }}</div><div class="stat-label">Noclegów</div></div>
+</div>
+
+<div id="lg-hint">
+{% if not plan.operators %}
+<div class="panel" style="margin-bottom:14px;border-color:var(--accent)">
+  <div class="panel-body" style="font-size:13px;line-height:1.6">
+    👋 <b>Zacznij od dodania operatorów i robotów</b> — <a href="#flota" style="color:var(--accent);text-decoration:underline">na dole strony</a>.
+    Przy każdym operatorze wpisz bazę (skąd wyjeżdża), a CRM policzy trasy, wyłapie konflikty
+    i podpowie, kto powinien jechać gdzie, żeby było najmniej kilometrów.
+  </div>
+</div>
+{% endif %}
+</div>
+
+<div class="lg-cols">
+  <div class="panel" id="lg-problems" data-anchor>
+    <div class="panel-header"><i class="bi bi-exclamation-triangle"></i> Problemy
+      {% if plan.warnings %}<span class="k-count" style="margin-left:auto">{{ plan.warnings|length }}</span>{% endif %}</div>
+    <div class="panel-body">
+      {% for w in plan.warnings %}
+      <div class="lg-item lg-{{ w.level }}">
+        <span class="ic">{{ {'danger': '⛔', 'warn': '⚠️', 'info': '💡'}[w.level] }}</span>
+        <span>{{ w.text }}</span>
+      </div>
+      {% else %}
+      <div class="lg-empty">✅ Nic nie koliduje.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel" id="lg-suggestions" data-anchor>
+    <div class="panel-header"><i class="bi bi-lightbulb"></i> Propozycje (mniej km)
+      {% if plan.suggestions %}<span class="k-count" style="margin-left:auto">{{ plan.suggestions|length }}</span>{% endif %}</div>
+    <div class="panel-body">
+      {% for s in plan.suggestions %}
+      <div class="lg-item">
+        <span class="ic">{{ '👤' if s.kind == 'assign' else '🔀' }}</span>
+        <span style="flex:1">{{ s.text }}
+          {% if s.saving_km %}<span class="lg-save">— oszczędność ≈{{ fmt_km(s.saving_km) }} km</span>{% endif %}</span>
+        <form method="post" action="{{ url_for('crm_logistics_apply') }}">
+          <input type="hidden" name="back" value="{{ back }}">
+          <input type="hidden" name="kind" value="{{ s.kind }}">
+          <input type="hidden" name="crew_key" value="{{ s.crew_key }}">
+          {% if s.crew_key_2 %}<input type="hidden" name="crew_key_2" value="{{ s.crew_key_2 }}">{% endif %}
+          {% if s.op_from %}<input type="hidden" name="op_from" value="{{ s.op_from }}">{% endif %}
+          <input type="hidden" name="op_to" value="{{ s.op_to }}">
+          <button class="btn btn-primary btn-sm">Zastosuj</button>
+        </form>
+      </div>
+      {% else %}
+      <div class="lg-empty">{% if plan.operators %}✅ Plan tras wygląda optymalnie.{% else %}Dodaj operatorów, żeby dostać propozycje.{% endif %}</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="margin-bottom:14px" id="lg-plan">
+  <div class="panel-header"><i class="bi bi-calendar-week"></i> Plan dzień po dniu
+    <span style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400">wygrane leady{{ ' + oferty/negocjacje' if tentative }} z datą realizacji</span></div>
+  <div class="panel-body">
+    {% for day in plan.days %}
+    <div class="lg-day {{ 'past' if day.date < today }}" id="d-{{ day.date.isoformat() }}" data-anchor>
+      <div class="lg-day-head">
+        <span class="{{ 'today' if day.date == today }}">{{ day.weekday }} {{ day.date.strftime('%d.%m.%Y') }}{{ ' · dziś' if day.date == today }}</span>
+      </div>
+      {% for ev in day.events %}
+      {% set lead = ev.lead %}
+      <div class="lg-ev {{ 'tent' if ev.tentative }}">
+        <div class="lg-ev-head">
+          <a class="co" href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}">{{ lead.company }}</a>
+          {% if ev.tentative %}<span class="stage-badge" style="background:{{ stage_colors[lead.stage] }}22;color:{{ stage_colors[lead.stage] }}">❔ {{ lead.stage }}</span>{% endif %}
+          {% if ev.point %}
+          <span class="lg-tag" title="{{ ev.place_text }}">📍 {{ ev.label }}</span>
+          {% else %}
+          <span class="lg-tag bad">❓ {{ ev.place_text or 'brak lokalizacji' }}</span>
+          {% endif %}
+          <span class="lg-tag">🤖 {{ lead.robot_model or 'Unitree G1' }}</span>
+          {% if lead.contact_phone %}<span class="lg-tag">📞 {{ lead.contact_phone }}</span>{% endif %}
+        </div>
+
+        {% set crews = ev.crews if ev.crews else [none] %}
+        {% for cv in crews %}
+        {% set c = cv.crew if cv else none %}
+        <form method="post" action="{{ url_for('crm_logistics_crew_save') }}" class="crew-form">
+          <input type="hidden" name="back" value="{{ back }}">
+          {% if c %}<input type="hidden" name="crew_id" value="{{ c.id }}">
+          {% else %}<input type="hidden" name="lead_id" value="{{ lead.id }}"><input type="hidden" name="event_date" value="{{ ev.date.isoformat() }}">{% endif %}
+          {% set double = c and c.is_double %}
+          <span class="crew-num">Ekipa {{ loop.index }}</span>
+          <select name="robots_count" class="crew-size" title="Ekipa podwójna: 2 roboty i 2 operatorów w tym samym miejscu">
+            <option value="1">1 robot</option>
+            <option value="2" {{ 'selected' if double }}>2 roboty</option>
+          </select>
+          <select name="operator_id" style="{{ '' if c and c.operator_id else 'border-color:var(--red)' }}">
+            <option value="">— operator —</option>
+            {% for o in plan.operators %}
+            <option value="{{ o.id }}" {{ 'selected' if c and c.operator_id == o.id }}>{{ o.name }}{{ ' (nieaktywny)' if not o.active }}</option>
+            {% endfor %}
+          </select>
+          <select name="robot_id">
+            <option value="">— robot —</option>
+            {% for r in plan.robots %}
+            <option value="{{ r.id }}" {{ 'selected' if c and c.robot_id == r.id }}>{{ r.name }} ({{ r.model }}){{ ' — wyłączony' if not r.active }}</option>
+            {% endfor %}
+          </select>
+          <input type="text" name="city" value="{{ c.city if c and c.city else '' }}"
+                 placeholder="Miasto: {{ ev.label or ev.place_text or '?' }}"
+                 title="Wpisz, jeśli ta ekipa jedzie gdzie indziej niż w leadzie">
+          <input type="text" class="notes" name="notes" value="{{ c.notes if c and c.notes else '' }}"
+                 placeholder="Notatka (auto, godziny…)">
+          {% if c %}
+          {% if cv.point and c.city %}<span class="lg-tag">📍 {{ cv.label }}</span>{% endif %}
+          <button class="lg-x" title="Usuń ekipę" formaction="{{ url_for('crm_logistics_crew_delete', cid=c.id) }}"
+                  data-msg="Usunąć tę ekipę z dnia {{ ev.date.strftime('%d.%m') }}?" onclick="return confirm(this.dataset.msg)">×</button>
+          {% endif %}
+          <div class="crew-second" {{ '' if double else 'hidden' }}>
+            <span class="crew-num">+ 2. para</span>
+            <select name="operator2_id" style="{{ '' if c and c.operator2_id else 'border-color:var(--red)' }}">
+              <option value="">— 2. operator —</option>
+              {% for o in plan.operators %}
+              <option value="{{ o.id }}" {{ 'selected' if double and c.operator2_id == o.id }}>{{ o.name }}{{ ' (nieaktywny)' if not o.active }}</option>
+              {% endfor %}
+            </select>
+            <select name="robot2_id">
+              <option value="">— 2. robot —</option>
+              {% for r in plan.robots %}
+              <option value="{{ r.id }}" {{ 'selected' if double and c.robot2_id == r.id }}>{{ r.name }} ({{ r.model }}){{ ' — wyłączony' if not r.active }}</option>
+              {% endfor %}
+            </select>
+            {% if double and c.operator_id and c.operator2_id and c.operator_id != c.operator2_id %}
+              {% if cv.carpool %}<span class="lg-tag" title="Bazy blisko siebie — km liczone raz, u {{ c.operator.name }}">🚗 jadą razem jednym autem</span>
+              {% else %}<span class="lg-tag" title="Bazy operatorów są daleko od siebie — każdy dojeżdża sam">🚗🚗 dojeżdżają osobno</span>{% endif %}
+            {% endif %}
+          </div>
+        </form>
+        {% endfor %}
+        {% if ev.crews %}
+        <form method="post" action="{{ url_for('crm_logistics_crew_save') }}" style="margin-top:6px">
+          <input type="hidden" name="back" value="{{ back }}">
+          <input type="hidden" name="lead_id" value="{{ lead.id }}">
+          <input type="hidden" name="event_date" value="{{ ev.date.isoformat() }}">
+          <button class="btn btn-ghost btn-sm" title="Druga ekipa tego samego dnia — np. równoległa lokalizacja">＋ ekipa</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="lg-empty">Brak realizacji w tym okresie{{ '' if tentative else ' (tylko wygrane leady z ustawioną datą)' }}.</div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel" style="margin-bottom:14px" id="lg-routes" data-anchor>
+  <div class="panel-header"><i class="bi bi-signpost-split"></i> Trasy operatorów</div>
+  <div class="panel-body">
+    {% for r in plan.routes %}
+    <div class="lg-route">
+      <div class="lg-route-head">
+        <b>{{ r.op.name }}</b>
+        <span class="lg-tag">🏠 {{ r.base_label }}</span>
+        <span class="lg-tag">{{ r.count }} {{ 'realizacja' if r.count == 1 else 'realizacje' if r.count < 5 else 'realizacji' }}</span>
+        {% if r.unknown_base %}
+        <span class="lg-tag bad">❓ nie znam bazy — popraw w sekcji niżej</span>
+        {% elif not r.trips and r.rides %}
+        <span class="lg-tag">bez własnych kilometrów</span>
+        {% else %}
+        <span style="color:var(--green);font-weight:600">≈{{ fmt_km(r.km) }} km</span>
+        <span class="lg-tag">🚗 {{ fmt_hours(r.hours) }}</span>
+        {% if r.nights %}<span class="lg-tag">🛏 {{ r.nights }}</span>{% endif %}
+        {% endif %}
+      </div>
+      {% for t in r.trips %}
+      <div class="lg-trip">
+        <span class="when">{{ t.start.strftime('%d.%m') }}{% if t.end != t.start %}–{{ t.end.strftime('%d.%m') }}{% endif %}</span>
+        {% for leg in t.legs %}{% if leg.local %}📍 {{ leg.place }} — na miejscu, bez dojazdu{% elif leg.stay %}<span title="nocleg">🛏 nocleg {{ leg.place }}</span>{% else %}{{ leg.from }} → {{ leg.to }} <span style="opacity:.8">≈{{ fmt_km(leg.km) }} km</span>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}
+        <span style="color:var(--text)"> = ≈{{ fmt_km(t.km) }} km, {{ fmt_hours(t.hours) }}</span>
+        {% if t.with %}<span title="2. operator jedzie tym samym autem"> · 👥 w aucie też: {{ t.with|join(', ') }}</span>{% endif %}
+      </div>
+      {% endfor %}
+      {% for x in r.rides or [] %}
+      <div class="lg-trip">
+        <span class="when">{{ x.date.strftime('%d.%m') }}</span>👥 {{ x.company }} ({{ x.place }}) — jako 2. operator, kierowca: {{ x.driver }}
+        <span style="opacity:.8">(km liczone u kierowcy)</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="lg-empty">Nikt jeszcze nie ma przypisanych realizacji w tym okresie.</div>
+    {% endfor %}
+    <div class="lg-note">
+      Kilometry są szacunkowe: linia prosta × 1,25, średnio 70 km/h. Gdy następnego dnia jest kolejna realizacja,
+      operator jedzie prosto z poprzedniego miejsca (nocleg), jeśli leży ono dalej niż 150 km od bazy albo tak
+      wychodzi wyraźnie krócej niż przez bazę (np. wczoraj Poznań, dziś Gniezno). W przeciwnym razie wraca do bazy.
+      Liczy się też dzień tuż przed i tuż po wybranym zakresie dat.
+      Ekipa podwójna (2 roboty): jeśli bazy obu operatorów są bliżej niż 60 km, jadą razem jednym autem
+      i kilometry liczą się raz — u pierwszego operatora; w przeciwnym razie każdy dojeżdża sam.
+    </div>
+  </div>
+</div>
+
+<div class="lg-cols" id="flota" data-anchor>
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-people"></i> Operatorzy</div>
+    <div class="panel-body">
+      {% for o in plan.operators %}
+      <form method="post" action="{{ url_for('crm_logistics_operator_save') }}" class="lg-row" style="{{ '' if o.active else 'opacity:.55' }}">
+        <input type="hidden" name="back" value="{{ back }}">
+        <input type="hidden" name="id" value="{{ o.id }}">
+        <input type="text" name="name" value="{{ o.name }}" required style="width:120px">
+        <input type="text" name="base_city" value="{{ o.base_city or '' }}" placeholder="Baza: {{ default_base }}">
+        <input type="text" name="phone" value="{{ o.phone or '' }}" placeholder="Telefon" style="width:120px">
+        {% set info = plan.op_info[o.id] %}
+        <select name="user_id" title="Konto w CRM — na jego Dashboardzie pokażą się zlecenia tego operatora">
+          <option value="0">— bez konta CRM —</option>
+          {% for u in users %}<option value="{{ u.id }}" {{ 'selected' if info.user_id == u.id }}>👤 {{ u.name }}</option>{% endfor %}
+        </select>
+        <label class="lg-check"><input type="checkbox" name="active" value="1" {{ 'checked' if o.active }}> aktywny</label>
+        {% if not info.point %}<span class="lg-tag bad" title="Nie znam tego miejsca">❓</span>{% endif %}
+        <button class="btn btn-secondary btn-sm">Zapisz</button>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('crm_operator_jobs', oid=o.id) }}" target="_blank" title="Lista zleceń tego operatora — link można wysłać mu na telefon">📋 zlecenia</a>
+        <button class="lg-x" title="Usuń operatora" formaction="{{ url_for('crm_logistics_operator_delete', oid=o.id) }}"
+                data-msg="Usunąć operatora {{ o.name }}? Jego przypisania zostaną wyczyszczone." onclick="return confirm(this.dataset.msg)">×</button>
+      </form>
+      {% else %}
+      <div class="lg-empty">Brak operatorów.</div>
+      {% endfor %}
+      <form method="post" action="{{ url_for('crm_logistics_operator_save') }}" class="lg-row" style="margin-top:6px">
+        <input type="hidden" name="back" value="{{ back }}">
+        <input type="text" name="name" placeholder="Imię operatora" required style="width:120px">
+        <input type="text" name="base_city" placeholder="Baza (puste = {{ default_base }})">
+        <input type="text" name="phone" placeholder="Telefon" style="width:120px">
+        <button class="btn btn-primary btn-sm">＋ Dodaj</button>
+      </form>
+      <div class="lg-note">Baza to miasto, z którego operator wyjeżdża (dom albo magazyn). Od niej liczone są trasy.
+        Konto CRM: jego zlecenia pokażą się na Dashboardzie tej osoby (operator o imieniu jak konto łączy się sam).
+        „📋 zlecenia” to lista na telefon z nawigacją — link można wysłać operatorowi.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-robot"></i> Flota robotów
+      <span style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400">
+        {% for k, n in plan.fleet.items() %}{{ n }}× {{ k }}{{ ', ' if not loop.last }}{% endfor %}</span></div>
+    <div class="panel-body">
+      {% for r in plan.robots %}
+      <form method="post" action="{{ url_for('crm_logistics_robot_save') }}" class="lg-row" style="{{ '' if r.active else 'opacity:.55' }}">
+        <input type="hidden" name="back" value="{{ back }}">
+        <input type="hidden" name="id" value="{{ r.id }}">
+        <input type="text" name="name" value="{{ r.name }}" required>
+        <select name="model">
+          {% for k, label in robot_kinds.items() %}<option value="{{ k }}" {{ 'selected' if r.model == k }}>{{ label }}</option>{% endfor %}
+        </select>
+        <label class="lg-check" title="Odznacz, gdy robot jest w serwisie"><input type="checkbox" name="active" value="1" {{ 'checked' if r.active }}> sprawny</label>
+        <button class="btn btn-secondary btn-sm">Zapisz</button>
+        <button class="lg-x" title="Usuń robota" formaction="{{ url_for('crm_logistics_robot_delete', rid=r.id) }}"
+                data-msg="Usunąć robota {{ r.name }} z floty?" onclick="return confirm(this.dataset.msg)">×</button>
+      </form>
+      {% else %}
+      <div class="lg-empty">Brak robotów — dodaj, żeby CRM sprawdzał, czy starczy ich na każdy dzień.</div>
+      {% endfor %}
+      <form method="post" action="{{ url_for('crm_logistics_robot_save') }}" class="lg-row" style="margin-top:6px">
+        <input type="hidden" name="back" value="{{ back }}">
+        <input type="text" name="name" placeholder="Nazwa, np. G1 #1" required>
+        <select name="model">
+          {% for k, label in robot_kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}
+        </select>
+        <button class="btn btn-primary btn-sm">＋ Dodaj</button>
+      </form>
+    </div>
+  </div>
+</div>
+</div>
+<div id="lg-toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Zapis w tle bez przeładowania strony: po każdej zmianie serwer zapisuje, a strona
+// podmienia tylko przeliczone panele. Pola, w których ktoś właśnie pisze, nie są ruszane.
+(function () {
+  const SUMMARY = ['lg-hint', 'lg-stats', 'lg-problems', 'lg-suggestions', 'lg-routes'];
+  const ALL = SUMMARY.concat(['lg-plan', 'flota']);
+  let chain = Promise.resolve();
+  let pending = new Set();
+  let timer = null;
+  let toastTimer = null;
+
+  function toast(msg, kind) {
+    const t = document.getElementById('lg-toast');
+    t.textContent = msg;
+    t.className = 'show ' + (kind || '');
+    clearTimeout(toastTimer);
+    if (kind !== 'busy') toastTimer = setTimeout(() => { t.className = ''; }, kind === 'err' ? 6000 : 1400);
+  }
+
+  function post(form, action) {
+    return fetch(action, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch' } })
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  }
+
+  function pickAnchor() {
+    for (const el of document.querySelectorAll('[data-anchor]')) {
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom > 70) return { id: el.id, top: rect.top };
+    }
+    return null;
+  }
+
+  function refresh(ids, force) {
+    return fetch(location.pathname + location.search, { headers: { 'X-Requested-With': 'fetch' } })
+      .then(r => r.text())
+      .then(html => {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const anchor = pickAnchor();
+        const active = document.activeElement;
+        ids.forEach(id => {
+          const cur = document.getElementById(id);
+          if (!cur) return;
+          if (!force && active && active !== document.body && cur.contains(active)) return;
+          const fresh = doc.getElementById(id);
+          cur.innerHTML = fresh ? fresh.innerHTML : '';
+          if (fresh) { cur.className = fresh.className; cur.setAttribute('style', fresh.getAttribute('style') || ''); }
+        });
+        if (anchor) {
+          const el = document.getElementById(anchor.id);
+          if (el) window.scrollBy(0, el.getBoundingClientRect().top - anchor.top);
+        }
+      });
+  }
+
+  function scheduleRefresh(ids) {
+    ids.forEach(id => pending.add(id));
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const list = Array.from(pending);
+      pending = new Set();
+      chain = chain.then(() => refresh(list, false)).catch(() => {});
+    }, 450);
+  }
+
+  function saveCrew(form, field) {
+    chain = chain.then(() => post(form, form.getAttribute('action')).then(res => {
+      if (res.crew_id && !form.querySelector('[name=crew_id]')) {
+        const h = document.createElement('input');
+        h.type = 'hidden'; h.name = 'crew_id'; h.value = res.crew_id;
+        form.prepend(h);
+      }
+      if (field) {
+        field.classList.add('lg-saved');
+        setTimeout(() => field.classList.remove('lg-saved'), 900);
+      }
+      toast('Zapisano ✓', 'ok');
+      const day = form.closest('.lg-day');
+      scheduleRefresh(SUMMARY.concat(day ? [day.id] : []));
+    })).catch(() => toast('Nie udało się zapisać — odśwież stronę', 'err'));
+  }
+
+  function runAction(form, action) {
+    toast('Zapisuję…', 'busy');
+    chain = chain.then(() => post(form, action))
+      .then(() => refresh(ALL, true))
+      .then(() => toast('Zapisano ✓', 'ok'))
+      .catch(() => toast('Nie udało się zapisać — odśwież stronę', 'err'));
+  }
+
+  document.addEventListener('change', e => {
+    const field = e.target;
+    const form = field.closest && field.closest('form.crew-form');
+    if (!form) return;
+    if (field.name === 'operator_id' || field.name === 'operator2_id') field.style.borderColor = field.value ? '' : 'var(--red)';
+    if (field.name === 'robots_count') {
+      const second = form.querySelector('.crew-second');
+      second.hidden = field.value !== '2';
+      if (second.hidden) second.querySelectorAll('select').forEach(s => { s.value = ''; s.style.borderColor = ''; });
+      else { const op2 = second.querySelector('[name=operator2_id]'); op2.style.borderColor = op2.value ? '' : 'var(--red)'; }
+    }
+    saveCrew(form, field);
+  });
+
+  document.addEventListener('submit', e => {
+    const form = e.target;
+    if (!form.closest('.lg-page') || form.method.toLowerCase() !== 'post') return;
+    e.preventDefault();
+    const override = e.submitter && e.submitter.getAttribute('formaction');
+    if (form.matches('.crew-form') && !override) {
+      // Enter w polu tekstowym: zapis zrobi zdarzenie change po opuszczeniu pola
+      if (document.activeElement && form.contains(document.activeElement)) document.activeElement.blur();
+      return;
+    }
+    runAction(form, override || form.getAttribute('action'));
+  });
+})();
+</script>
+{% endblock %}

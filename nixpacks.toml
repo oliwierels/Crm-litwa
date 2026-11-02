@@ -1,0 +1,4 @@
+# LibreOffice zamienia odesłane przez klientów umowy w Wordzie (DOCX/DOC/ODT) na PDF — Customer Journey.
+# Bez niego CRM działa dalej, tylko DOCX zamienia na PDF jako sam tekst.
+[phases.setup]
+aptPkgs = ["...", "libreoffice-writer", "fonts-liberation"]

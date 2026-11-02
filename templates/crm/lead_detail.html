@@ -1,0 +1,610 @@
+{% extends "crm/base.html" %}
+{% import "crm/_journey.html" as jr with context %}
+{% block title %}{{ lead.company }} – 33bots LT CRM{% endblock %}
+{% block page_title %}
+<a href="{{ url_for('crm_leads') }}" style="color:var(--muted);font-weight:400;font-size:13px"><i class="bi bi-arrow-left me-1"></i>Leady</a>
+<span style="color:var(--border);margin:0 8px">/</span>{{ lead.company }}
+{% set q = lead.quality or 'Średni' %}
+<span class="qual-badge" style="background:{{ quality_colors[q] }}22;color:{{ quality_colors[q] }};margin-left:10px">{{ quality_icons[q] }} {{ q }}</span>
+{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-secondary btn-sm" onclick="document.getElementById('editModal').classList.add('open')"><i class="bi bi-pencil"></i> Edytuj</button>
+<form method="POST" action="{{ url_for('crm_delete_lead', lead_id=lead.id) }}" onsubmit="return confirm('Usunąć lead?')">
+  <button type="submit" class="btn btn-danger btn-sm"><i class="bi bi-trash"></i></button>
+</form>
+{% endblock %}
+
+{% block extra_head %}
+{{ jr.styles() }}
+<style>
+.jr-check { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 2px 0; cursor: pointer; }
+.jr-check input { width: auto; margin: 0; }
+.jr-doc { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.jr-doc-check { background: #7c3aed12; border-radius: 6px; padding: 6px; }
+.jr-upload { display: grid; gap: 5px; margin-top: 8px; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set ki = kind_icons %}
+{% set kl = kind_labels %}
+{% set urg_cls = {'overdue':'u-overdue','today':'u-today','soon':'u-soon','future':'u-future','done':'u-done'} %}
+{% set ic_colors = {'green':'var(--green)','yellow':'var(--yellow)','red':'var(--red)'} %}
+{% set ic_labels = {'green':'Aktywny','yellow':'Wymaga uwagi','red':'Nieaktywny – zadzwoń!'} %}
+
+<div style="display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start">
+
+  <!-- LEFT -->
+  <div style="display:flex;flex-direction:column;gap:12px">
+
+    <!-- Inactivity -->
+    <div class="panel" style="border-color:{{ ic_colors[inactive_color] }}44">
+      <div class="panel-body" style="display:flex;align-items:center;gap:10px">
+        <span class="dot dot-{{ inactive_color }}" style="width:9px;height:9px"></span>
+        <div>
+          <div style="font-weight:600;color:{{ ic_colors[inactive_color] }};font-size:13px">{{ ic_labels[inactive_color] }}</div>
+          <div style="font-size:11px;color:var(--muted)">Ostatni kontakt: {{ inactive_days }}d temu</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage -->
+    <div class="panel">
+      <div class="panel-header">Etap</div>
+      <div class="panel-body">
+        <form method="POST" action="{{ url_for('crm_set_stage', lead_id=lead.id) }}" style="display:flex;flex-direction:column;gap:4px">
+          {% for s in stages %}
+          <button type="submit" name="stage" value="{{ s }}"
+            style="text-align:left;padding:6px 10px;border-radius:6px;border:1px solid {% if lead.stage==s %}{{ stage_colors[s] }}{% else %}transparent{% endif %};background:{% if lead.stage==s %}{{ stage_colors[s] }}18{% else %}transparent{% endif %};color:{% if lead.stage==s %}{{ stage_colors[s] }}{% else %}var(--muted){% endif %};cursor:pointer;font-size:13px;font-weight:{% if lead.stage==s %}600{% else %}400{% endif %}">
+            {{ s }}
+          </button>
+          {% endfor %}
+        </form>
+      </div>
+    </div>
+
+    <!-- Offer by Claude -->
+    <div class="panel" id="oferta-ai">
+      <div class="panel-header"><i class="bi bi-stars"></i> Oferta z Claude</div>
+      <div class="panel-body">
+        {% if ai_ready %}
+        <form method="post" action="{{ url_for('crm_lead_offer_ai', lead_id=lead.id) }}" style="display:flex;flex-direction:column;gap:6px">
+          <textarea name="instruction" rows="3" required placeholder="np. 5500 netto za 2,5 h, dodaj że robot może wręczać nagrody"></textarea>
+          <div style="display:flex;gap:6px;align-items:center">
+            <select name="sender" style="flex:1" title="Kto wysyła i jest kontaktem w ofercie">
+              {% for u in users if u.phone and u.email %}<option value="{{ u.name }}" {{ 'selected' if u.id == user.id }}>od: {{ u.full_name }}</option>{% endfor %}
+            </select>
+            <button class="btn btn-primary btn-sm">✨ Przygotuj</button>
+          </div>
+          {% if not (user.phone and user.email) %}
+          <div style="font-size:11px;color:var(--yellow)">Żeby wysyłać oferty od siebie, uzupełnij firmowy e-mail i telefon w <a href="{{ url_for('crm_profile') }}" style="text-decoration:underline">profilu</a>.</div>
+          {% endif %}
+          <div style="font-size:11px;color:var(--muted)">Claude napisze mail i PDF na podstawie zapytania z leada. Nic nie wyjdzie bez Twojego „Wyślij”.</div>
+        </form>
+        {% else %}
+        <div style="font-size:11.5px;color:var(--yellow);line-height:1.5">Dodaj <code>ANTHROPIC_API_KEY</code> w Railway → web → Variables, żeby Claude pisał oferty z CRM.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if lead.sent_offers %}
+    <!-- Offers -->
+    <div class="panel" id="oferty">
+      <div class="panel-header"><i class="bi bi-file-earmark-pdf"></i> Oferty</div>
+      <div class="panel-body" style="display:flex;flex-direction:column;gap:6px">
+        {% for o in lead.sent_offers|reverse %}
+        <a href="{{ url_for('crm_offer_review', oid=o.id) }}"
+           style="display:block;padding:6px 8px;border:1px solid {{ 'var(--border)' if o.sent_at else 'var(--yellow)' }};border-radius:6px;text-decoration:none;color:inherit">
+          <div style="font-size:12.5px;font-weight:600">📄 {{ o.price }} netto</div>
+          <div style="font-size:11px;color:{{ 'var(--muted)' if o.sent_at else 'var(--yellow)' }}">
+            {% if o.sent_at %}wysłana {{ o.sent_at.strftime('%d.%m.%Y') }} · {{ USERS_BY_ID.get(o.sender_id, {}).get('name', '') }} → {{ o.to_addr }}{% else %}⏳ do sprawdzenia i wysłania →{% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if jv %}{% include "crm/_journey_panel.html" %}{% endif %}
+
+    <!-- Dane do faktury (NIP -> nazwa i adres z Białej listy VAT) -->
+    <details class="panel" id="faktura" {{ 'open' if jv or lead.nip }}>
+      <summary class="panel-header" style="cursor:pointer;list-style:none">🧾 Dane do faktury{% if lead.nip %} <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">· NIP {{ lead.nip }}</span>{% endif %}</summary>
+      <div class="panel-body">
+        <form method="post" action="{{ url_for('crm_lead_billing', lead_id=lead.id) }}" class="gap10" id="billing-form">
+          <div><label>NIP</label>
+            <div style="display:flex;gap:4px"><input type="text" name="nip" value="{{ lead.nip or '' }}" placeholder="10 cyfr">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="billingNip()" title="Nazwa i adres z Białej listy VAT (Ministerstwo Finansów)">🔎 z NIP</button></div></div>
+          <div><label>Nazwa (jak na fakturze)</label><input type="text" name="name" value="{{ lead.billing_name or '' }}"></div>
+          <div><label>Ulica i numer</label><input type="text" name="street" value="{{ lead.billing_street or '' }}"></div>
+          <div class="row" style="gap:6px">
+            <div style="width:90px"><label>Kod</label><input type="text" name="postcode" value="{{ lead.billing_postcode or '' }}"></div>
+            <div class="flex1"><label>Miasto</label><input type="text" name="city" value="{{ lead.billing_city or '' }}"></div>
+            <div style="width:56px"><label>Kraj</label><input type="text" name="country" maxlength="2" value="{{ lead.billing_country or 'PL' }}"></div>
+          </div>
+          <div><label>E-mail do faktury</label><input type="email" multiple name="email" value="{{ lead.billing_email or '' }}" placeholder="{{ lead.emails|join(', ') }}"></div>
+          <div id="billing-msg" style="font-size:11.5px;color:var(--muted)"></div>
+          <button class="btn btn-secondary btn-sm">Zapisz dane do faktury</button>
+        </form>
+      </div>
+    </details>
+    <script>
+    async function billingNip() {
+      const f = document.getElementById('billing-form'), msg = document.getElementById('billing-msg');
+      msg.textContent = 'Szukam NIP na Białej liście…';
+      const d = await (await fetch('/crm/nip/' + encodeURIComponent(f.elements.nip.value))).json();
+      if (d.error) { msg.textContent = '⚠️ ' + d.error; msg.style.color = 'var(--red)'; return; }
+      f.elements.nip.value = d.nip;
+      ['name', 'street', 'postcode', 'city'].forEach(k => { f.elements[k].value = d[k] || ''; });
+      f.elements.country.value = 'PL';
+      msg.style.color = 'var(--green)';
+      msg.textContent = '✅ Dane z Białej listy VAT' + (d.status ? ' (' + d.status + ')' : '') + ' — kliknij Zapisz.';
+    }
+    </script>
+
+    {% if is_lithuanian(lead) %}
+    <div class="panel">
+      <div class="panel-header">🇱🇹 Klient z Litwy</div>
+      <div class="panel-body" style="font-size:12.5px">
+        {% if lead.lt_mail_at %}
+          <div>✅ Mail z prośbą o dane wysłany {{ to_local(lead.lt_mail_at).strftime('%d.%m %H:%M') }}</div>
+        {% else %}
+          <div style="color:var(--muted)">Mail z prośbą o dane do wyceny jeszcze nie poszedł.</div>
+        {% endif %}
+        {% if lead.form_filled_at %}<div style="color:var(--green)">📝 Formularz wypełniony {{ to_local(lead.form_filled_at).strftime('%d.%m %H:%M') }} — dane w komentarzach</div>
+        {% elif lead.lt_mail_at %}<div style="color:var(--muted)">Formularz jeszcze niewypełniony.</div>{% endif %}
+        {% if lead.emails and lt_mailbox_ready() %}
+        <form method="post" action="{{ url_for('crm_lt_mail', lead_id=lead.id) }}" style="margin-top:8px"
+              onsubmit="if (!confirm('{{ 'Mail już poszedł. Wysłać PONOWNIE' if lead.lt_mail_at else 'Wysłać' }} po litewsku prośbę o dane do wyceny na: {{ lead.emails|join(', ') }}?')) return false; this.querySelector('button').disabled = true; return true;">
+          {% if lead.lt_mail_at %}<input type="hidden" name="resend" value="1">{% endif %}
+          <button class="btn btn-secondary btn-sm">📨 {{ 'Wyślij ponownie' if lead.lt_mail_at else 'Wyślij teraz' }} (z o.latek@33bots.lt)</button>
+        </form>
+        {% set backlog = lt_backlog() %}
+        {% if backlog|length > (0 if lead.lt_mail_at else 1) %}
+        <form method="post" action="{{ url_for('crm_lt_mail_backlog') }}" style="margin-top:6px"
+              onsubmit="return confirm('Wysłać mail z prośbą o dane do wszystkich {{ backlog|length }} litewskich leadów na etapie Nowy, które go jeszcze nie dostały?')">
+          <button class="btn btn-secondary btn-sm">📨 Wyślij do wszystkich zaległych litewskich leadów ({{ backlog|length }})</button>
+        </form>
+        {% endif %}
+        {% elif not lead.emails %}<div style="color:var(--yellow);margin-top:6px">Brak adresu e-mail — mail nie wyjdzie.</div>
+        {% else %}<div style="color:var(--yellow);margin-top:6px">Skrzynka 33bots.lt niepodpięta (SMTP_PASS_LT w Railway).</div>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Info -->
+    <div class="panel">
+      <div class="panel-header">Kontakt</div>
+      <div class="panel-body">
+        <table style="width:100%;border:none">
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0;width:70px">Osoba</td><td style="font-size:13px">{{ lead.contact_name or '—' }}</td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">Telefon</td>
+            <td>
+              {% if lead.contact_phone %}
+              <div style="display:flex;align-items:center;gap:6px">
+                <a href="tel:{{ lead.contact_phone }}" style="color:var(--accent)">{{ lead.contact_phone }}</a>
+                <button type="button" class="copy-btn" title="Kopiuj numer" data-copy="{{ lead.contact_phone }}" onclick="copyText(this)"><i class="bi bi-clipboard"></i></button>
+              </div>
+              {% else %}—{% endif %}
+            </td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">E-mail</td>
+            <td>
+              {% for addr in [lead.contact_email, lead.contact_email2] if addr %}
+              <div style="display:flex;align-items:center;gap:6px">
+                <a href="mailto:{{ addr }}" style="color:var(--accent);word-break:break-all">{{ addr }}</a>
+                <button type="button" class="copy-btn" title="Kopiuj e-mail" data-copy="{{ addr }}" onclick="copyText(this)"><i class="bi bi-clipboard"></i></button>
+              </div>
+              {% else %}—{% endfor %}
+            </td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">Robot</td><td>{{ lead.robot_model or '—' }}</td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">Dni</td><td>{{ lead.rental_days or '—' }}</td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">Wartość</td><td style="color:var(--green);font-weight:700">{{ (lead.value_pln|pln)+' '+(lead.currency or 'EUR') if lead.value_pln else '—' }}
+            <a href="{{ url_for('crm_calculator', lead=lead.id) }}" style="margin-left:6px;font-weight:400;font-size:11.5px;color:var(--accent);text-decoration:underline" title="Policz cenę: czas na miejscu + dojazd z Warszawy albo Katowic">🧮 wyceń</a></td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">📍 Miejsce</td><td>{{ lead.location or '—' }}</td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">Źródło</td><td>{{ lead.source or '—' }}</td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">Przypisany</td>
+            <td>{% set u=USERS_BY_ID.get(lead.assigned_to) %}{% if u %}<span style="color:{{ u.color }}">{{ u.name }}</span>{% else %}—{% endif %}</td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">📅 Wynajem</td><td style="{{ 'color:var(--purple);font-weight:600' if lead.event_date else '' }}">
+            {% if lead.event_date %}
+            {{ lead.event_date.strftime('%d.%m.%Y') }}{% if lead.event_end_date and lead.event_end_date != lead.event_date %} – {{ lead.event_end_date.strftime('%d.%m.%Y') }} ({{ lead.rental_days }} dni){% endif %}
+            {% else %}—{% endif %}
+          </td></tr>
+          <tr><td style="color:var(--muted);font-size:11px;padding:4px 0">Dodany</td><td style="color:var(--muted);font-size:11px">{{ lead.created_at.strftime('%d.%m.%Y') }}</td></tr>
+        </table>
+        {% if lead.notes %}
+        <hr class="divider">
+        <div style="font-size:12px;color:var(--muted);white-space:pre-wrap">{{ lead.notes }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: Activities -->
+  <div style="display:flex;flex-direction:column;gap:12px">
+
+    <!-- Add activity -->
+    <div class="panel">
+      <div class="panel-header">Dodaj zadanie</div>
+      <div class="panel-body">
+        <form method="POST" action="{{ url_for('crm_add_activity', lead_id=lead.id) }}">
+          <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:8px;align-items:end">
+            <div>
+              <label>Typ</label>
+              <select name="kind" style="width:150px">
+                {% for k in activity_kinds if k != 'note' %}
+                <option value="{{ k }}">{{ kind_icons[k] }} {{ kind_labels[k] }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label>Data</label>
+              <input type="date" name="due_date">
+            </div>
+            <div>
+              <label>Przypisz do</label>
+              <select name="assigned_to">
+                {% for u in users %}<option value="{{ u.id }}" {% if u.id==lead.assigned_to %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+              </select>
+            </div>
+            <div style="padding-top:18px">
+              <button type="submit" class="btn btn-primary">Dodaj</button>
+            </div>
+          </div>
+          <div style="margin-top:8px">
+            <input name="notes" placeholder="Notatka do zadania (opcjonalnie)" style="width:100%">
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Pending activities -->
+    {% set pending = pending_fn(lead) %}
+    {% if pending %}
+    <div class="panel">
+      <div class="panel-header">Do zrobienia ({{ pending|length }})</div>
+      <div style="padding:0 16px">
+        {% for a in pending %}
+        {% set urg = urgency_fn(a) %}
+        <div class="act-row">
+          <div class="act-icon">{{ ki.get(a.kind,'•') }}</div>
+          <div class="act-body">
+            <div class="act-title {{ urg_cls.get(urg,'') }}">{{ kl.get(a.kind,a.kind) }}</div>
+            <div class="act-meta">
+              {% set u=USERS_BY_ID.get(a.assigned_to) %}
+              <select class="act-assign" title="Zmień osobę przypisaną do zadania" style="color:{{ u.color if u else 'var(--muted)' }}" onchange="assignActivity({{ a.id }}, this)">
+                {% for usr in users %}<option value="{{ usr.id }}" {% if usr.id == a.assigned_to %}selected{% endif %}>{{ usr.name }}</option>{% endfor %}
+              </select>
+              {% if a.notes %} · {{ a.notes }}{% endif %}
+            </div>
+            {% for cm in a.comments %}
+            {% set cmu = USERS_BY_ID.get(cm.author_id) %}
+            <div style="font-size:11px;color:var(--muted);margin-top:3px">
+              💬 {% if cmu %}<span style="color:{{ cmu.color }};font-weight:600">{{ cmu.name }}</span>{% endif %}
+              {{ cm.created_at.strftime('%d.%m %H:%M') if cm.created_at else '' }}:
+              <span style="color:var(--text)">{{ cm.text }}</span>
+            </div>
+            {% endfor %}
+            <form method="POST" action="{{ url_for('crm_add_activity_comment', aid=a.id) }}" style="display:flex;gap:6px;margin-top:6px">
+              <input name="text" placeholder="Komentarz (np. nie odebrał)" style="flex:1;font-size:11px;padding:4px 8px" required maxlength="500">
+              <button type="submit" class="btn btn-ghost btn-sm" title="Dodaj komentarz">💬</button>
+            </form>
+          </div>
+          <div class="act-right">
+            <div class="{{ urg_cls.get(urg,'') }}">{{ a.due_date.strftime('%d.%m.%Y') if a.due_date else '—' }}</div>
+            <div style="display:flex;gap:4px;margin-top:6px;justify-content:flex-end">
+              {% if followup_ready(a) %}<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--accent)" title="Wyślij follow-up mailem do klienta — zobaczysz treść przed wysłaniem" onclick="openFollowup({{ a.id }})">📨 Wyślij</button>{% endif %}
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" title="Nie odebrał — zapisze próbę i przełoży na jutro" onclick="noAnswer({{ a.id }})">📵</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px" title="Przełóż na jutro" onclick="postpone({{ a.id }},1)">+1d</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px" title="Przełóż o tydzień" onclick="postpone({{ a.id }},7)">+7d</button>
+              <button class="btn btn-primary btn-sm" onclick="markDone({{ a.id }})">✓</button>
+              <form method="POST" action="{{ url_for('crm_delete_activity', aid=a.id) }}" onsubmit="return confirm('Usuń?')" style="display:inline">
+                <button type="submit" class="btn btn-danger btn-sm">✕</button>
+              </form>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Comments -->
+    {% set comments = lead.activities | selectattr('kind','equalto','note') | sort(attribute='created_at', reverse=true) | list %}
+    <div class="panel">
+      <div class="panel-header"><i class="bi bi-chat-left-text"></i> Komentarze ({{ comments|length }})</div>
+      <div class="panel-body">
+        <form method="POST" action="{{ url_for('crm_add_comment', lead_id=lead.id) }}" id="commentForm">
+          <div class="row" style="gap:8px">
+            <input name="text" id="c-text" placeholder="Napisz komentarz..." style="flex:1" maxlength="2000">
+            <button type="button" class="btn btn-secondary" id="c-mic-btn" title="Nagraj wiadomość głosową" onclick="toggleVoiceComment()"><i class="bi bi-mic-fill"></i></button>
+            <button type="submit" class="btn btn-primary">Dodaj</button>
+          </div>
+          <div id="c-voice-preview" style="display:none;align-items:center;gap:8px;margin-top:8px">
+            <audio id="c-voice-audio" controls style="height:32px;max-width:280px"></audio>
+            <button type="button" class="btn btn-ghost btn-sm" title="Usuń nagranie" onclick="discardVoiceComment()"><i class="bi bi-trash"></i></button>
+          </div>
+          <input type="hidden" name="voice_note" id="c-voice-note">
+        </form>
+        {% for c in comments %}
+        {% set cu = USERS_BY_ID.get(c.assigned_to) %}
+        <div class="act-row">
+          {% if cu %}<div class="av" style="background:{{ cu.color }}22;color:{{ cu.color }}">{{ cu.avatar }}</div>{% else %}<div class="act-icon">💬</div>{% endif %}
+          <div class="act-body">
+            <div class="act-meta">
+              {% if cu %}<span style="color:{{ cu.color }};font-weight:600">{{ cu.name }}</span> · {% endif %}{{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '' }}
+            </div>
+            {% if c.notes %}<div style="font-size:13px;white-space:pre-wrap;margin-top:2px">{{ c.notes }}</div>{% endif %}
+            {% if c.voice_note %}<audio controls src="{{ c.voice_note }}" style="height:32px;max-width:280px;margin-top:6px;display:block"></audio>{% endif %}
+          </div>
+          <div class="act-right">
+            <form method="POST" action="{{ url_for('crm_delete_activity', aid=c.id) }}" onsubmit="return confirm('Usunąć komentarz?')">
+              <button type="submit" class="btn btn-danger btn-sm">✕</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+        {% if not comments %}<div style="padding:10px 0;color:var(--muted);font-size:12px">Brak komentarzy</div>{% endif %}
+      </div>
+    </div>
+
+    <!-- Done activities -->
+    {% set done_acts = lead.activities | selectattr('done','equalto',true) | rejectattr('kind','equalto','note') | list %}
+    {% if done_acts %}
+    <div class="panel">
+      <div class="panel-header" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+        Zrobione ({{ done_acts|length }}) <i class="bi bi-chevron-down" style="float:right"></i>
+      </div>
+      <div style="display:none;padding:0 16px">
+        {% for a in done_acts %}
+        <div class="act-row act-done">
+          <div class="act-icon">{{ ki.get(a.kind,'•') }}</div>
+          <div class="act-body">
+            <div class="act-title">{{ kl.get(a.kind,a.kind) }}</div>
+            <div class="act-meta">{{ a.due_date.strftime('%d.%m.%Y') if a.due_date else '' }}{% if a.notes %} · {{ a.notes }}{% endif %}</div>
+            {% for cm in a.comments %}
+            {% set cmu = USERS_BY_ID.get(cm.author_id) %}
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">💬 {% if cmu %}{{ cmu.name }}{% endif %} {{ cm.created_at.strftime('%d.%m %H:%M') if cm.created_at else '' }}: {{ cm.text }}</div>
+            {% endfor %}
+          </div>
+          <div class="act-right">
+            <form method="POST" action="{{ url_for('crm_delete_activity', aid=a.id) }}" onsubmit="return confirm('Usuń?')">
+              <button type="submit" class="btn btn-danger btn-sm">✕</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if not lead.activities %}
+    <div class="panel"><div class="panel-body" style="color:var(--muted);text-align:center;padding:24px">Brak zadań. Dodaj pierwsze powyżej.</div></div>
+    {% endif %}
+
+    <!-- Stage history -->
+    {% if lead.stage_history or lead.stage in ('Wygrany', 'Zrealizowany', 'Stracony') %}
+    <div class="panel" id="historia">
+      <div class="panel-header"><i class="bi bi-clock-history"></i> Historia etapów</div>
+      {% if lead.stage in ('Wygrany', 'Zrealizowany', 'Stracony') %}
+      <form method="post" action="{{ url_for('crm_lead_closed_on', lead_id=lead.id) }}"
+            style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px">
+        <span style="color:var(--muted)">{{ 'Stracony' if lead.stage == 'Stracony' else 'Wygrany' }} dnia</span>
+        <input type="date" name="closed_on" value="{{ closed_on.strftime('%Y-%m-%d') if closed_on else '' }}"
+               max="{{ today.isoformat() }}" required style="width:auto;padding:4px 8px">
+        <button class="btn btn-secondary btn-sm">Zapisz</button>
+        <span style="color:var(--muted);flex-basis:100%;font-size:11px">Od tej daty zależy miesiąc w Statystykach — popraw, jeśli lead trafił do CRM później, niż był faktycznie zamknięty.</span>
+        {% if closed_msg == 'ok' %}<span style="color:var(--green);flex-basis:100%">✅ Zapisano — Statystyki liczą go teraz w {{ closed_on.strftime('%m.%Y') if closed_on else 'nowym miesiącu' }}.</span>
+        {% elif closed_msg %}<span style="color:var(--red);flex-basis:100%">⛔ {{ closed_msg }}</span>{% endif %}
+      </form>
+      {% endif %}
+      <div style="padding:4px 16px">
+        {% for h in lead.stage_history|reverse %}
+        {% set hu = USERS_BY_ID.get(h.changed_by) %}
+        <div class="hist-row">
+          <span class="hist-date">{{ h.changed_at.strftime('%d.%m.%Y') }}</span>
+          {% if h.from_stage %}
+            <span class="stage-badge" style="background:{{ stage_colors.get(h.from_stage,'#888') }}18;color:{{ stage_colors.get(h.from_stage,'#888') }}">{{ h.from_stage }}</span>
+            <span class="hist-arrow">→</span>
+            <span class="stage-badge" style="background:{{ stage_colors.get(h.to_stage,'#888') }}18;color:{{ stage_colors.get(h.to_stage,'#888') }}">{{ h.to_stage }}</span>
+          {% else %}
+            <span style="color:var(--muted)">Lead utworzony jako</span>
+            <span class="stage-badge" style="background:{{ stage_colors.get(h.to_stage,'#888') }}18;color:{{ stage_colors.get(h.to_stage,'#888') }}">{{ h.to_stage }}</span>
+          {% endif %}
+          {% if hu %}<span style="margin-left:auto;color:{{ hu.color }};font-size:11px">{{ hu.name }}</span>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-bg" id="editModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal">
+    <div class="modal-head">
+      Edytuj lead
+      <button class="modal-close" onclick="document.getElementById('editModal').classList.remove('open')">×</button>
+    </div>
+    <div class="modal-body">
+      <form method="POST" action="{{ url_for('crm_edit_lead', lead_id=lead.id) }}">
+        <div class="gap10">
+          <div><label>Firma *</label><input name="company" value="{{ lead.company }}" required></div>
+          <div class="grid2">
+            <div><label>Osoba</label><input name="contact_name" value="{{ lead.contact_name or '' }}"></div>
+            <div><label>Telefon</label><input name="contact_phone" value="{{ lead.contact_phone or '' }}"></div>
+          </div>
+          <div class="grid2">
+            <div><label>E-mail</label><input type="email" name="contact_email" value="{{ lead.contact_email or '' }}"></div>
+            <div><label>Drugi e-mail <span style="color:var(--muted);font-size:10px">(opcjonalnie)</span></label><input type="email" name="contact_email2" value="{{ lead.contact_email2 or '' }}"></div>
+          </div>
+          <div class="grid3">
+            <div>
+              <label>Robot</label>
+              <select name="robot_model">
+                <option value="">—</option>
+                {% for m in robot_models %}<option {% if lead.robot_model==m %}selected{% endif %}>{{ m }}</option>{% endfor %}
+                {% if lead.robot_model and lead.robot_model not in robot_models %}<option selected>{{ lead.robot_model }}</option>{% endif %}
+              </select>
+            </div>
+            <div><label>Dni wynajmu</label><input type="number" name="rental_days" value="{{ lead.rental_days or '' }}"></div>
+            <div>
+              <label>Wartość</label>
+              <div class="row" style="gap:6px">
+                <input type="number" name="value_pln" value="{{ lead.value_pln|int if lead.value_pln else '' }}" style="flex:1">
+                <select name="currency" style="width:72px">
+                  {% for c in currencies %}<option {% if (lead.currency or 'EUR')==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="grid2">
+            <div>
+              <label>Etap</label>
+              <select name="stage">{% for s in stages %}<option {% if lead.stage==s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+            </div>
+            <div>
+              <label>Przypisz do</label>
+              <select name="assigned_to">{% for u in users %}<option value="{{ u.id }}" {% if u.id==lead.assigned_to %}selected{% endif %}>{{ u.name }}</option>{% endfor %}</select>
+            </div>
+          </div>
+          <div>
+            <label>Ocena leada</label>
+            <div class="qual-toggle" id="e-qualBtns">
+              {% for q in quality_levels %}
+              {% set is_sel = (lead.quality or 'Średni') == q %}
+              <div class="qual-btn {{ 'sel' if is_sel else '' }}" data-quality="{{ q }}" data-color="{{ quality_colors[q] }}"
+                   style="{% if is_sel %}border-color:{{ quality_colors[q] }};background:{{ quality_colors[q] }}{% endif %}"
+                   onclick="pickQuality(this,'e-quality')">{{ quality_icons[q] }} {{ q }}</div>
+              {% endfor %}
+            </div>
+            <input type="hidden" name="quality" id="e-quality" value="{{ lead.quality or 'Średni' }}">
+          </div>
+          <div class="grid2">
+            <div><label>Źródło</label><input name="source" value="{{ lead.source or '' }}"></div>
+            <div><label>Lokalizacja</label><input name="location" value="{{ lead.location or '' }}" placeholder="np. Warszawa, EXPO XXI"></div>
+          </div>
+          <div>
+            <label>Dni wynajmu <span style="color:var(--purple);font-size:10px">→ kalendarz (niekoniecznie po kolei, np. tylko 1 i 10; można różne miasta na różne dni)</span></label>
+            <div class="evt-chips" id="e-evt-chips" data-prefix="e"></div>
+            <div id="e-evt-initial" hidden>{% for ed in lead.event_days %}<span data-date="{{ ed.event_date.isoformat() }}" data-location="{{ ed.location or '' }}"></span>{% endfor %}</div>
+            <div class="row" style="gap:6px;margin-top:6px">
+              <input type="date" id="e-evt-add" min="{{ event_date_min }}" max="{{ event_date_max }}" style="flex:1" title="Dzień (albo początek zakresu)" onkeydown="evtDaysKeydown(event,'e')">
+              <input type="date" id="e-evt-add-end" min="{{ event_date_min }}" max="{{ event_date_max }}" style="flex:1" title="Koniec zakresu (opcjonalnie)" onkeydown="evtDaysKeydown(event,'e')">
+            </div>
+            <div class="row" style="gap:6px;margin-top:6px">
+              <input type="text" id="e-evt-add-location" placeholder="Lokalizacja tego dnia (opcjonalnie, np. inne miasto)" style="flex:1" onkeydown="evtDaysKeydown(event,'e')">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="evtDaysAddRange('e')">+ Dodaj</button>
+            </div>
+            <input type="hidden" name="event_dates" id="e-evt-dates">
+            <input type="hidden" name="event_locations" id="e-evt-locations">
+          </div>
+          <div><label>Notatki</label><textarea name="notes" rows="3">{{ lead.notes or '' }}</textarea></div>
+          <div class="row mt8">
+            <button type="submit" class="btn btn-primary flex1">Zapisz</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('editModal').classList.remove('open')">Anuluj</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% if jv %}{{ jr.modal() }}{{ jr.invoice_modal() }}{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function markDone(id) {
+  fetch(`/crm/api/activity/${id}/done`, {method:'POST'}).then(() => location.reload());
+}
+function noAnswer(id) {
+  fetch(`/crm/api/activity/${id}/no_answer`, {method:'POST'}).then(() => location.reload());
+}
+function toggleContract(id) {
+  fetch(`/crm/leads/${id}/contract/toggle`, {method:'POST', headers:{'Content-Type':'application/json'}}).then(() => location.reload());
+}
+function postpone(id, days) {
+  fetch(`/crm/api/activity/${id}/postpone`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({days})
+  }).then(() => location.reload());
+}
+function assignActivity(id, sel) {
+  fetch(`/crm/api/activity/${id}/assign`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({user_id: parseInt(sel.value, 10)})
+  }).then(r => {
+    if (r.ok) location.reload();
+    else alert('Nie udało się zmienić przypisania.');
+  });
+}
+
+// Wiadomości głosowe w komentarzach
+let voiceRecorder = null, voiceChunks = [], voiceTimer = null, voiceSeconds = 0;
+const VOICE_MAX_SECONDS = 180;
+
+async function toggleVoiceComment() {
+  if (voiceRecorder && voiceRecorder.state === 'recording') {
+    voiceRecorder.stop();
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    alert('Nie udało się uzyskać dostępu do mikrofonu. Sprawdź uprawnienia przeglądarki.');
+    return;
+  }
+  const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+  voiceRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  voiceChunks = [];
+  voiceSeconds = 0;
+  voiceRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
+  voiceRecorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    clearInterval(voiceTimer);
+    const btn = document.getElementById('c-mic-btn');
+    btn.classList.remove('btn-danger');
+    btn.classList.add('btn-secondary');
+    btn.innerHTML = '<i class="bi bi-mic-fill"></i>';
+    if (!voiceChunks.length) return;
+    const blob = new Blob(voiceChunks, { type: voiceRecorder.mimeType || 'audio/webm' });
+    const reader = new FileReader();
+    reader.onload = () => {
+      document.getElementById('c-voice-note').value = reader.result;
+      const audio = document.getElementById('c-voice-audio');
+      audio.src = reader.result;
+      document.getElementById('c-voice-preview').style.display = 'flex';
+    };
+    reader.readAsDataURL(blob);
+  };
+  voiceRecorder.start();
+  const btn = document.getElementById('c-mic-btn');
+  btn.classList.remove('btn-secondary');
+  btn.classList.add('btn-danger');
+  btn.innerHTML = '⏹ 0:00';
+  voiceTimer = setInterval(() => {
+    voiceSeconds++;
+    const m = Math.floor(voiceSeconds / 60), s = String(voiceSeconds % 60).padStart(2, '0');
+    btn.innerHTML = `⏹ ${m}:${s}`;
+    if (voiceSeconds >= VOICE_MAX_SECONDS) voiceRecorder.stop();
+  }, 1000);
+}
+function discardVoiceComment() {
+  document.getElementById('c-voice-note').value = '';
+  document.getElementById('c-voice-audio').src = '';
+  document.getElementById('c-voice-preview').style.display = 'none';
+}
+document.getElementById('commentForm').addEventListener('submit', e => {
+  const text = document.getElementById('c-text').value.trim();
+  const voice = document.getElementById('c-voice-note').value;
+  if (!text && !voice) {
+    e.preventDefault();
+    alert('Napisz komentarz albo nagraj wiadomość głosową.');
+  }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,18 @@
+databases:
+  - name: roborent-db
+    plan: free
+
+services:
+  - type: web
+    name: roborent-crm
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn crm:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: roborent-db
+          property: connectionString

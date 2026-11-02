@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}33bots LT CRM{% endblock %}</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --sidebar: 200px;
+  --bg: #111318;
+  --panel: #1c1e26;
+  --panel2: #23262f;
+  --border: #2a2d38;
+  --text: #dde1f0;
+  --muted: #6b7080;
+  --accent: #5b5ef4;
+  --green: #22c55e;
+  --yellow: #eab308;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --purple: #7c3aed;
+  --radius: 8px;
+}
+
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; background: var(--bg); color: var(--text); display: flex; min-height: 100vh; line-height: 1.5; }
+a { color: inherit; text-decoration: none; }
+input, select, textarea, button { font-family: inherit; font-size: 13px; }
+
+/* SIDEBAR */
+.sidebar { width: var(--sidebar); background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; inset: 0 auto 0 0; z-index: 100; }
+.logo { padding: 16px 14px; font-weight: 700; font-size: 14px; color: var(--text); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.logo-icon { font-size: 18px; }
+nav { padding: 8px 0; flex: 1; overflow-y: auto; }
+.nav-dash { display: flex; align-items: center; gap: 10px; margin: 4px 8px 8px; padding: 11px 12px; border-radius: var(--radius);
+            font-size: 15px; font-weight: 700; color: var(--text); background: var(--panel2); border: 1px solid var(--border); }
+.nav-dash i { font-size: 17px; }
+.nav-dash:hover, .nav-dash.active { border-color: var(--accent); background: #5b5ef41f; }
+.nav-group summary { list-style: none; display: flex; align-items: center; gap: 6px; padding: 9px 14px 5px; cursor: pointer; user-select: none;
+                     font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .7px; }
+.nav-group summary::-webkit-details-marker { display: none; }
+.nav-group summary:hover { color: var(--text); }
+.nav-chev { font-size: 10px; transition: transform .15s; }
+.nav-group[open] .nav-chev { transform: rotate(90deg); }
+.nav-group[open] .nav-group-count { display: none; }
+.nav-group .nav-group-count { margin-left: auto; background: var(--yellow); color: #111; text-transform: none; letter-spacing: 0; }
+.nav-group .nav-link { padding-left: 22px; }
+.nav-link { display: flex; align-items: center; gap: 9px; padding: 8px 14px; color: var(--muted); border-radius: 0; transition: color .1s, background .1s; font-size: 13px; }
+.nav-link:hover { color: var(--text); background: var(--panel2); }
+.nav-link.active { color: var(--text); background: var(--panel2); border-right: 2px solid var(--accent); }
+.nav-link i { font-size: 14px; width: 16px; }
+
+.users-section { padding: 10px 14px 14px; border-top: 1px solid var(--border); }
+.users-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+.user-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: var(--radius); cursor: pointer; }
+.user-row:hover { background: var(--panel2); }
+.user-row.me { background: var(--panel2); }
+.av { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.user-name { font-size: 12px; flex: 1; }
+
+/* MAIN */
+.main { margin-left: var(--sidebar); flex: 1; display: flex; flex-direction: column; }
+.topbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 50; }
+.topbar-title { font-size: 15px; font-weight: 600; flex: 1; }
+.content { padding: 20px; }
+
+/* PANELS */
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+.panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; display: flex; align-items: center; gap: 6px; }
+.panel-body { padding: 12px 16px; }
+
+/* INPUTS */
+input[type=text], input[type=email], input[type=tel], input[type=number], input[type=date], input[type=datetime-local], select, textarea {
+  background: var(--panel2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 7px 10px; width: 100%; outline: none; transition: border-color .15s;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+input::placeholder { color: var(--muted); }
+select option { background: var(--panel2); }
+label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px; }
+
+/* BUTTONS */
+.btn { border: none; border-radius: var(--radius); padding: 7px 14px; font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity .15s; display: inline-flex; align-items: center; gap: 5px; }
+.btn:hover { opacity: .85; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { border-color: var(--accent); opacity: 1; }
+.btn-danger { background: transparent; color: var(--red); border: 1px solid transparent; }
+.btn-danger:hover { border-color: var(--red); opacity: 1; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* URGENCY COLORS */
+.u-overdue { color: var(--red); }
+.u-today { color: var(--yellow); }
+.u-soon { color: var(--accent); }
+.u-future { color: var(--muted); }
+.u-done { color: var(--muted); opacity: .5; }
+
+/* ACTIVITY ROW */
+.act-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.act-row:last-child { border-bottom: none; }
+.act-icon { width: 28px; height: 28px; border-radius: 6px; background: var(--panel2); display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+.act-body { flex: 1; min-width: 0; }
+.act-title { font-weight: 500; font-size: 13px; }
+.act-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.act-right { text-align: right; flex-shrink: 0; font-size: 11px; }
+.act-done { opacity: .4; }
+.act-done .act-title { text-decoration: line-through; }
+/* zmiana przypisanej osoby wprost w wierszu zadania — wygląda jak kolorowa nazwa, nie jak pole formularza */
+.act-assign { background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 0 2px; font-size: 11px; font-weight: 600; width: auto; cursor: pointer; }
+.act-assign:hover, .act-assign:focus { border-color: var(--border); background: var(--panel2); }
+
+/* STAGE BADGE */
+.stage-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+
+/* STATS */
+.stats-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.stat-val { font-size: 22px; font-weight: 700; margin-bottom: 2px; }
+.stat-label { font-size: 11px; color: var(--muted); }
+
+/* KANBAN */
+.kanban { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 12px; align-items: flex-start; }
+.k-col { flex-shrink: 0; width: 220px; }
+.k-head { padding: 8px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; display: flex; align-items: center; gap: 6px; border-radius: var(--radius) var(--radius) 0 0; }
+.k-count { background: rgba(255,255,255,.1); border-radius: 10px; padding: 1px 7px; font-size: 10px; }
+.k-body { background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); min-height: 60px; padding: 6px; }
+.k-card { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 6px; cursor: pointer; transition: border-color .12s; }
+.k-card:hover { border-color: var(--accent); }
+.k-card:last-child { margin-bottom: 0; }
+.k-company { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.k-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.k-val { font-size: 12px; color: var(--green); font-weight: 600; margin-top: 4px; }
+.k-next { font-size: 11px; margin-top: 6px; padding: 3px 7px; border-radius: 4px; display: inline-block; }
+
+/* KANBAN COLUMN SUM */
+.k-sum { margin-left: auto; font-size: 10px; font-weight: 600; opacity: .85; }
+.av-xs { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; flex-shrink: 0; }
+
+/* POSTPONE / GHOST BUTTON */
+.btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+.btn-ghost:hover { color: var(--text); border-color: var(--accent); opacity: 1; }
+
+/* HISTORY TIMELINE */
+.hist-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.hist-row:last-child { border-bottom: none; }
+.hist-date { color: var(--muted); font-size: 11px; width: 72px; flex-shrink: 0; }
+.hist-arrow { color: var(--muted); }
+
+/* INACTIVITY DOT */
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.dot-green { background: var(--green); }
+.dot-yellow { background: var(--yellow); }
+.dot-red { background: var(--red); }
+
+/* TABLE */
+table { width: 100%; border-collapse: collapse; }
+th { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; font-weight: 500; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:hover td { background: var(--panel2); }
+
+/* MODAL */
+.modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 200; align-items: flex-start; justify-content: center; padding-top: 60px; }
+.modal-bg.open { display: flex; }
+.modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; width: 500px; max-width: 95vw; max-height: 85vh; overflow-y: auto; }
+.modal-head { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+.modal-body { padding: 16px 20px 20px; }
+.modal-close { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; line-height: 1; }
+.modal-close:hover { color: var(--text); }
+
+/* GRID HELPERS */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.gap10 { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.flex1 { flex: 1; }
+.mt8 { margin-top: 8px; }
+.mt14 { margin-top: 14px; }
+
+/* FAB */
+.fab { position: fixed; bottom: 24px; right: 24px; z-index: 300; width: 46px; height: 46px; border-radius: 50%; background: var(--accent); color: #fff; border: none; font-size: 22px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 12px rgba(91,94,244,.4); transition: transform .12s; }
+.fab:hover { transform: scale(1.08); }
+.fab-task { bottom: 80px; background: var(--purple); font-size: 19px; box-shadow: 0 2px 12px rgba(124,58,237,.4); }
+.fab-ai { bottom: 136px; background: var(--blue); font-size: 18px; box-shadow: 0 2px 12px rgba(59,130,246,.4); }
+
+/* ASYSTENT AI — panel czatu */
+.ai-panel { display: none; position: fixed; right: 24px; bottom: 24px; width: 360px; max-width: calc(100vw - 48px); height: 520px; max-height: calc(100vh - 48px); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; z-index: 400; flex-direction: column; box-shadow: 0 8px 40px rgba(0,0,0,.5); }
+.ai-panel.open { display: flex; }
+.ai-head { padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.ai-head .modal-close { margin-left: auto; }
+.ai-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.ai-msg { max-width: 88%; padding: 8px 11px; border-radius: 10px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.ai-msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
+.ai-msg.assistant { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+.ai-msg.actions { align-self: stretch; background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.3); color: var(--green); font-size: 11.5px; }
+.ai-msg.thinking { align-self: flex-start; color: var(--muted); background: transparent; font-style: italic; }
+.ai-form { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--border); }
+.ai-form input { flex: 1; }
+
+/* WYBÓR DNI WYNAJMU (chipy — mogą być niekolejne, np. tylko 1 i 10 dnia) */
+.evt-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; }
+.evt-day-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--purple); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 6px 3px 9px; border-radius: 12px; white-space: nowrap; }
+.evt-day-chip i { cursor: pointer; opacity: .75; font-size: 12px; }
+.evt-day-chip i:hover { opacity: 1; }
+.evt-chips-empty { color: var(--muted); font-size: 11px; }
+.kbd { background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: monospace; color: var(--muted); }
+
+/* KIND TOGGLE */
+.kind-toggle { display: flex; gap: 4px; }
+.kind-btn { flex: 1; padding: 6px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2); color: var(--muted); font-size: 12px; cursor: pointer; text-align: center; transition: all .1s; }
+.kind-btn.sel { border-color: var(--accent); background: rgba(91,94,244,.15); color: var(--text); }
+
+/* QUALITY TOGGLE (ocena leada) */
+.qual-toggle { display: flex; gap: 4px; }
+.qual-btn { flex: 1; padding: 6px 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2); color: var(--muted); font-size: 12px; cursor: pointer; text-align: center; transition: all .1s; }
+.qual-btn.sel { color: #fff; font-weight: 600; }
+.qual-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+
+/* COPY BUTTON */
+.copy-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 5px; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; cursor: pointer; flex-shrink: 0; transition: all .15s; }
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.copy-btn.copied { color: var(--green); border-color: var(--green); }
+
+/* DIVIDER */
+.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="logo">
+    <span class="logo-icon">🤖</span> 33bots LT
+  </div>
+  {% set ep = request.endpoint %}
+  {% set view = request.args.get('view', 'kanban') %}
+  {# grupy menu: (id, nazwa, [(adres, aktywna, ikona, etykieta, licznik, kolor licznika, opis licznika)]) #}
+  {% set nav_groups = [
+    ('sales', 'Sales', [
+      (url_for('crm_leads') ~ '?view=kanban', ep in ['crm_leads', 'crm_lead_detail'] and view == 'kanban', 'kanban', 'Kanban', 0, '', ''),
+      (url_for('crm_leads') ~ '?view=list', ep == 'crm_leads' and view == 'list', 'list-ul', 'Lista leadów', 0, '', ''),
+      (url_for('crm_offers'), ep in ['crm_offers', 'crm_offer_review'], 'file-earmark-pdf', 'Oferty', offer_drafts_count or 0, 'var(--yellow)', 'Oferty czekające na sprawdzenie i wysyłkę'),
+      (url_for('crm_calculator'), ep == 'crm_calculator', 'calculator', 'Kalkulator', 0, '', ''),
+      (url_for('crm_duplicates'), ep == 'crm_duplicates', 'files', 'Duplikaty', 0, '', ''),
+    ]),
+    ('ops', 'Ops', [
+      (url_for('crm_journey'), (ep or '').startswith('crm_journey'), 'signpost-2', 'Customer Journey', journey_badge or 0, 'var(--red)', 'Klienci, przy których trzeba teraz coś zrobić: umowa, przypomnienie, nowy dokument'),
+      (url_for('crm_calendar'), ep == 'crm_calendar', 'calendar3', 'Kalendarz', 0, '', ''),
+      (url_for('crm_logistics'), ep in ['crm_logistics', 'crm_operator_jobs'], 'truck', 'Logistyka', 0, '', ''),
+    ]),
+    ('marketing', 'Marketing', [
+      (url_for('crm_inbox'), ep == 'crm_inbox', 'inbox', 'Skrzynka', 0, '', ''),
+      (url_for('crm_clickup_inbox'), ep == 'crm_clickup_inbox', 'cloud-download', 'Z ClickUp', clickup_pending_count or 0, 'var(--accent)', 'Leady z ClickUp do zatwierdzenia'),
+      (url_for('crm_campaigns'), ep in ['crm_campaigns', 'crm_campaign', 'crm_campaign_new'], 'megaphone', 'Blitzkrieg', campaigns_running or 0, 'var(--green)', 'Trwające kampanie'),
+      (url_for('crm_pl_move'), ep == 'crm_pl_move', 'box-arrow-in-down', 'Z polskiego CRM', 0, '', ''),
+    ]),
+    ('raporty', 'Raporty', [
+      (url_for('crm_stats'), ep == 'crm_stats', 'graph-up', 'Statystyki', 0, '', ''),
+    ]),
+  ] %}
+  <nav>
+    <a href="{{ url_for('crm_dashboard') }}" class="nav-dash {% if ep == 'crm_dashboard' %}active{% endif %}">
+      <i class="bi bi-house"></i> Dashboard
+    </a>
+    {% for gid, gname, items in nav_groups %}
+    {% set group_active = items|selectattr(1)|list|length > 0 %}
+    {% set group_count = items|sum(attribute=4) %}
+    <details class="nav-group" data-group="{{ gid }}" {{ 'open' if group_active }} {{ 'data-active' if group_active }}>
+      <summary><i class="bi bi-chevron-right nav-chev"></i> {{ gname }}
+        {% if group_count %}<span class="k-count nav-group-count" title="Coś czeka w tej grupie">{{ group_count }}</span>{% endif %}
+      </summary>
+      {% for href, active, icon, label, count, color, hint in items %}
+      <a href="{{ href }}" class="nav-link {{ 'active' if active }}">
+        <i class="bi bi-{{ icon }}"></i> {{ label }}
+        {% if count %}<span class="k-count" style="margin-left:auto;background:{{ color }};color:{{ '#fff' if color == 'var(--accent)' else '#111' }}" title="{{ hint }}">{{ count }}</span>{% endif %}
+      </a>
+      {% endfor %}
+    </details>
+    {% endfor %}
+  </nav>
+  <script>
+  // zwinięte/rozwinięte grupy menu zapamiętane w tej przeglądarce; grupa otwartej strony zawsze rozwinięta
+  (function () {
+    document.querySelectorAll('details.nav-group').forEach(function (d) {
+      var key = 'crm-nav-' + d.dataset.group;
+      try {
+        var saved = localStorage.getItem(key);
+        if (!d.hasAttribute('data-active') && saved !== null) d.open = saved === '1';
+      } catch (e) {}
+      d.addEventListener('toggle', function () {
+        try { localStorage.setItem(key, d.open ? '1' : '0'); } catch (e) {}
+      });
+    });
+  })();
+  </script>
+  <div class="users-section">
+    {% if not crm_locked %}
+    <span style="display:block;font-size:11px;color:var(--yellow);margin-bottom:8px" title="Każdy, kto zna adres, może wejść do CRM — ustaw zmienną CRM_PASSWORD w Railway (web → Variables)">🔓 CRM bez hasła — ustaw CRM_PASSWORD</span>
+    {% endif %}
+    <div class="lang-switch" style="display:flex;gap:6px;margin-bottom:10px;font-size:12px">
+      {% for code, name in ui_langs.items() %}
+      <a href="{{ url_for('set_ui_lang', code=code, next=request.full_path.rstrip('?')) }}" class="lang-btn{% if ui_lang == code %} on{% endif %}"
+         style="flex:1;text-align:center;padding:4px 0;border-radius:6px;border:1px solid var(--border);text-decoration:none;{% if ui_lang == code %}background:var(--accent);color:#fff;border-color:var(--accent){% else %}color:var(--muted){% endif %}">{{ '🇵🇱 PL' if code == 'pl' else '🇱🇹 LT' }}</a>
+      {% endfor %}
+    </div>
+    <div class="users-label" style="display:flex;gap:8px">Konto
+      <a href="{{ url_for('crm_profile') }}" style="margin-left:auto;text-transform:none;letter-spacing:0" title="Twoje imię i nazwisko, firmowy e-mail i telefon (do ofert)">profil</a>
+      {% if crm_locked %}<a href="{{ url_for('crm_logout') }}" style="text-transform:none;letter-spacing:0" title="Wyloguj">wyloguj</a>{% endif %}
+    </div>
+    {% for u in users %}
+    <a href="{{ url_for('set_user', uid=u.id) }}" class="user-row {% if user.id == u.id %}me{% endif %}">
+      <div class="av" style="background:{{ u.color }}22; color:{{ u.color }}">{{ u.avatar }}</div>
+      <span class="user-name">{{ u.name }}</span>
+      {% if user.id == u.id %}<i class="bi bi-check" style="color:{{ u.color }}; font-size:14px"></i>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+</aside>
+
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+    {% block topbar_actions %}{% endblock %}
+  </div>
+  <div class="content">
+    {% block content %}{% endblock %}
+  </div>
+</div>
+
+<!-- FAB -->
+<button class="fab" onclick="openQuick()" title="Nowy lead (N)">+</button>
+<button class="fab fab-task" onclick="openTask()" title="Zleć zadanie"><i class="bi bi-clipboard-plus"></i></button>
+<button class="fab fab-ai" onclick="openAiChat()" title="Asystent AI">✨</button>
+
+<!-- ASYSTENT AI -->
+<div class="ai-panel" id="aiPanel">
+  <div class="ai-head">🤖 Asystent CRM
+    <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:10px" onclick="aiClear()" title="Wyczyść rozmowę">Wyczyść</button>
+    <button class="modal-close" style="margin-left:4px" onclick="closeAiChat()">×</button>
+  </div>
+  <div class="ai-msgs" id="aiMsgs"></div>
+  <form class="ai-form" onsubmit="return aiSend(event)">
+    <input id="aiInput" placeholder="np. dodaj leada Madagaskar na 11 września..." autocomplete="off">
+    <button type="submit" class="btn btn-primary btn-sm" id="aiSendBtn">➤</button>
+  </form>
+</div>
+
+<!-- QUICK ADD -->
+<div class="modal-bg" id="quickModal" onclick="if(event.target===this)closeQuick()">
+  <div class="modal" style="width:480px">
+    <div class="modal-head">
+      Nowy lead
+      <button class="modal-close" onclick="closeQuick()">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="quickForm" method="POST" action="{{ url_for('crm_add_lead') }}">
+        <div class="gap10">
+          <div>
+            <label>📋 Wklej zgłoszenie (np. z Formspree) — pola uzupełnią się same</label>
+            <textarea id="q-paste" rows="2" placeholder="name... company... email... phone... date... location... message..." oninput="parseLeadPaste(this.value)"></textarea>
+            <div id="q-paste-info" style="display:none;font-size:11px;color:var(--green);margin-top:4px"></div>
+          </div>
+          <div>
+            <label>Firma / klient *</label>
+            <input id="q-company" name="company" placeholder="Nazwa firmy" required>
+          </div>
+          <div class="grid2">
+            <div>
+              <label>Osoba kontaktowa</label>
+              <input name="contact_name" placeholder="Imię Nazwisko">
+            </div>
+            <div>
+              <label>Telefon</label>
+              <input name="contact_phone" placeholder="+48 600...">
+            </div>
+          </div>
+          <div class="grid2">
+            <div>
+              <label>E-mail</label>
+              <input type="email" name="contact_email" placeholder="kontakt@firma.pl">
+            </div>
+            <div>
+              <label>Drugi e-mail <span style="color:var(--muted);font-size:10px">(opcjonalnie)</span></label>
+              <input type="email" name="contact_email2" placeholder="np. asystent@firma.pl">
+            </div>
+          </div>
+          <div class="grid2">
+            <div>
+              <label>Robot</label>
+              <select name="robot_model">
+                <option value="">— wybierz —</option>
+                {% for m in robot_models %}<option>{{ m }}</option>{% endfor %}
+              </select>
+            </div>
+            <div>
+              <label>Wartość</label>
+              <div class="row" style="gap:6px">
+                <input type="number" name="value_pln" placeholder="15000" style="flex:1">
+                <select name="currency" style="width:74px">
+                  {% for c in currencies %}<option>{{ c }}</option>{% endfor %}
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="grid2">
+            <div>
+              <label>Przypisz do</label>
+              <select name="assigned_to">
+                {% for u in users %}<option value="{{ u.id }}" {% if u.id == user.id %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+              </select>
+            </div>
+            <div>
+              <label>Etap</label>
+              <select name="stage">
+                {% for s in stages %}<option>{{ s }}</option>{% endfor %}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label>Ocena leada</label>
+            <div class="qual-toggle" id="q-qualBtns">
+              {% for q in quality_levels %}
+              <div class="qual-btn {{ 'sel' if q=='Średni' else '' }}" data-quality="{{ q }}" data-color="{{ quality_colors[q] }}"
+                   style="{% if q=='Średni' %}border-color:{{ quality_colors[q] }};background:{{ quality_colors[q] }}{% endif %}"
+                   onclick="pickQuality(this,'q-quality')">{{ quality_icons[q] }} {{ q }}</div>
+              {% endfor %}
+            </div>
+            <input type="hidden" name="quality" id="q-quality" value="Średni">
+          </div>
+          <hr class="divider">
+          <div>
+            <label>Pierwsze zadanie</label>
+            <div class="kind-toggle" id="kindBtns">
+              <div class="kind-btn sel" data-kind="call" onclick="pickKind(this)">📞 Zadzwoń</div>
+              <div class="kind-btn" data-kind="email" onclick="pickKind(this)">✉️ Wyślij mail</div>
+              <div class="kind-btn" data-kind="online" onclick="pickKind(this)">💻 Prezentacja</div>
+              <div class="kind-btn" data-kind="meeting" onclick="pickKind(this)">🤝 Spotkaj</div>
+              <div class="kind-btn" data-kind="" onclick="pickKind(this)">— Brak</div>
+            </div>
+            <input type="hidden" name="first_activity_kind" id="q-kind" value="call">
+          </div>
+          <div class="grid2">
+            <div>
+              <label>Data zadania</label>
+              <input type="date" name="first_activity_due" id="q-due">
+            </div>
+            <div>
+              <label>Źródło</label>
+              <input name="source" placeholder="np. LinkedIn">
+            </div>
+          </div>
+          <div>
+            <label>Lokalizacja</label>
+            <input name="location" placeholder="np. Warszawa">
+          </div>
+          <div>
+            <label>Dni wynajmu <span style="color:var(--purple);font-size:10px">→ kalendarz (niekoniecznie po kolei, np. tylko 1 i 10)</span></label>
+            <div class="evt-chips" id="q-evt-chips" data-prefix="q"></div>
+            <div class="row" style="gap:6px;margin-top:6px">
+              <input type="date" id="q-evt-add" min="{{ event_date_min }}" max="{{ event_date_max }}" style="flex:1" title="Dzień (albo początek zakresu)" onkeydown="evtDaysKeydown(event,'q')">
+              <input type="date" id="q-evt-add-end" min="{{ event_date_min }}" max="{{ event_date_max }}" style="flex:1" title="Koniec zakresu (opcjonalnie)" onkeydown="evtDaysKeydown(event,'q')">
+            </div>
+            <div class="row" style="gap:6px;margin-top:6px">
+              <input type="text" id="q-evt-add-location" placeholder="Lokalizacja tego dnia (opcjonalnie, np. inne miasto)" style="flex:1" onkeydown="evtDaysKeydown(event,'q')">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="evtDaysAddRange('q')">+ Dodaj</button>
+            </div>
+            <input type="hidden" name="event_dates" id="q-evt-dates">
+            <input type="hidden" name="event_locations" id="q-evt-locations">
+          </div>
+          <div>
+            <label>Komentarz / notatka</label>
+            <textarea name="notes" rows="2" placeholder="np. czego potrzebuje klient, ustalenia z rozmowy..."></textarea>
+          </div>
+          <div class="row mt8">
+            <button type="submit" class="btn btn-primary flex1">Dodaj lead</button>
+            <button type="button" class="btn btn-secondary" onclick="closeQuick()">Anuluj</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ZLEĆ ZADANIE -->
+<div class="modal-bg" id="taskModal" onclick="if(event.target===this)closeTask()">
+  <div class="modal" style="width:440px">
+    <div class="modal-head">
+      Zleć zadanie
+      <button class="modal-close" onclick="closeTask()">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="taskForm" method="POST" action="{{ url_for('crm_quick_add_task') }}">
+        <div class="gap10">
+          <div>
+            <label>Lead <span style="color:var(--muted);font-size:10px">(opcjonalnie — bez leada = zadanie własne)</span></label>
+            <select name="lead_id" id="t-lead">
+              <option value="">🔧 Zadanie własne (niezwiązane z firmą)</option>
+              {% for lid, company in quick_task_leads %}<option value="{{ lid }}">{{ company }}</option>{% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>Przypisz do</label>
+            <select name="assigned_to" id="t-assigned">
+              {% for u in users %}<option value="{{ u.id }}" {% if u.id == 3 %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>Typ zadania</label>
+            <div class="kind-toggle" id="taskKindBtns">
+              {% for k in activity_kinds if k != 'note' %}
+              <div class="kind-btn {{ 'sel' if k=='call' else '' }}" data-kind="{{ k }}" onclick="pickTaskKind(this)">{{ kind_icons[k] }}</div>
+              {% endfor %}
+            </div>
+            <input type="hidden" name="kind" id="t-kind" value="call">
+          </div>
+          <div>
+            <label>Termin</label>
+            <input type="date" name="due_date" id="t-due">
+          </div>
+          <div>
+            <label>Notatka</label>
+            <input name="notes" placeholder="np. co dokładnie zrobić">
+          </div>
+          <div class="row mt8">
+            <button type="submit" class="btn btn-primary flex1">Zleć zadanie</button>
+            <button type="button" class="btn btn-secondary" onclick="closeTask()">Anuluj</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="fuModal" onclick="if(event.target===this)closeFollowup()">
+  <div class="modal" style="width:580px">
+    <div class="modal-head">
+      <span>📨 Follow-up — <span id="fu-company"></span></span>
+      <button class="modal-close" onclick="closeFollowup()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="gap10">
+        <div class="row" style="gap:8px">
+          <div class="flex1"><label>Do</label><input type="email" multiple id="fu-to"></div>
+          <div class="flex1"><label>Od</label><select id="fu-sender" onchange="loadFollowup(true)"></select></div>
+          <div><label>Język</label><select id="fu-lang" onchange="loadFollowup(true)"></select></div>
+        </div>
+        <div><label>Temat</label><input type="text" id="fu-subject" maxlength="300"></div>
+        <div><label>Treść</label><textarea id="fu-body" rows="12" style="line-height:1.5;resize:vertical"></textarea></div>
+        <div id="fu-msg" style="font-size:12px;color:var(--muted)"></div>
+        <div class="row mt8">
+          <button type="button" class="btn btn-primary flex1" id="fu-send" onclick="sendFollowup()">📨 Wyślij teraz</button>
+          <button type="button" class="btn btn-secondary" onclick="closeFollowup()">Anuluj</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% block scripts %}{% endblock %}
+<script>
+// Wybór adresatów: lead z dwoma adresami — pod polem „Do” oba do zaznaczenia (domyślnie oba).
+// Odznaczenie usuwa adres z pola; ręcznie dopisane adresy zostają.
+function recipientPicker(input, emails) {
+  const id = input.id + '-pick';
+  const old = document.getElementById(id);
+  if (old) old.remove();
+  emails = (emails || []).filter(Boolean);
+  if (emails.length < 2) return;
+  const box = document.createElement('div');
+  box.id = id;
+  box.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:5px;font-size:12px';
+  const lower = emails.map(e => e.toLowerCase());
+  const sync = () => {
+    const extra = input.value.split(/[,;]/).map(x => x.trim()).filter(x => x && !lower.includes(x.toLowerCase()));
+    const picked = [...box.querySelectorAll('input')].filter(c => c.checked).map(c => c.value);
+    input.value = picked.concat(extra).join(', ');
+  };
+  emails.forEach(e => {
+    const lab = document.createElement('label');
+    lab.style.cssText = 'display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;margin:0;color:var(--text)';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = e; cb.style.width = 'auto';
+    cb.checked = input.value.toLowerCase().split(/[,;]/).map(x => x.trim()).includes(e.toLowerCase());
+    cb.addEventListener('change', sync);
+    lab.append(cb, document.createTextNode(e));
+    box.appendChild(lab);
+  });
+  input.insertAdjacentElement('afterend', box);
+}
+
+// Follow-up mailem z zadania „✉️ mail”: szkic do sprawdzenia → Wyślij (ze skrzynki nadawcy)
+let FU_ID = null;
+function fuMsg(text, bad) {
+  const el = document.getElementById('fu-msg');
+  el.textContent = text;
+  el.style.color = bad ? 'var(--red)' : 'var(--muted)';
+}
+function openFollowup(aid) {
+  FU_ID = aid;
+  ['fu-to', 'fu-subject', 'fu-body'].forEach(id => { document.getElementById(id).value = ''; });
+  document.getElementById('fu-sender').innerHTML = '';
+  document.getElementById('fu-lang').innerHTML = '';
+  document.getElementById('fu-company').textContent = '';
+  document.getElementById('fu-send').disabled = true;
+  fuMsg('Przygotowuję treść…');
+  document.getElementById('fuModal').classList.add('open');
+  loadFollowup(false);
+}
+function closeFollowup() { document.getElementById('fuModal').classList.remove('open'); }
+async function loadFollowup(keepSender) {
+  const sel = document.getElementById('fu-sender');
+  const langSel = document.getElementById('fu-lang');
+  const params = new URLSearchParams();
+  if (keepSender && sel.value) params.set('sender', sel.value);
+  if (keepSender && langSel.value) params.set('lang', langSel.value);
+  const q = params.toString() ? '?' + params : '';
+  try {
+    const d = await (await fetch(`/crm/api/activity/${FU_ID}/followup${q}`)).json();
+    if (d.error) { fuMsg('⚠️ ' + d.error, true); return; }
+    document.getElementById('fu-company').textContent = d.company;
+    const fuTo = document.getElementById('fu-to');
+    if (!keepSender || !fuTo.value) fuTo.value = d.to;
+    recipientPicker(fuTo, d.recipients);
+    sel.innerHTML = '';
+    d.senders.forEach(u => {
+      const o = document.createElement('option');
+      o.value = u.id; o.textContent = u.name; o.selected = u.id === d.sender_id;
+      sel.appendChild(o);
+    });
+    langSel.innerHTML = '';
+    Object.entries(d.langs || {}).forEach(([k, v]) => {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = v; o.selected = k === d.lang;
+      langSel.appendChild(o);
+    });
+    document.getElementById('fu-subject').value = d.subject;
+    document.getElementById('fu-body').value = d.body;
+    document.getElementById('fu-send').disabled = false;
+    fuMsg('Możesz poprawić treść. Po wysłaniu zadanie zamknie się samo, mail trafi do komentarzy leada, a za 5 dni będzie telefon.');
+  } catch (e) { fuMsg('⚠️ Nie udało się przygotować treści — spróbuj jeszcze raz.', true); }
+}
+async function sendFollowup() {
+  const btn = document.getElementById('fu-send');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  fuMsg('Wysyłam…');
+  const fd = new FormData();
+  fd.append('sender', document.getElementById('fu-sender').value);
+  fd.append('lang', document.getElementById('fu-lang').value);
+  fd.append('to', document.getElementById('fu-to').value);
+  fd.append('subject', document.getElementById('fu-subject').value);
+  fd.append('body', document.getElementById('fu-body').value);
+  try {
+    const d = await (await fetch(`/crm/api/activity/${FU_ID}/followup`, { method: 'POST', body: fd })).json();
+    if (!d.ok) throw new Error(d.error || 'mail nie wyszedł');
+    fuMsg('✅ Wysłano' + (d.next ? ' · następny krok: ' + d.next : '') + (d.warning ? ' — ' + d.warning : ''));
+    setTimeout(() => location.reload(), 2000);
+  } catch (e) {
+    fuMsg('⚠️ ' + e.message, true);
+    btn.disabled = false;
+  }
+}
+
+// Quick add
+function openQuick() {
+  document.getElementById('quickModal').classList.add('open');
+  // default due = tomorrow, tylko przy pierwszym otwarciu (puste pole)
+  const dueField = document.getElementById('q-due');
+  if (!dueField.value) {
+    const d = new Date(); d.setDate(d.getDate()+1);
+    const pad = n => String(n).padStart(2,'0');
+    dueField.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  }
+  setTimeout(() => document.getElementById('q-company').focus(), 40);
+}
+function closeQuick() {
+  // Nie czyścimy formularza przy zamknięciu — jak ktoś zamknie przez pomyłkę
+  // w trakcie wypełniania, wpisane dane mają zostać do ponownego otwarcia.
+  document.getElementById('quickModal').classList.remove('open');
+}
+// Wklejka zgłoszenia (np. mail z Formspree): "name / company / email / phone / date /
+// location / message" — etykieta w jednej linii (albo "etykieta: wartość"), wartość pod spodem.
+// Rozpoznane pola uzupełniają formularz Nowego leada; data trafia jako dzień wynajmu.
+function parseLeadPaste(text) {
+  if (!text.trim()) return;
+  const KEYS = {
+    'name': 'name', 'imie': 'name', 'imię': 'name', 'imie i nazwisko': 'name', 'imię i nazwisko': 'name',
+    'company': 'company', 'firma': 'company',
+    'email': 'email', 'e-mail': 'email', 'mail': 'email',
+    'phone': 'phone', 'telefon': 'phone', 'tel': 'phone',
+    'date': 'date', 'data': 'date',
+    'location': 'location', 'lokalizacja': 'location', 'miasto': 'location', 'city': 'location',
+    'message': 'message', 'wiadomosc': 'message', 'wiadomość': 'message',
+  };
+  const found = {};
+  let curKey = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const bare = line.toLowerCase().replace(/:$/, '').trim();
+    if (KEYS[bare] !== undefined) { curKey = KEYS[bare]; continue; }
+    const m = line.match(/^([^:]{1,30}):\s*(.+)$/);
+    if (m && KEYS[m[1].trim().toLowerCase()] !== undefined) {
+      const k = KEYS[m[1].trim().toLowerCase()];
+      found[k] = m[2].trim();
+      curKey = (k === 'message') ? k : null;
+      continue;
+    }
+    if (curKey) {
+      found[curKey] = (found[curKey] ? found[curKey] + '\n' : '') + line;
+      if (curKey !== 'message') curKey = null; // pojedyncze pola biorą tylko pierwszą linię
+    }
+  }
+  const q = sel => document.querySelector('#quickForm ' + sel);
+  let filled = 0;
+  if (found.company) { q('[name=company]').value = found.company; filled++; }
+  else if (found.name && !q('[name=company]').value) { q('[name=company]').value = found.name; }
+  if (found.name) { q('[name=contact_name]').value = found.name; filled++; }
+  if (found.email) { q('[name=contact_email]').value = found.email; filled++; }
+  if (found.phone) { q('[name=contact_phone]').value = found.phone; filled++; }
+  if (found.location) { q('[name=location]').value = found.location; filled++; }
+  if (found.message) { q('[name=notes]').value = found.message; filled++; }
+  if (found.date) {
+    let iso = null;
+    let dm = found.date.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (dm) iso = `${dm[1]}-${dm[2]}-${dm[3]}`;
+    else {
+      dm = found.date.match(/(\d{1,2})[./](\d{1,2})[./](\d{4})/);
+      if (dm) iso = `${dm[3]}-${String(dm[2]).padStart(2, '0')}-${String(dm[1]).padStart(2, '0')}`;
+    }
+    if (iso) { evtDaysMap('q').set(iso, ''); evtDaysRender('q'); filled++; }
+  }
+  const info = document.getElementById('q-paste-info');
+  if (filled) {
+    info.style.display = '';
+    info.textContent = `✓ Uzupełniono ${filled} pól ze zgłoszenia — sprawdź i kliknij "Dodaj lead"`;
+  }
+}
+function pickKind(el) {
+  document.querySelectorAll('#kindBtns .kind-btn').forEach(b => b.classList.remove('sel'));
+  el.classList.add('sel');
+  document.getElementById('q-kind').value = el.dataset.kind;
+}
+function openTask() {
+  document.getElementById('taskModal').classList.add('open');
+  setTimeout(() => document.getElementById('t-lead').focus(), 40);
+}
+function closeTask() {
+  // Analogicznie: zamknięcie nie kasuje wypełnionych pól.
+  document.getElementById('taskModal').classList.remove('open');
+}
+function pickTaskKind(el) {
+  document.querySelectorAll('#taskKindBtns .kind-btn').forEach(b => b.classList.remove('sel'));
+  el.classList.add('sel');
+  document.getElementById('t-kind').value = el.dataset.kind;
+}
+function copyText(btn) {
+  const text = btn.dataset.copy;
+  if (!text) return;
+  const done = () => {
+    const original = btn.innerHTML;
+    btn.classList.add('copied');
+    btn.innerHTML = '<i class="bi bi-check2"></i>';
+    setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = original; }, 1200);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) {}
+  document.body.removeChild(ta);
+}
+function pickQuality(el, hiddenId) {
+  el.parentElement.querySelectorAll('.qual-btn').forEach(b => {
+    b.classList.remove('sel'); b.style.background = ''; b.style.borderColor = '';
+  });
+  el.classList.add('sel');
+  el.style.background = el.dataset.color;
+  el.style.borderColor = el.dataset.color;
+  document.getElementById(hiddenId).value = el.dataset.quality;
+}
+// Asystent AI — czat z Claude'em wykonujący polecenia na CRM
+function aiHistory() {
+  try { return JSON.parse(sessionStorage.getItem('crmAiChat') || '[]'); } catch (e) { return []; }
+}
+function aiSave(hist) {
+  try { sessionStorage.setItem('crmAiChat', JSON.stringify(hist.slice(-20))); } catch (e) {}
+}
+function aiAddMsg(cls, text, html) {
+  const box = document.getElementById('aiMsgs');
+  const div = document.createElement('div');
+  div.className = 'ai-msg ' + cls;
+  if (html) div.innerHTML = html; else div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+function aiRenderHistory() {
+  const box = document.getElementById('aiMsgs');
+  box.innerHTML = '';
+  const hist = aiHistory();
+  if (!hist.length) {
+    aiAddMsg('assistant', 'Cześć! Napisz co zrobić, np. "dodaj leada Hotel Skalny, Zakopane, 15 tys., wynajem 3-4 października", "przypisz zadania z leada X Jerzemu" albo "wyślij maila do klienta z leada Madagaskar z potwierdzeniem terminu".');
+  }
+  hist.forEach(m => aiAddMsg(m.role === 'user' ? 'user' : 'assistant', m.content));
+}
+function openAiChat() {
+  document.getElementById('aiPanel').classList.add('open');
+  aiRenderHistory();
+  setTimeout(() => document.getElementById('aiInput').focus(), 40);
+}
+function closeAiChat() { document.getElementById('aiPanel').classList.remove('open'); }
+function aiClear() { aiSave([]); aiRenderHistory(); }
+function aiSend(e) {
+  e.preventDefault();
+  const input = document.getElementById('aiInput');
+  const text = input.value.trim();
+  if (!text) return false;
+  const hist = aiHistory();
+  hist.push({role: 'user', content: text});
+  aiSave(hist);
+  aiAddMsg('user', text);
+  input.value = '';
+  document.getElementById('aiSendBtn').disabled = true;
+  const spinner = aiAddMsg('thinking', '… myślę');
+  fetch('/crm/assistant/chat', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({messages: hist}),
+  }).then(r => r.json()).then(data => {
+    spinner.remove();
+    const h = aiHistory();
+    h.push({role: 'assistant', content: data.reply});
+    aiSave(h);
+    aiAddMsg('assistant', data.reply);
+    if (data.actions && data.actions.length) {
+      const list = data.actions.map(a => '✅ ' + a).join('\n');
+      const div = aiAddMsg('actions', '');
+      div.textContent = list + '\n';
+      const link = document.createElement('a');
+      link.href = 'javascript:location.reload()';
+      link.textContent = '🔄 Odśwież stronę, żeby zobaczyć zmiany';
+      link.style.color = 'var(--green)';
+      link.style.textDecoration = 'underline';
+      div.appendChild(link);
+    }
+  }).catch(() => {
+    spinner.remove();
+    aiAddMsg('assistant', 'Coś poszło nie tak z połączeniem — spróbuj jeszcze raz.');
+  }).finally(() => {
+    document.getElementById('aiSendBtn').disabled = false;
+    document.getElementById('aiInput').focus();
+  });
+  return false;
+}
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement.tagName;
+  const typing = ['INPUT','TEXTAREA','SELECT'].includes(tag);
+  if (e.key === 'Escape') { closeQuick(); closeTask(); closeAiChat(); return; }
+  if (e.key === 'n' && !typing && !e.ctrlKey && !e.metaKey) { e.preventDefault(); openQuick(); }
+});
+
+// Wybór dni wynajmu — zestaw konkretnych (niekoniecznie kolejnych) dni, np. tylko 1 i 10
+// danego miesiąca, każdy opcjonalnie z własną lokalizacją (np. jednego dnia Warszawa, drugiego Kraków)
+const EVT_LOC_RS = '\x1e', EVT_LOC_US = '\x1f'; // muszą być identyczne z separatorami w crm.py
+const evtDaysState = {}; // prefix -> Map(iso-data -> lokalizacja albo '' gdy brak nadpisania)
+function evtDaysMap(prefix) {
+  if (!evtDaysState[prefix]) evtDaysState[prefix] = new Map();
+  return evtDaysState[prefix];
+}
+function evtDaysEscape(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+function evtDaysRender(prefix) {
+  const map = evtDaysMap(prefix);
+  const sorted = [...map.keys()].sort();
+  document.getElementById(`${prefix}-evt-dates`).value = sorted.join(',');
+  document.getElementById(`${prefix}-evt-locations`).value = sorted
+    .filter(d => map.get(d))
+    .map(d => `${d}${EVT_LOC_US}${map.get(d)}`)
+    .join(EVT_LOC_RS);
+  const box = document.getElementById(`${prefix}-evt-chips`);
+  box.innerHTML = sorted.length
+    ? sorted.map(d => {
+        const [y, m, dd] = d.split('-');
+        const loc = map.get(d);
+        return `<span class="evt-day-chip">${dd}.${m}.${y}${loc ? ' — ' + evtDaysEscape(loc) : ''}<i class="bi bi-x" onclick="evtDaysRemove('${prefix}','${d}')"></i></span>`;
+      }).join('')
+    : '<span class="evt-chips-empty">brak wybranych dni</span>';
+}
+function evtDaysReset(prefix, entries) {
+  // entries: [[iso, lokalizacja], ...] albo [iso, ...] (bez lokalizacji)
+  const map = evtDaysMap(prefix);
+  map.clear();
+  entries.forEach(e => {
+    const [iso, loc] = Array.isArray(e) ? e : [e, ''];
+    if (iso) map.set(iso, loc || '');
+  });
+  evtDaysRender(prefix);
+}
+function evtDaysRemove(prefix, iso) {
+  evtDaysMap(prefix).delete(iso);
+  evtDaysRender(prefix);
+}
+function evtDaysAddRange(prefix) {
+  const startInput = document.getElementById(`${prefix}-evt-add`);
+  const endInput = document.getElementById(`${prefix}-evt-add-end`);
+  const locInput = document.getElementById(`${prefix}-evt-add-location`);
+  if (!startInput.value) return;
+  const map = evtDaysMap(prefix);
+  let start = new Date(startInput.value + 'T00:00:00');
+  let end = endInput.value ? new Date(endInput.value + 'T00:00:00') : start;
+  if (start > end) { [start, end] = [end, start]; }
+  const pad = n => String(n).padStart(2, '0');
+  const loc = (locInput && locInput.value.trim()) || '';
+  for (let cur = new Date(start); cur <= end; cur.setDate(cur.getDate() + 1)) {
+    const iso = `${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-${pad(cur.getDate())}`;
+    map.set(iso, loc);
+  }
+  evtDaysRender(prefix);
+  startInput.value = '';
+  endInput.value = '';
+  if (locInput) locInput.value = '';
+}
+function evtDaysKeydown(e, prefix) {
+  // Enter w polach dnia/lokalizacji ma dodać dzień, a nie wysłać cały formularz
+  // leada (bez tego wpisane, ale jeszcze niedodane kliknięciem "+ Dodaj" daty
+  // gubiły się przy zapisie formularza klawiszem Enter)
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    evtDaysAddRange(prefix);
+  }
+}
+document.querySelectorAll('.evt-chips[data-prefix]').forEach(el => {
+  const prefix = el.dataset.prefix;
+  const initEl = document.getElementById(`${prefix}-evt-initial`);
+  if (initEl) {
+    const entries = [...initEl.querySelectorAll('span[data-date]')].map(s => [s.dataset.date, s.dataset.location || '']);
+    evtDaysReset(prefix, entries);
+  } else {
+    evtDaysRender(prefix);
+  }
+  // NAJWAŻNIEJSZE zabezpieczenie: jeśli ktoś wpisał daty w pola, ale kliknął od razu
+  // "Zapisz"/"Dodaj" zamiast najpierw "+ Dodaj" (naturalny odruch — tak działał stary
+  // formularz z polami od/do), zapis sam dołącza to, co zostało wpisane w polach.
+  // Bez tego wpisane, ale niedodane daty gubiły się po cichu przy zapisie.
+  const form = el.closest('form');
+  if (form) {
+    form.addEventListener('submit', () => { evtDaysAddRange(prefix); });
+  }
+});
+</script>
+<script>
+// Przewijanie leadów bez wracania do listy: klik w leada na dowolnej liście (Kanban, lista, skrzynka,
+// pulpit, statystyki…) zapamiętuje kolejność leadów z tej strony. Na karcie leada pojawia się wtedy
+// pasek ‹ Poprzedni · 3 z 9 · Następny › (także strzałki ← → na klawiaturze).
+(function () {
+  const KEY = 'leadNav';
+  const DETAIL_RE = /^\/crm\/leads\/(\d+)\/?$/;
+  const leadIdOf = (el) => {
+    if (el.dataset && el.dataset.lead && /^\d+$/.test(el.dataset.lead)) return el.dataset.lead;
+    if (el.tagName === 'A' && el.getAttribute('href')) {
+      try { const m = new URL(el.href, location.href).pathname.match(DETAIL_RE); if (m) return m[1]; } catch (e) {}
+    }
+    const oc = el.getAttribute && el.getAttribute('onclick');
+    const m = oc && oc.match(/\/crm\/leads\/(\d+)['"`]/);
+    return m ? m[1] : null;
+  };
+  const SEL = 'a[href*="/crm/leads/"], [onclick*="/crm/leads/"], [data-lead]';
+  const store = (v) => { try { sessionStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} };
+  const load = () => { try { return JSON.parse(sessionStorage.getItem(KEY) || 'null'); } catch (e) { return null; } };
+  const here = location.pathname.match(DETAIL_RE);
+
+  if (!here) {
+    // strona z listą: przy kliknięciu w leada zapisz kolejność wszystkich leadów widocznych na stronie
+    document.addEventListener('click', (ev) => {
+      const el = ev.target.closest && ev.target.closest(SEL);
+      if (!el || !leadIdOf(el)) return;
+      const ids = [];
+      document.querySelectorAll(SEL).forEach((n) => {
+        const id = leadIdOf(n);
+        if (id && !ids.includes(id) && n.offsetParent !== null) ids.push(id);
+      });
+      if (ids.length > 1) store({ ids, back: location.pathname + location.search, title: document.title.split(' – ')[0] });
+    }, true);
+    return;
+  }
+
+  const nav = load();
+  const id = here[1];
+  const i = nav && Array.isArray(nav.ids) ? nav.ids.indexOf(id) : -1;
+  if (i < 0) return;
+  const go = (j) => { if (j >= 0 && j < nav.ids.length) location.href = '/crm/leads/' + nav.ids[j]; };
+  const bar = document.createElement('div');
+  bar.id = 'leadNavBar';
+  const mk = (tag, text, title) => { const e = document.createElement(tag); e.textContent = text; e.title = title; return e; };
+  const prev = mk('button', '‹ Poprzedni', 'Poprzedni lead (←)');
+  prev.type = 'button'; prev.dataset.d = '-1'; prev.disabled = i === 0;
+  const back = mk('a', `${i + 1} z ${nav.ids.length}`, 'Wróć do listy');
+  back.href = /^\/(?!\/)/.test(String(nav.back || '')) ? nav.back : '/crm/leads';
+  const next = mk('button', 'Następny ›', 'Następny lead (→)');
+  next.type = 'button'; next.dataset.d = '1'; next.disabled = i === nav.ids.length - 1;
+  bar.append(prev, back, next);
+  bar.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-d]');
+    if (b) go(i + Number(b.dataset.d));
+  });
+  document.body.appendChild(bar);
+  document.addEventListener('keydown', (ev) => {
+    if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+    const t = ev.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (document.querySelector('.modal-bg.open')) return;
+    if (ev.key === 'ArrowLeft') go(i - 1);
+    if (ev.key === 'ArrowRight') go(i + 1);
+  });
+})();
+</script>
+<style>
+#leadNavBar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 90; display: flex; align-items: center;
+  gap: 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 4px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+#leadNavBar button, #leadNavBar a { font: inherit; font-size: 13px; font-weight: 600; color: var(--text); background: none; border: 0;
+  border-radius: 999px; padding: 7px 14px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+#leadNavBar a { color: var(--muted); font-weight: 500; }
+#leadNavBar button:hover:not(:disabled), #leadNavBar a:hover { background: var(--panel2); }
+#leadNavBar button:disabled { opacity: .35; cursor: default; }
+</style>
+</body>
+</html>

@@ -1,0 +1,404 @@
+{# Customer Journey — wspólne kawałki: status, przyciski akcji, potwierdzenie statusu, okno maila do akceptu #}
+
+{% macro styles() %}
+<style>
+.jr-sub { font-size: 12px; color: var(--muted); }
+.jr-line { font-size: 12px; margin-top: 6px; }
+.jr-ok { color: var(--green); }
+.jr-bad { color: var(--red); }
+.jr-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.jr-acts .btn { font-size: 11.5px; padding: 4px 9px; }
+.jr-box { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; font-size: 12px; cursor: default; }
+.jr-box-title { font-weight: 600; margin-bottom: 6px; }
+.jr-review-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 6px; }
+.jr-review-row label { font-size: 11px; color: var(--muted); margin: 0; }
+.jr-review-row select { font-size: 12px; padding: 4px 6px; margin-top: 2px; }
+.jr-sel.ok { color: var(--green); }
+.jr-sel.wait { color: var(--yellow); }
+.jr-sel.bad { color: var(--red); }
+.jr-sel option { color: var(--text); }
+.jr-file { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; overflow-wrap: anywhere; }
+.jr-file .jr-doclink { font-size: 11.5px; color: var(--text); }
+.jr-boxbtn { margin-top: 6px; font-size: 11.5px; padding: 4px 10px; }
+.jr-doclink { font-size: 12px; text-decoration: underline; }
+.jr-warn { border: 1px solid var(--yellow); color: var(--yellow); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+.jr-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 8px; }
+.jr-sec { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 14px 0 6px; font-weight: 600; }
+.jr-new { color: var(--accent); font-size: 10.5px; font-weight: 700; margin-left: 4px; white-space: nowrap; display: inline-block; }
+.jr-kb { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; margin-top: 6px; cursor: pointer; color: var(--text); }
+.jr-kb input { width: auto; margin: 2px 0 0; flex-shrink: 0; }
+</style>
+{% endmacro %}
+
+{% macro when(v) -%}
+  {%- if v.event -%}
+    {{ v.event.strftime('%d.%m.%Y') }}
+    {%- if v.days|length > 1 %} (+{{ v.days|length - 1 }} dni){% endif %} ·
+    {% if v.lead.stage == 'Zrealizowany' %}po wydarzeniu
+    {%- elif v.left == 0 %}<b>dziś</b>
+    {%- elif v.left == 1 %}<b>jutro</b>
+    {%- else %}za {{ v.left }} dni{% endif %}
+  {%- else -%}
+    <span style="color:var(--yellow)">brak daty wynajmu</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro doclink(d) -%}
+<a class="jr-doclink" target="_blank" title="{{ d.filename }}" onclick="event.stopPropagation(){% if not d.seen %}; setTimeout(() => location.reload(), 800){% endif %}"
+   href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) if d.pdf else url_for('crm_journey_doc_file', doc_id=d.id) }}">{{ d.filename|truncate(28) }}</a>
+{%- if d.check %} <span class="jr-sub" title="CRM nie był pewny — sprawdź">(?)</span>{% endif %}{% if not d.seen %}<span class="jr-new">NOWY</span>{% endif %}
+{%- endmacro %}
+
+{# Mail do akceptu prosto z szarego pola: pod umową — umowa / przypomnienie, pod bazą — instrukcja / przypomnienie #}
+{% macro box_buttons(v, mails, kinds) %}
+{% for key, label, kind, urgent in mails if kind in kinds %}
+<button type="button" class="btn btn-primary btn-sm jr-boxbtn" onclick="event.stopPropagation(); openJourneyMail({{ v.lead.id }}, '{{ kind }}')" title="CRM przygotuje maila — sprawdzisz go przed wysłaniem">{{ {'umowa': 'Wyślij umowę', 'baza': 'Wyślij instrukcję'}.get(kind, 'Przypomnij') }}</button>
+{% endfor %}
+{% endmacro %}
+
+{# Szare pole na każdej karcie i w leadzie: umowa i baza wiedzy — status jednym kliknięciem (zielony = jest,
+   żółty = czekamy, czerwony = brak) i plik od klienta. Lead sprzed Customer Journey: z pytaniem i „Zapisz”. #}
+{% macro state_box(v, back, files) %}
+{% set j = v.j %}
+{% set f = files or {} %}
+{% set review = v.st.needs_review %}
+{% set archived = v.lead.stage == 'Zrealizowany' %}
+{% set mails = v.actions|selectattr(2)|list %}
+<form method="post" action="{{ url_for('crm_journey_confirm', lead_id=v.lead.id) }}" class="jr-box" onclick="event.stopPropagation()">
+  <input type="hidden" name="back" value="{{ back }}">
+  {% if review %}<div class="jr-box-title">Lead sprzed Customer Journey — co już poszło?</div>{% endif %}
+  <div class="jr-review-row">
+    <div>
+      <label>Umowa
+        <select name="umowa" class="jr-sel {{ {'podpisana': 'ok', 'wyslana': 'wait'}.get(j.contract_status, 'bad') }}"{% if not review %} onchange="this.form.submit()"{% endif %}>
+          <option value="do_wyslania" {{ 'selected' if j.contract_status == 'do_wyslania' }}>nie wysłana</option>
+          <option value="wyslana" {{ 'selected' if j.contract_status == 'wyslana' }}>wysłana</option>
+          <option value="podpisana" {{ 'selected' if j.contract_status == 'podpisana' }}>podpisana</option>
+        </select></label>
+      <div class="jr-file">
+        {% if j.contract_status == 'podpisana' %}
+          {% if j.contract_signed_at %}{{ to_local(j.contract_signed_at).strftime('%d.%m') }} · {% endif %}
+          {% if f.umowa %}{{ doclink(f.umowa) }}{% else %}<span class="jr-sub">bez pliku</span>{% endif %}
+        {% elif j.contract_status == 'wyslana' %}
+          {% if j.contract_sent_at %}{{ to_local(j.contract_sent_at).strftime('%d.%m') }}{% endif %}{% if j.contract_reminders %} · przypomnień: {{ j.contract_reminders }}{% endif %}
+          {% if f.umowa %} · {{ doclink(f.umowa) }}{% elif f.wyslana %} · {{ doclink(f.wyslana) }}{% endif %}
+        {% endif %}
+      </div>
+      {{ box_buttons(v, mails, ('umowa', 'umowa_przypomnienie')) }}
+    </div>
+    <div>
+      <label>Baza wiedzy
+        <select name="baza" class="jr-sel {{ {'otrzymana': 'ok', 'wyslana': 'wait'}.get(j.kb_status, 'bad') }}"{% if not review %} onchange="this.form.submit()"{% endif %}>
+          <option value="brak" {{ 'selected' if j.kb_status == 'brak' }}>brak</option>
+          <option value="wyslana" {{ 'selected' if j.kb_status == 'wyslana' }}>prośba wysłana</option>
+          <option value="otrzymana" {{ 'selected' if j.kb_status == 'otrzymana' }}>jest</option>
+        </select></label>
+      <div class="jr-file">
+        {% if j.kb_status == 'otrzymana' %}
+          {% if j.kb_received_at %}{{ to_local(j.kb_received_at).strftime('%d.%m') }} · {% endif %}
+          {% if f.baza %}{{ doclink(f.baza) }}{% else %}<span class="jr-sub">bez pliku</span>{% endif %}
+        {% else %}
+          {% if f.baza %}{{ doclink(f.baza) }}{% endif %}
+          {% if j.kb_status == 'wyslana' and j.kb_sent_at %}prośba {{ to_local(j.kb_sent_at).strftime('%d.%m') }}{% endif %}
+          {% if v.kb_deadline and not archived %}{{ ' · ' if j.kb_status == 'wyslana' and j.kb_sent_at }}potrzebna do {{ v.kb_deadline.strftime('%d.%m') }}{% endif %}
+        {% endif %}
+      </div>
+      {{ box_buttons(v, mails, ('baza', 'baza_przypomnienie')) }}
+    </div>
+  </div>
+  {% if review %}<button class="btn btn-primary btn-sm" style="margin-top:8px">Zapisz</button>{% endif %}
+</form>
+{% endmacro %}
+
+{# Pozostałe przyciski pod polem (prośba o opinię, faktura) — umowa i baza mają swoje w szarym polu #}
+{% macro action_buttons(v) %}
+{% set box_kinds = ('umowa', 'umowa_przypomnienie', 'baza', 'baza_przypomnienie') %}
+{% set buttons = v.actions|selectattr(2)|rejectattr(2, 'in', box_kinds)|list %}
+{% set invoice = v.actions|selectattr(0, 'equalto', 'faktura')|list %}
+{% if buttons or invoice %}
+<div class="jr-acts">
+  {% for key, label, kind, urgent in v.actions if kind not in box_kinds %}
+    {% if kind %}
+      <button type="button" class="btn {{ 'btn-primary' if urgent else 'btn-secondary' }} btn-sm" onclick="event.stopPropagation(); openJourneyMail({{ v.lead.id }}, '{{ kind }}')" title="CRM przygotował maila — sprawdzisz go przed wysłaniem">{{ label }}</button>
+    {% elif key == 'faktura' %}
+      <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); openInvoice({{ v.lead.id }})" title="inFakt → PDF mailem do klienta">{{ label }}</button>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% macro suggestions(mails, back) %}
+{% for m in mails %}
+<div class="jr-box" onclick="event.stopPropagation()">
+  <div><b>CRM znalazł w skrzynce: {{ mail_results.get(m.result, m.result) }}?</b> <span class="jr-sub">{{ m.received_at.strftime('%d.%m') if m.received_at }}</span></div>
+  <div class="jr-sub">{{ (m.subject or '(bez tematu)')|truncate(70) }}</div>
+  {% if m.summary %}<div class="jr-sub" style="margin-top:2px">{{ m.summary }}</div>{% endif %}
+  {% for d in m.lead.journey_documents if d.mail_id == m.id %}
+    <div><a href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) }}" target="_blank" class="jr-doclink">{{ d.filename|truncate(44) }}</a></div>
+  {% endfor %}
+  <div style="display:flex;gap:6px;margin-top:6px">
+    <form method="post" action="{{ url_for('crm_journey_mail_action', mid=m.id, action='potwierdz') }}"><input type="hidden" name="back" value="{{ back }}"><button class="btn btn-primary btn-sm">Tak, odhacz</button></form>
+    <form method="post" action="{{ url_for('crm_journey_mail_action', mid=m.id, action='odrzuc') }}"><input type="hidden" name="back" value="{{ back }}"><button class="btn btn-secondary btn-sm">Nie</button></form>
+  </div>
+</div>
+{% endfor %}
+{% endmacro %}
+
+{% macro modal() %}
+<div class="modal-bg" id="jrModal" onclick="if(event.target===this)closeJourneyMail()">
+  <div class="modal" style="width:640px">
+    <div class="modal-head">
+      <span id="jr-title">Mail do klienta</span>
+      <button class="modal-close" onclick="closeJourneyMail()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="gap10">
+        <div id="jr-warn" class="jr-warn" style="display:none"></div>
+        <div class="row" style="gap:8px">
+          <div class="flex1"><label>Do</label><input type="email" multiple id="jr-to"></div>
+          <div class="flex1"><label>Od</label><input type="text" id="jr-from" disabled></div>
+        </div>
+        <details id="jr-fields-box" style="display:none" open>
+          <summary style="cursor:pointer;font-size:12px;font-weight:600">Dane w umowie — popraw, jeśli trzeba (puste = klient uzupełni)</summary>
+          <div id="jr-fields" class="jr-fields"></div>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="previewContract()" style="margin-top:6px">Podgląd umowy (DOCX)</button>
+        </details>
+        <div><label>Temat</label><input type="text" id="jr-subject" maxlength="300"></div>
+        <div><label>Treść</label><textarea id="jr-body" rows="13" style="line-height:1.5;resize:vertical"></textarea></div>
+        <div id="jr-atts" style="font-size:12px;color:var(--muted)"></div>
+        <div id="jr-msg" style="font-size:12px;color:var(--muted)"></div>
+        <div class="row mt8">
+          <button type="button" class="btn btn-primary flex1" id="jr-send" onclick="sendJourneyMail()">Wyślij teraz</button>
+          <button type="button" class="btn btn-secondary" id="jr-skip" onclick="skipJourneyMail()" style="display:none" title="Uznaj za załatwione bez maila (np. zadzwoniłeś) — następne przypomnienie za kilka dni">Pomiń</button>
+          <button type="button" class="btn btn-secondary" onclick="closeJourneyMail()">Anuluj</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<form id="jr-preview-form" method="post" target="_blank" style="display:none"></form>
+<script>
+let JR = {lead: null, kind: null};
+function jrMsg(text, bad) {
+  const el = document.getElementById('jr-msg');
+  el.textContent = text;
+  el.style.color = bad ? 'var(--red)' : 'var(--muted)';
+}
+function closeJourneyMail() { document.getElementById('jrModal').classList.remove('open'); }
+async function openJourneyMail(leadId, kind) {
+  JR = {lead: leadId, kind: kind};
+  ['jr-to', 'jr-from', 'jr-subject', 'jr-body'].forEach(id => { document.getElementById(id).value = ''; });
+  document.getElementById('jr-fields').innerHTML = '';
+  document.getElementById('jr-fields-box').style.display = 'none';
+  document.getElementById('jr-atts').textContent = '';
+  document.getElementById('jr-warn').style.display = 'none';
+  document.getElementById('jr-send').disabled = true;
+  document.getElementById('jr-skip').style.display = ['umowa_przypomnienie', 'baza_przypomnienie', 'baza', 'opinia'].includes(kind) ? '' : 'none';
+  jrMsg('Przygotowuję mail…');
+  document.getElementById('jrModal').classList.add('open');
+  try {
+    const d = await (await fetch(`/crm/journey/${leadId}/szkic?rodzaj=${encodeURIComponent(kind)}`)).json();
+    if (d.error) { jrMsg('⚠️ ' + d.error, true); return; }
+    document.getElementById('jr-title').textContent = d.label + ' — ' + d.company;
+    document.getElementById('jr-to').value = d.to;
+    recipientPicker(document.getElementById('jr-to'), d.recipients);
+    document.getElementById('jr-from').value = d.from;
+    document.getElementById('jr-subject').value = d.subject;
+    document.getElementById('jr-body').value = d.body;
+    if (d.warnings.length) {
+      const w = document.getElementById('jr-warn');
+      w.textContent = '⚠️ ' + d.warnings.join(' ');
+      w.style.display = '';
+    }
+    if (d.fields) {
+      const box = document.getElementById('jr-fields');
+      d.field_labels.forEach(([key, label]) => {
+        const wrap = document.createElement('div');
+        const lab = document.createElement('label');
+        lab.textContent = label;
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.dataset.field = key; inp.value = d.fields[key] || ''; inp.maxLength = 300;
+        if (!inp.value) inp.placeholder = 'klient uzupełni';
+        wrap.appendChild(lab); wrap.appendChild(inp); box.appendChild(wrap);
+      });
+      document.getElementById('jr-fields-box').style.display = '';
+    }
+    document.getElementById('jr-atts').textContent = d.attachments.length ? 'Załączniki: ' + d.attachments.join(', ') : '';
+    document.getElementById('jr-send').disabled = false;
+    jrMsg('Sprawdź mail — wyjdzie dopiero po kliknięciu „Wyślij teraz”. Kopia trafi do komentarzy leada.');
+  } catch (e) { jrMsg('⚠️ Nie udało się przygotować maila — spróbuj jeszcze raz.', true); }
+}
+function jrFields(fd, prefix) {
+  document.querySelectorAll('#jr-fields input[data-field]').forEach(i => fd.append(prefix + i.dataset.field, i.value));
+}
+function previewContract() {
+  const f = document.getElementById('jr-preview-form');
+  f.action = `/crm/journey/${JR.lead}/umowa.docx`;
+  f.innerHTML = '';
+  document.querySelectorAll('#jr-fields input[data-field]').forEach(i => {
+    const h = document.createElement('input'); h.type = 'hidden'; h.name = i.dataset.field; h.value = i.value; f.appendChild(h);
+  });
+  f.submit();
+}
+async function sendJourneyMail() {
+  const btn = document.getElementById('jr-send');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  jrMsg('Wysyłam…');
+  const fd = new FormData();
+  fd.append('rodzaj', JR.kind);
+  fd.append('to', document.getElementById('jr-to').value);
+  fd.append('subject', document.getElementById('jr-subject').value);
+  fd.append('body', document.getElementById('jr-body').value);
+  jrFields(fd, 'pole_');
+  try {
+    const d = await (await fetch(`/crm/journey/${JR.lead}/wyslij`, {method: 'POST', body: fd})).json();
+    if (!d.ok) throw new Error(d.error || 'mail nie wyszedł');
+    jrMsg('✅ Wysłano' + (d.warning ? ' — ' + d.warning : ''));
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) { jrMsg('⚠️ ' + e.message, true); btn.disabled = false; }
+}
+async function skipJourneyMail() {
+  const fd = new FormData();
+  fd.append('rodzaj', JR.kind);
+  const d = await (await fetch(`/crm/journey/${JR.lead}/pomin`, {method: 'POST', body: fd})).json();
+  if (d.ok) location.reload(); else jrMsg('⚠️ ' + (d.error || 'nie udało się'), true);
+}
+async function journeyCheck(leadId, group, item, value) {
+  await fetch(`/crm/journey/${leadId}/odhacz`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({grupa: group, pozycja: item, wartosc: value})});
+}
+// „Szukaj w skrzynkach” przy leadzie: wszystkie maile klienta -> odesłane umowy i bazy wiedzy do dokumentów
+async function journeySearch(leadId, btn) {
+  const out = document.getElementById('jr-search-msg');
+  btn.disabled = true;
+  out.textContent = 'Szukam w skrzynkach… (do minuty)';
+  try {
+    const start = await (await fetch(`/crm/journey/${leadId}/szukaj`, {method: 'POST'})).json();
+    for (let i = 0; i < 150; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const job = await (await fetch(start.poll)).json();
+      if (job.status === 'pending') continue;
+      if (job.status === 'error') throw new Error(job.error);
+      out.textContent = job.info || 'Gotowe';
+      setTimeout(() => location.reload(), 2500);
+      return;
+    }
+    throw new Error('skrzynki długo odpowiadają — sprawdź dokumenty za chwilę');
+  } catch (e) { out.textContent = '⚠️ ' + e.message; btn.disabled = false; }
+}
+</script>
+{% endmacro %}
+
+{% macro invoice_modal() %}
+<div class="modal-bg" id="invModal" onclick="if(event.target===this)closeInvoice()">
+  <div class="modal" style="width:680px">
+    <div class="modal-head">
+      <span id="inv-title">Faktura</span>
+      <button class="modal-close" onclick="closeInvoice()">×</button>
+    </div>
+    <div class="modal-body">
+      <form id="inv-form" class="gap10" onsubmit="event.preventDefault(); issueInvoice();">
+        <div id="inv-warn" class="jr-warn" style="display:none"></div>
+        <div id="inv-hint" style="display:none;font-size:12px;color:var(--muted)"></div>
+        <div class="jr-sec" style="margin-top:0">Nabywca</div>
+        <div class="jr-fields" style="margin-top:0">
+          <div><label>NIP</label><div style="display:flex;gap:4px"><input type="text" name="nip" id="inv-nip"><button type="button" class="btn btn-ghost btn-sm" onclick="invoiceNip()" title="Nazwa i adres z Białej listy VAT">Szukaj</button></div></div>
+          <div><label>Kraj (kod)</label><input type="text" name="country" maxlength="2"></div>
+          <div style="grid-column:1/-1"><label>Nazwa nabywcy</label><input type="text" name="name" required></div>
+          <div style="grid-column:1/-1"><label>Ulica i numer</label><input type="text" name="street"></div>
+          <div><label>Kod pocztowy</label><input type="text" name="postcode"></div>
+          <div><label>Miasto</label><input type="text" name="city"></div>
+        </div>
+        <div class="jr-sec">Pozycja</div>
+        <div><label>Usługa</label><input type="text" name="service"></div>
+        <div class="jr-fields" style="margin-top:0;grid-template-columns:1fr 1fr 1fr">
+          <div><label>Netto</label><input type="text" name="net"></div>
+          <div><label>Waluta</label><input type="text" name="currency" maxlength="3"></div>
+          <div><label>VAT</label><select name="vat" id="inv-vat"></select></div>
+          <div><label>Data wystawienia</label><input type="date" name="invoice_date"></div>
+          <div><label>Data sprzedaży</label><input type="date" name="sale_date"></div>
+          <div><label>Termin płatności</label><input type="date" name="payment_date"></div>
+        </div>
+        <label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox" name="ksef" value="1" style="width:auto"> Wyślij do KSeF (inFakt)</label>
+        <label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox" name="send" value="1" style="width:auto" onchange="document.getElementById('inv-mail').style.display = this.checked ? '' : 'none'"> Wyślij PDF faktury mailem do klienta (od: <span id="inv-from"></span>)</label>
+        <div id="inv-mail" class="gap10">
+          <div><label>Do</label><input type="email" multiple name="email" id="inv-email"></div>
+          <div><label>Temat <span style="color:var(--muted);text-transform:none">({numer} wstawi się samo)</span></label><input type="text" name="subject" maxlength="300"></div>
+          <div><label>Treść</label><textarea name="body" rows="8" style="line-height:1.5;resize:vertical"></textarea></div>
+        </div>
+        <div id="inv-msg" style="font-size:12px;color:var(--muted)"></div>
+        <div class="row mt8">
+          <button type="submit" class="btn btn-primary flex1" id="inv-go">Wystaw fakturę</button>
+          <button type="button" class="btn btn-secondary" onclick="closeInvoice()">Anuluj</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+let INV_LEAD = null;
+function invMsg(text, bad) { const el = document.getElementById('inv-msg'); el.textContent = text; el.style.color = bad ? 'var(--red)' : 'var(--muted)'; }
+function closeInvoice() { document.getElementById('invModal').classList.remove('open'); }
+async function openInvoice(leadId) {
+  INV_LEAD = leadId;
+  const f = document.getElementById('inv-form');
+  f.reset();
+  document.getElementById('inv-go').disabled = true;
+  ['inv-warn', 'inv-hint'].forEach(id => { document.getElementById(id).style.display = 'none'; });
+  invMsg('Przygotowuję fakturę…');
+  document.getElementById('invModal').classList.add('open');
+  try {
+    const d = await (await fetch(`/crm/journey/${leadId}/faktura`)).json();
+    document.getElementById('inv-title').textContent = 'Faktura — ' + d.company;
+    const sel = document.getElementById('inv-vat');
+    sel.innerHTML = '';
+    d.tax_symbols.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = /\d/.test(t) ? t + '%' : t; sel.appendChild(o); });
+    Object.entries(d.fields).forEach(([k, v]) => {
+      const el = f.elements[k];
+      if (!el) return;
+      if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+    });
+    f.elements.subject.value = d.subject;
+    f.elements.body.value = d.body;
+    recipientPicker(document.getElementById('inv-email'), d.recipients);
+    document.getElementById('inv-from').textContent = d.from;
+    document.getElementById('inv-mail').style.display = f.elements.send.checked ? '' : 'none';
+    if (d.warnings.length) { const w = document.getElementById('inv-warn'); w.textContent = '⚠️ ' + d.warnings.join(' '); w.style.display = ''; }
+    if (d.hints.length) { const h = document.getElementById('inv-hint'); h.textContent = 'ℹ️ ' + d.hints.join(' '); h.style.display = ''; }
+    document.getElementById('inv-go').disabled = d.issued;
+    invMsg(d.issued ? '' : 'Sprawdź dane — faktura powstanie w inFakt dopiero po kliknięciu „Wystaw fakturę”.');
+  } catch (e) { invMsg('⚠️ Nie udało się przygotować faktury.', true); }
+}
+async function invoiceNip() {
+  const f = document.getElementById('inv-form');
+  invMsg('Szukam NIP na Białej liście…');
+  const d = await (await fetch('/crm/nip/' + encodeURIComponent(f.elements.nip.value))).json();
+  if (d.error) { invMsg('⚠️ ' + d.error, true); return; }
+  ['name', 'street', 'postcode', 'city'].forEach(k => { f.elements[k].value = d[k] || ''; });
+  f.elements.country.value = 'PL';
+  invMsg('✅ Dane z Białej listy VAT' + (d.status ? ' (' + d.status + ')' : ''));
+}
+async function issueInvoice() {
+  const btn = document.getElementById('inv-go');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  invMsg('Wystawiam fakturę w inFakt… (kilkanaście sekund)');
+  try {
+    const start = await (await fetch(`/crm/journey/${INV_LEAD}/faktura`, {method: 'POST', body: new FormData(document.getElementById('inv-form'))})).json();
+    if (start.error) throw new Error(start.error);
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const job = await (await fetch(start.poll)).json();
+      if (job.status === 'pending') continue;
+      if (job.status === 'error') throw new Error(job.error);
+      invMsg('✅ ' + (job.info || 'Gotowe'));
+      setTimeout(() => location.reload(), 2500);
+      return;
+    }
+    throw new Error('inFakt długo nie odpowiada — sprawdź za chwilę w dokumentach klienta.');
+  } catch (e) { invMsg('⚠️ ' + e.message, true); btn.disabled = false; }
+}
+</script>
+{% endmacro %}

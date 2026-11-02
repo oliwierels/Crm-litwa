@@ -1,0 +1,204 @@
+{% extends "crm/base.html" %}
+{% block title %}Leady – 33bots LT CRM{% endblock %}
+{% block page_title %}{% if view == 'kanban' %}Kanban{% else %}Leady{% endif %}{% endblock %}
+
+{% block topbar_actions %}
+<form method="get" style="display:flex;gap:8px;align-items:center">
+  <input name="q" value="{{ search }}" style="width:180px" placeholder="Szukaj...">
+  <select name="assigned" onchange="this.form.submit()" style="width:130px">
+    <option value="">Wszyscy</option>
+    {% for u in users %}<option value="{{ u.id }}" {% if assigned==u.id|string %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+  </select>
+  <input type="hidden" name="view" value="{{ view }}">
+  {% if show_lost %}<input type="hidden" name="show_lost" value="1">{% endif %}
+  <button type="submit" class="btn btn-secondary btn-sm">Szukaj</button>
+</form>
+{% if view == 'list' %}
+<a href="{{ url_for('crm_leads') }}?view=list&q={{ search|urlencode }}&assigned={{ assigned }}{% if not show_lost %}&show_lost=1{% endif %}"
+   class="btn btn-{{ 'primary' if show_lost else 'secondary' }} btn-sm" title="Pokaż / ukryj leady na etapie Stracony">
+  {{ '✓ Ze straconymi' if show_lost else 'Bez straconych' }}
+</a>
+{% endif %}
+<a href="{{ url_for('crm_leads') }}?view={{ 'list' if view=='kanban' else 'kanban' }}" class="btn btn-secondary btn-sm">
+  <i class="bi bi-{{ 'list-ul' if view=='kanban' else 'kanban' }}"></i>
+  {{ 'Lista' if view=='kanban' else 'Kanban' }}
+</a>
+<a href="{{ url_for('crm_export_leads') }}?q={{ search|urlencode }}&assigned={{ assigned }}" class="btn btn-secondary btn-sm" title="Eksport do CSV (uwzględnia filtry)">
+  <i class="bi bi-download"></i> CSV
+</a>
+<button class="btn btn-primary btn-sm" onclick="openQuick()">+ Nowy lead</button>
+{% endblock %}
+
+{% block content %}
+{% set ki = kind_icons %}
+{% set dot_cls = {'green':'dot-green','yellow':'dot-yellow','red':'dot-red'} %}
+
+{% if view == 'kanban' %}
+<div class="kanban">
+  {% set urg_cls = {'overdue':'u-overdue','today':'u-today','soon':'u-soon','future':'u-future','done':'u-done'} %}
+  {% for stage in stages %}
+  {% set col_sums = sum_by_currency(by_stage[stage]) %}
+  <div class="k-col">
+    <div class="k-head" style="background:{{ stage_colors[stage] }}18; color:{{ stage_colors[stage] }}; border:1px solid {{ stage_colors[stage] }}30; border-bottom:none">
+      {{ stage }}
+      <span class="k-count">{{ by_stage[stage]|length }}</span>
+      {% if col_sums %}<span class="k-sum">{{ col_sums|money }}</span>{% endif %}
+    </div>
+    <div class="k-body" id="col-{{ stage }}">
+      {% for lead in by_stage[stage] %}
+      {% set idays = inactivity_fn(lead) %}
+      {% set ic = inactivity_color_fn(idays) %}
+      {% set pending = pending_fn(lead) %}
+      {% set au = USERS_BY_ID.get(lead.assigned_to) %}
+      {% set q = lead.quality or 'Średni' %}
+      <div class="k-card" onclick="location.href='/crm/leads/{{ lead.id }}'" draggable="true" data-lead="{{ lead.id }}"
+           style="border-left:3px solid {{ quality_colors[q] }}" title="Ocena leada: {{ q }}">
+        <div style="display:flex;align-items:flex-start;gap:6px">
+          <span class="dot {{ dot_cls[ic] }}" style="margin-top:5px"></span>
+          <div class="k-company flex1">{{ lead.company }}</div>
+          <span style="font-size:11px" title="Ocena: {{ q }}">{{ quality_icons[q] }}</span>
+          {% if au %}<span class="av-xs" style="background:{{ au.color }}22;color:{{ au.color }}" title="{{ au.name }}">{{ au.avatar }}</span>{% endif %}
+        </div>
+        {% if lead.contact_name %}<div class="k-meta">{{ lead.contact_name }}</div>{% endif %}
+        {% if lead.form_filled_at %}<div class="k-meta" style="color:var(--green);font-weight:600" title="Klient wypełnił formularz z danymi do wyceny">📝 Formularz wypełniony {{ to_local(lead.form_filled_at).strftime('%d.%m') }}</div>
+        {% elif lead.lt_mail_at %}<div class="k-meta" title="Wysłano mail z linkiem do formularza, klient jeszcze go nie wypełnił">🇱🇹 Mail wysłany · czeka na formularz</div>{% endif %}
+        {% if lead.robot_model %}<div class="k-meta">{{ lead.robot_model }}</div>{% endif %}
+        {% if lead.value_pln %}<div class="k-val">{{ lead.value_pln|pln }} {{ lead.currency or 'EUR' }}</div>{% endif %}
+        {% if lead.event_date %}<div class="k-meta" style="color:var(--purple)">📅 {{ lead.event_date.strftime('%d.%m') }}{% if lead.event_end_date and lead.event_end_date != lead.event_date %}–{{ lead.event_end_date.strftime('%d.%m') }}{% endif %}.{{ lead.event_date.strftime('%Y') }}</div>{% endif %}
+        {% if lead.location %}<div class="k-meta">📍 {{ lead.location }}</div>{% endif %}
+        {% if lead.stage == 'Wygrany' %}
+        <div class="k-meta" style="color:{{ 'var(--green)' if lead.contract_signed else 'var(--red)' }};font-weight:600">
+          {{ '✅ Umowa podpisana' if lead.contract_signed else '📝 Umowa niepodpisana' }}
+        </div>
+        {% if not lead.event_date %}
+        <div class="k-meta" style="color:var(--yellow)" title="Bez dnia wynajmu CRM nie przeniesie leada do Zrealizowanych — ustaw datę albo przeciągnij ręcznie">⚠️ Brak daty wynajmu</div>
+        {% endif %}
+        {% elif lead.stage == 'Zrealizowany' %}
+        <div class="k-meta" style="color:var(--muted)">🏁 Zrealizowany</div>
+        {% endif %}
+        {% if pending %}
+          {% set na = pending[0] %}
+          {% set nu = urg_cls.get(urgency_fn(na), 'u-soon') %}
+          <div class="k-next {{ nu }}" style="background:var(--panel); border:1px solid var(--border)">
+            {{ ki.get(na.kind,'•') }} {{ na.due_date.strftime('%d.%m') if na.due_date else '—' }}
+          </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th class="sortable" data-type="txt">Firma <span class="arrow"></span></th>
+        <th class="sortable" data-type="txt">Kontakt <span class="arrow"></span></th>
+        <th class="sortable" data-type="txt">Telefon <span class="arrow"></span></th>
+        <th class="sortable" data-type="txt">Robot <span class="arrow"></span></th>
+        <th class="sortable" data-type="num">Etap <span class="arrow"></span></th>
+        <th class="sortable" data-type="num">Ocena <span class="arrow"></span></th>
+        <th class="sortable" data-type="num">Wartość <span class="arrow"></span></th>
+        <th class="sortable" data-type="txt">Wydarzenie <span class="arrow"></span></th>
+        <th class="sortable" data-type="txt">Następne zadanie <span class="arrow"></span></th>
+        <th class="sortable" data-type="num">Aktywność <span class="arrow"></span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lead in list_leads %}
+      {% set pending = pending_fn(lead) %}
+      {% set idays = inactivity_fn(lead) %}
+      {% set ic = inactivity_color_fn(idays) %}
+      <tr data-row onclick="location.href='/crm/leads/{{ lead.id }}'" style="cursor:pointer">
+        <td data-sort="{{ lead.company|lower }}">
+          <div style="display:flex;align-items:center;gap:7px">
+            <span class="dot {{ dot_cls[ic] }}"></span>
+            <span style="font-weight:600">{{ lead.company }}</span>
+            {% if lead.form_filled_at %}<span class="qual-badge" style="background:#22c55e22;color:var(--green)" title="Klient wypełnił formularz {{ to_local(lead.form_filled_at).strftime('%d.%m %H:%M') }}">📝 formularz</span>
+            {% elif lead.lt_mail_at %}<span class="qual-badge" style="background:#eab3081a;color:var(--yellow)" title="Mail z formularzem wysłany, czeka na odpowiedź">🇱🇹 czeka</span>{% endif %}
+          </div>
+        </td>
+        <td data-sort="{{ (lead.contact_name or 'żżż')|lower }}">{{ lead.contact_name or '—' }}</td>
+        <td data-sort="{{ lead.contact_phone or 'żżż' }}">
+          {% if lead.contact_phone %}<a href="tel:{{ lead.contact_phone }}" onclick="event.stopPropagation()" style="color:var(--accent);font-weight:600">📞 {{ lead.contact_phone }}</a>{% else %}—{% endif %}
+        </td>
+        <td data-sort="{{ (lead.robot_model or 'żżż')|lower }}" style="color:var(--muted)">{{ lead.robot_model or '—' }}</td>
+        <td data-sort="{{ stages.index(lead.stage) if lead.stage in stages else 99 }}">
+          <span class="stage-badge" style="background:{{ stage_colors.get(lead.stage,'#888') }}18;color:{{ stage_colors.get(lead.stage,'#888') }}">{{ lead.stage }}</span>
+        </td>
+        {% set q = lead.quality or 'Średni' %}
+        <td data-sort="{{ quality_levels.index(q) if q in quality_levels else 1 }}">
+          <span class="qual-badge" style="background:{{ quality_colors[q] }}22;color:{{ quality_colors[q] }}">{{ quality_icons[q] }} {{ q }}</span>
+        </td>
+        <td data-sort="{{ lead.value_pln or 0 }}" style="color:var(--green);font-weight:600">{{ (lead.value_pln|pln)+' '+(lead.currency or 'EUR') if lead.value_pln else '—' }}</td>
+        <td data-sort="{{ lead.event_date.strftime('%Y-%m-%d') if lead.event_date else '9999' }}" style="color:var(--purple);font-size:12px">{{ lead.event_date.strftime('%d.%m.%Y') if lead.event_date else '—' }}</td>
+        <td data-sort="{{ pending[0].due_date.strftime('%Y-%m-%d') if pending and pending[0].due_date else '9999' }}">
+          {% if pending %}
+          {% set na = pending[0] %}
+          {% set urg_cls = {'overdue':'u-overdue','today':'u-today','soon':'u-soon','future':'u-future','done':'u-done'} %}
+          <span style="font-size:12px" class="{{ urg_cls.get(urgency_fn(na),'') }}">{{ ki.get(na.kind,'•') }} {{ na.due_date.strftime('%d.%m') if na.due_date else '—' }}</span>
+          {% else %}<span style="color:var(--yellow);font-size:11px" title="Brak zaplanowanego zadania">⚠ brak</span>{% endif %}
+        </td>
+        <td data-sort="{{ idays }}" style="font-size:11px;color:var(--{% if ic=='green' %}green{% elif ic=='yellow' %}yellow{% else %}red{% endif %})">{{ idays }}d</td>
+      </tr>
+      {% endfor %}
+      {% if not list_leads %}
+      <tr><td colspan="10" style="text-align:center;color:var(--muted);padding:32px">Brak leadów</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--text); }
+th.sortable .arrow { font-size: 9px; color: var(--accent); }
+</style>
+<script>
+// Sortowanie listy po kliknięciu w nagłówek kolumny
+document.querySelectorAll('th.sortable').forEach((th, i) => {
+  th.addEventListener('click', () => {
+    const tbody = th.closest('table').querySelector('tbody');
+    const rows = [...tbody.querySelectorAll('tr[data-row]')];
+    const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+    document.querySelectorAll('th.sortable').forEach(h => { delete h.dataset.dir; h.querySelector('.arrow').textContent = ''; });
+    th.dataset.dir = dir;
+    th.querySelector('.arrow').textContent = dir === 'asc' ? '▲' : '▼';
+    const isNum = th.dataset.type === 'num';
+    rows.sort((a, b) => {
+      let x = a.children[i].dataset.sort, y = b.children[i].dataset.sort;
+      if (isNum) { x = parseFloat(x) || 0; y = parseFloat(y) || 0; return dir === 'asc' ? x - y : y - x; }
+      return dir === 'asc' ? x.localeCompare(y, 'pl') : y.localeCompare(x, 'pl');
+    });
+    rows.forEach(r => tbody.appendChild(r));
+  });
+});
+
+// Kanban drag & drop
+let drag = null;
+document.querySelectorAll('.k-card').forEach(c => {
+  c.addEventListener('dragstart', () => { drag = c; c.style.opacity = '.4'; });
+  c.addEventListener('dragend', () => { c.style.opacity = '1'; drag = null; });
+});
+document.querySelectorAll('.k-body').forEach(col => {
+  col.addEventListener('dragover', e => { e.preventDefault(); col.style.outline = '2px solid var(--accent)'; });
+  col.addEventListener('dragleave', () => col.style.outline = '');
+  col.addEventListener('drop', e => {
+    e.preventDefault(); col.style.outline = '';
+    if (!drag) return;
+    const stage = col.id.replace('col-', '');
+    col.appendChild(drag);
+    fetch(`/crm/api/leads/${drag.dataset.lead}/stage`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({stage})
+    });
+  });
+});
+</script>
+{% endblock %}
