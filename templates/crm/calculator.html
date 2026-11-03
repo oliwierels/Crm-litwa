@@ -136,6 +136,29 @@
         </form>
         <div class="kc-sub" style="margin-top:6px">Zapisze wartość leada i komentarz z rozbiciem wyceny.</div>
         {% endif %}
+        {% if message %}
+        <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+          <div style="font-weight:700;margin-bottom:6px">💬 Gotowa wiadomość dla klienta</div>
+          {% if hours_note == 'założone' %}<div class="kc-warn" style="margin-bottom:6px">⚠️ W leadzie nie ma godzin — przyjęto {{ hours }} h. Zmień czas wyżej, jeśli wiesz więcej.</div>{% endif %}
+          <textarea id="kc-msg" rows="9" style="width:100%;font-size:12.5px;line-height:1.45">{{ message }}</textarea>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+            <button type="button" class="btn btn-primary btn-sm" onclick="kcCopy()">📋 Kopiuj wiadomość</button>
+            {% if wa_digits %}
+            <button type="button" class="btn btn-sm" style="background:#25D366;color:#06210f;font-weight:700" onclick="kcCopy(); window.open('https://wa.me/{{ wa_digits }}?text=' + encodeURIComponent(document.getElementById('kc-msg').value), '_blank')">WhatsApp</button>
+            <a class="btn btn-sm" style="background:#7360F2;color:#fff;font-weight:700" href="viber://chat?number=%2B{{ wa_digits }}" onclick="kcCopy()">Viber</a>
+            {% endif %}
+            <span id="kc-msg-info" class="kc-sub"></span>
+          </div>
+        </div>
+        <script>
+        function kcCopy() {
+          const t = document.getElementById('kc-msg').value, info = document.getElementById('kc-msg-info');
+          (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(
+            () => { info.textContent = '✅ Skopiowano'; },
+            () => { const el = document.getElementById('kc-msg'); el.select(); document.execCommand('copy'); info.textContent = '✅ Skopiowano'; });
+        }
+        </script>
+        {% endif %}
       {% endif %}
     </div>
   </div>

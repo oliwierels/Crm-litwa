@@ -3085,12 +3085,28 @@ def crm_calculator():
     night = pricing.night_hours(start, hours)
     dest = (request.args.get("cel") or "").strip()[:200]
     if lead and not dest and "cel" not in request.args:
-        dest = _lead_place(lead)
+        dest = lt_extract_place(lead)
+    hours_note = ""
+    if lead and "h" not in request.args:  # godziny z formularza / treści zapytania
+        s, e, dur, hours_note = lt_extract_hours(lead)
+        hours = next((h for h in sorted(pricing.HOUR_FACTORS) if dur <= h), max(pricing.HOUR_FACTORS))
+        if s is not None and "od" not in request.args:
+            start = s
+        night = pricing.night_hours(start, hours)
     if lead and "dni" not in request.args and lead.event_days:
         days = max(1, min(len(lead.event_days), pricing.MAX_DAYS))
     result = price_quotes(dest, hours, km, night=night, days=days) if (dest or km is not None) else None
+    message = ""
+    opt = (result or {}).get("options", {}).get(dep) if result else None
+    if opt:
+        price_txt = f"{opt['quote']['rounded']:,}".replace(",", " ")
+        time_txt = (f"{pricing.fmt_hour(start)}–{pricing.fmt_hour(start + hours)}" if start is not None
+                    else f"{pricing.fmt_num(hours)} val.")
+        message = lt_offer_message(lead, _lt_dates_text(lead) if lead else "", time_txt, dest or result["place"], price_txt)
     return render_template(
         "crm/calculator.html", lead=lead, dest=dest, hours=hours, dep=dep, km=km, result=result,
+        message=message, hours_note=hours_note,
+        wa_digits=lt_phone_digits(lead.contact_phone) if lead else "",
         start=start, start_text=pricing.fmt_hour(start) if start is not None else "",
         end_text=pricing.fmt_hour(start + hours) if start is not None else "", night=night,
         days=days, day_options=[(d, pricing.days_label(d), pricing.day_discount(d))
@@ -7741,21 +7757,93 @@ app.jinja_env.globals.update(is_lithuanian=is_lithuanian, lt_mailbox_ready=lt_ma
 # (pakiet 2 / 4 / 8 h, km od granicy, nocleg), zaokrągloną do pełnych setek (od 25 € w górę), a CRM składa
 # gotową wiadomość po litewsku do skopiowania albo otwarcia w WhatsApp / Viber.
 _LT_FORM_HOURS = re.compile(r"Godziny:\s*(\d{1,2}(?:[:.]\d{2})?)\s*[–-]\s*(\d{1,2}(?:[:.]\d{2})?)")
+_LT_RANGE_COLON = re.compile(r"(?<![\d:])(\d{1,2}:\d{2})\s*(?:-|–|—|do|iki|to)\s*(\d{1,2}:\d{2})(?![\d:])")
+_LT_RANGE_WORDS = re.compile(r"\b(?:od|nuo|from)\s*(\d{1,2}(?:[:.]\d{2})?)\s*(?:do|iki|to|-|–)\s*(\d{1,2}(?:[:.]\d{2})?)\b", re.I)
+_LT_RANGE_UNIT = re.compile(r"(?<![\d.:])(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(?:val|h\b|godz)", re.I)
+_LT_MORE_THAN = re.compile(r"(?:daugiau\s+nei|ponad|wi[eę]cej\s+ni[zż]|more\s+than)\s*(\d{1,2})\s*(?:val|h\b|godz|hour)", re.I)
+_LT_DURATION = re.compile(r"(?<![\d:.])(\d{1,2}(?:[.,]5)?)\s*(?:val\w*|h\b|godz\w*|hours?\b)", re.I)
+_LT_FULL_DAY = re.compile(r"ca[lł]y\s+dzie[nń]|vis[aą]\s+dien[aą]|all\s+day|full\s+day", re.I)
+_LT_PLACE = re.compile(r"(?:Miejsce(?:\s+wydarzenia)?|Vieta|Renginio\s+vieta)\s*[:\-–]\s*([^\n;]+)", re.I)
+LT_DEFAULT_HOURS = float(os.environ.get("LT_DEFAULT_HOURS", "4") or 4)
 
 
-def lt_form_hours(lead):
-    """(start, koniec, długość w h) z ostatniego wpisu „Godziny:” z formularza albo None."""
-    texts = [lead.notes or ""] + [a.notes or "" for a in sorted(lead.activities, key=lambda a: a.created_at or datetime.min,
-                                                                reverse=True)]
+def _lt_texts(lead):
+    """Teksty leada do szukania danych: notatki, potem komentarze i zadania (od najnowszych)."""
+    acts = sorted(lead.activities, key=lambda a: a.created_at or datetime.min, reverse=True)
+    return [(lead.notes or "").replace("_", " ")] + [(a.notes or "").replace("_", " ") for a in acts]
+
+
+def lt_extract_hours(lead):
+    """(start albo None, koniec albo None, długość w h, skąd) — z formularza, z godzin w treści
+    („18:00–22:00”, „od 18 do 22”, „nuo 18 iki 22”) albo z samej długości („iki 4 valandų”, „do 4 godzin”)."""
+    texts = _lt_texts(lead)
+
+    def rng(a, b, src):
+        s, e = pricing.parse_start(a), pricing.parse_start(b)
+        if s is None or e is None:
+            return None
+        dur = (e - s) % 24 or 24
+        return (s, e, dur, src) if 0.5 <= dur <= 16 else None
+
+    for rx, src in ((_LT_FORM_HOURS, "formularz"), (_LT_RANGE_COLON, "treść"), (_LT_RANGE_WORDS, "treść"),
+                    (_LT_RANGE_UNIT, "treść")):
+        for text in texts:
+            found = rx.findall(text)
+            for a, b in reversed(found):
+                got = rng(a, b, src)
+                if got:
+                    return got
     for text in texts:
-        found = _LT_FORM_HOURS.findall(text)
-        if found:
-            a, b = (pricing.parse_start(x) for x in found[-1])
-            if a is None or b is None:
-                continue
-            dur = (b - a) % 24 or 24
-            return a, b, dur
-    return None
+        if _LT_FULL_DAY.search(text):
+            return None, None, 8.0, "treść (cały dzień)"
+        m = _LT_MORE_THAN.search(text)
+        if m:
+            return None, None, float(m.group(1)) + 0.5, "treść"
+        for m in _LT_DURATION.finditer(text):
+            dur = float(m.group(1).replace(",", "."))
+            if 0.5 <= dur <= 16:
+                return None, None, dur, "treść"
+    return None, None, LT_DEFAULT_HOURS, "założone"
+
+
+def lt_extract_place(lead):
+    place = _lead_place(lead)
+    if place:
+        return place
+    for text in _lt_texts(lead):
+        m = _LT_PLACE.search(text)
+        if m:
+            val = re.sub(r"[\s.,]*\d{4}[\s./-]\d{1,2}[\s./-]\d{1,2}.*$", "", m.group(1)).strip(" .,-–")
+            if val:
+                return val[:200]
+    for text in _lt_texts(lead):
+        hit = logistics.match_city(text)
+        if hit:
+            return logistics.city_label(hit[0])
+    return ""
+
+
+def lt_form_hours(lead):  # zgodność wsteczna
+    s, e, dur, src = lt_extract_hours(lead)
+    return (s, e, dur) if s is not None else None
+
+
+def lt_offer_message(lead, when, time_txt, place, price_txt):
+    owner = USERS_BY_ID.get(lead.assigned_to) or USERS[0] if lead else USERS[0]
+    lines = [
+        "Laba diena!",
+        "",
+        "Dėkojame už užklausą. Humanoidinio roboto Unitree G1 nuoma jūsų renginiui"
+        + (f" {when}" if when else "") + f" ({time_txt}, {place}) kainuotų {price_txt} € be PVM.",
+        "",
+        "Į kainą įskaičiuota: atvykimas, asmeninis operatorius, roboto pritaikymas jūsų renginiui "
+        "ir techninė pagalba vietoje.",
+        "",
+        "Ar rezervuojame šią datą? Mielai atsakysiu į klausimus.",
+        "",
+        f"{owner.get('full_name') or owner['name']}, 33bots",
+    ]
+    return "\n".join(lines)
 
 
 def lt_phone_digits(phone):
@@ -7782,50 +7870,41 @@ def _lt_dates_text(lead):
 
 
 def lt_quote(lead, remote_budget=1):
-    """Cena dla leada z formularza: dict z ceną, rozbiciem i wiadomością albo {'missing': [...]}."""
-    place = _lead_place(lead)
-    hrs = lt_form_hours(lead)
-    missing = [x for x, ok in (("godzin", hrs), ("miejsca", place)) if not ok]
-    if missing:
-        return {"missing": missing}
-    start, end, dur = hrs
+    """Automatyczna cena dla leada: godziny i miejsce z formularza albo z treści zapytania (brak godzin = 4 h).
+    Zwraca dict z ceną, rozbiciem i gotową wiadomością albo {'missing': [...]}."""
+    place = lt_extract_place(lead)
+    if not place:
+        return {"missing": ["miejsca"]}
+    start, end, dur, hours_src = lt_extract_hours(lead)
     tier = next((h for h in sorted(pricing.HOUR_FACTORS) if dur <= h), max(pricing.HOUR_FACTORS))
     days = max(1, min(len(lead.event_days) or 1, pricing.MAX_DAYS))
-    res = price_quotes(place, tier, None, remote_budget=remote_budget, night=pricing.night_hours(start, tier), days=days)
+    night = pricing.night_hours(start, tier) if start is not None else 0.0
+    res = price_quotes(place, tier, None, remote_budget=remote_budget, night=night, days=days)
     opt = next(iter(res["options"].values()), None)
     if not opt:
         return {"missing": [f"km do „{place}” (wpisz w kalkulatorze)"], "place": place}
     q = opt["quote"]
     price = pricing.round_price(q["total"])
-    time_txt = f"{pricing.fmt_hour(start)}–{pricing.fmt_hour(end)}"
+    if start is not None:
+        time_txt = f"{pricing.fmt_hour(start)}–{pricing.fmt_hour(end)}"
+    else:
+        time_txt = f"{pricing.fmt_num(tier)} val."
     price_txt = f"{price:,}".replace(",", " ")
-    owner = USERS_BY_ID.get(lead.assigned_to) or USERS[0]
     when = _lt_dates_text(lead)
-    lines = [
-        "Laba diena!",
-        "",
-        "Dėkojame, kad užpildėte formą. Humanoidinio roboto Unitree G1 nuoma jūsų renginiui"
-        + (f" {when}" if when else "") + f" ({time_txt}, {place}) kainuotų {price_txt} € be PVM.",
-        "",
-        "Į kainą įskaičiuota: atvykimas, asmeninis operatorius, roboto pritaikymas jūsų renginiui "
-        "ir techninė pagalba vietoje.",
-        "",
-        "Ar rezervuojame šią datą? Mielai atsakysiu į klausimus.",
-        "",
-        f"{owner.get('full_name') or owner['name']}, 33bots",
-    ]
-    message = "\n".join(lines)
+    message = lt_offer_message(lead, when, time_txt, place, price_txt)
     digits = lt_phone_digits(lead.contact_phone)
     from urllib.parse import quote as _q
     template_params = [when or "artimiausiu metu", time_txt, place[:200], price_txt]
     return {
         "template_params": template_params, "phone_digits": digits,
         "price": price, "exact": q["total"], "hours": tier, "duration": dur, "time": time_txt, "place": place,
+        "hours_src": hours_src, "assumed": hours_src == "założone",
         "km": int(round(opt["km"])), "days": days, "when": when, "over8": dur > max(pricing.HOUR_FACTORS),
         "breakdown": pricing.describe(q, opt["label"], res["place"] or place), "message": message,
         "whatsapp": f"https://wa.me/{digits}?text={_q(message)}" if digits else "",
         "viber": f"viber://chat?number=%2B{digits}" if digits else "",
-        "calc_url": url_for("crm_calculator", lead=lead.id, cel=place, h=tier, od=pricing.fmt_hour(start), dni=days),
+        "calc_url": url_for("crm_calculator", lead=lead.id, cel=place, h=tier,
+                            od=pricing.fmt_hour(start) if start is not None else None, dni=days),
     }
 
 

@@ -185,6 +185,7 @@
             🕒 {{ lq.time }} ({{ (lq.duration|round(1)|string).replace('.0', '') }} h → pakiet {{ lq.hours }} h){% if lq.when %} · 📅 {{ lq.when }}{% endif %}
             · 📍 {{ lq.place }} (≈{{ lq.km }} km od granicy){% if lq.days > 1 %} · {{ lq.days }} dni{% endif %}
           </div>
+          {% if lq.assumed %}<div style="color:var(--yellow);margin-bottom:6px">⚠️ W leadzie nie ma godzin — przyjęto {{ lq.hours }} h. Zmień w kalkulatorze, jeśli wiesz więcej.</div>{% endif %}
           {% if lq.over8 %}<div style="color:var(--yellow);margin-bottom:6px">⚠️ Ponad 8 h — policzone jak 8 h, sprawdź w kalkulatorze.</div>{% endif %}
           <details style="margin-bottom:8px"><summary style="cursor:pointer;color:var(--accent)">Rozbicie ceny</summary>
             <div style="white-space:pre-wrap;color:var(--muted);margin-top:4px">{{ lq.breakdown }}</div></details>
