@@ -962,4 +962,11 @@ LT = {
     "Klient jeszcze nie wypełnił formularza.": "Klientas dar neužpildė formos.",
     "od granicy": "nuo sienos",
     "pakiet": "paketas",
+    "🚀 Wyślij przez WhatsApp": "🚀 Siųsti per WhatsApp",
+    "WhatsApp (telefon)": "WhatsApp (telefonas)",
+    "✅ Wysłano na WhatsApp — zapisane w komentarzach leada": "✅ Išsiųsta per WhatsApp – išsaugota užklausos komentaruose",
+    "⚠️ Błąd połączenia — spróbuj jeszcze raz.": "⚠️ Ryšio klaida – bandykite dar kartą.",
+    "Wysłać ofertę na WhatsApp? Pierwsza wiadomość idzie jako zatwierdzony szablon (data, godziny, miejsce, cena) — zmiany w okienku nie wejdą.": "Siųsti pasiūlymą per WhatsApp? Pirma žinutė siunčiama kaip patvirtintas šablonas (data, valandos, vieta, kaina) – pakeitimai lange nebus įtraukti.",
+    "Wysłać tę wiadomość na WhatsApp (klient pisał w ostatnich 24 h — pójdzie Twój tekst)?": "Siųsti šią žinutę per WhatsApp (klientas rašė per paskutines 24 val. – bus išsiųstas jūsų tekstas)?",
+    "WhatsApp nie jest podpięty (WHATSAPP_TOKEN i WHATSAPP_PHONE_ID w Railway).": "WhatsApp neprijungtas (WHATSAPP_TOKEN ir WHATSAPP_PHONE_ID Railway).",
 }

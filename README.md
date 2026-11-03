@@ -49,3 +49,38 @@ wystarczy dopisać parę do `lt_strings.py`.
 **Z polskiego CRM** → „Przenieś teraz”. Lead jest najpierw zapisywany tutaj (z zadaniami, komentarzami,
 historią etapów, ofertami, Customer Journey i dokumentami), dopiero potem usuwany z polskiego CRM.
 Po pierwszym przeniesieniu nowe litewskie leady z polskiego CRM przenoszą się same co 10 minut.
+
+## WhatsApp — wysyłka ceny z CRM (oficjalne WhatsApp Cloud API)
+
+1. business.facebook.com → konto Meta Business (najlepiej zweryfikowane).
+2. developers.facebook.com → Create App → typ Business → dodaj produkt **WhatsApp** → podepnij **osobny numer**
+   (nie może być jednocześnie w zwykłej aplikacji WhatsApp).
+3. Business Settings → System Users → nowy użytkownik (Admin) → Generate token z uprawnieniami
+   `whatsapp_business_messaging` i `whatsapp_business_management` → to jest **stały token**.
+4. WhatsApp Manager → Message templates → **Create template**: kategoria Utility, nazwa `pasiulymas_kaina`,
+   język **Lithuanian (lt)**, treść (dokładnie 4 pola):
+
+```
+Laba diena! Dėkojame, kad užpildėte formą. Humanoidinio roboto Unitree G1 nuoma jūsų renginiui {{1}} ({{2}}, {{3}}) kainuotų {{4}} € be PVM.
+
+Į kainą įskaičiuota: atvykimas, asmeninis operatorius, roboto pritaikymas jūsų renginiui ir techninė pagalba vietoje.
+
+Ar rezervuojame šią datą?
+```
+   Przykłady do zgłoszenia: {{1}} = 2026-12-12, {{2}} = 18:00–22:00, {{3}} = Šiaulių arena, {{4}} = 2 000.
+
+5. Railway → Variables:
+
+| Zmienna | Wartość |
+|---|---|
+| `WHATSAPP_TOKEN` | stały token z kroku 3 |
+| `WHATSAPP_PHONE_ID` | Phone number ID (WhatsApp → API Setup) |
+| `WHATSAPP_TEMPLATE` | `pasiulymas_kaina` |
+| `WHATSAPP_VERIFY_TOKEN` | dowolne hasło, np. `33bots-wa-2026` |
+| `WHATSAPP_APP_SECRET` | App secret (App settings → Basic) — sprawdzanie podpisu webhooka |
+
+6. Webhook (żeby odpowiedzi klientów wpadały do CRM): WhatsApp → Configuration → Callback URL
+   `https://<adres LT CRM>/whatsapp/webhook`, Verify token = `WHATSAPP_VERIFY_TOKEN`, subskrybuj pole **messages**.
+
+Przy leadzie: „🚀 Wyślij przez WhatsApp” — pierwsza wiadomość idzie jako szablon; gdy klient odpisze, odpowiedź
+trafia do komentarzy leada (+ zadanie „Odpowiedz…”), a przez 24 h CRM wysyła już zwykły tekst z okienka.

@@ -603,7 +603,7 @@ def _inject_ui_lang():
 # ---------- LOGOWANIE (włącza się, gdy w Railway jest zmienna CRM_PASSWORD) ----------
 
 # strony dostępne bez logowania: konektor MCP (chroni go MCP_SECRET) i samo logowanie
-PUBLIC_ENDPOINTS = {"static", "index", "crm_login", "crm_logout", "mcp_endpoint", "lead_form", "set_ui_lang"}
+PUBLIC_ENDPOINTS = {"static", "index", "crm_login", "crm_logout", "mcp_endpoint", "lead_form", "set_ui_lang", "whatsapp_webhook"}
 LOGIN_MAX_FAILS = 8
 LOGIN_WINDOW_S = 15 * 60
 _login_fails = {}
@@ -7817,7 +7817,9 @@ def lt_quote(lead, remote_budget=1):
     message = "\n".join(lines)
     digits = lt_phone_digits(lead.contact_phone)
     from urllib.parse import quote as _q
+    template_params = [when or "artimiausiu metu", time_txt, place[:200], price_txt]
     return {
+        "template_params": template_params, "phone_digits": digits,
         "price": price, "exact": q["total"], "hours": tier, "duration": dur, "time": time_txt, "place": place,
         "km": int(round(opt["km"])), "days": days, "when": when, "over8": dur > max(pricing.HOUR_FACTORS),
         "breakdown": pricing.describe(q, opt["label"], res["place"] or place), "message": message,
@@ -7857,6 +7859,146 @@ def crm_lt_message_sent(lead_id):
 
 
 app.jinja_env.globals.update(lt_quote=lt_quote)
+
+
+# ---------- WHATSAPP (oficjalne WhatsApp Cloud API od Meta) ----------
+# Railway → Variables: WHATSAPP_TOKEN (stały token System User), WHATSAPP_PHONE_ID (Phone number ID),
+# WHATSAPP_TEMPLATE (nazwa zatwierdzonego szablonu z ceną, 4 pola: data, godziny, miejsce, cena),
+# opcjonalnie WHATSAPP_TEMPLATE_LANG (domyślnie lt), WHATSAPP_API_VERSION (domyślnie v22.0),
+# WHATSAPP_VERIFY_TOKEN (dowolne hasło do podpięcia webhooka), WHATSAPP_APP_SECRET (sprawdzanie podpisu webhooka).
+# Pierwsza wiadomość do klienta = szablon (wymóg Meta). Gdy klient odpisze, przez 24 h idzie zwykły tekst z okienka.
+WA_LAST_IN_KEY = "wa_in:{}"
+WA_WINDOW = timedelta(hours=24)
+
+
+def wa_ready():
+    return bool(os.environ.get("WHATSAPP_TOKEN", "").strip() and os.environ.get("WHATSAPP_PHONE_ID", "").strip())
+
+
+def _wa_post(payload):
+    ver = os.environ.get("WHATSAPP_API_VERSION", "").strip() or "v22.0"
+    url = f"https://graph.facebook.com/{ver}/{os.environ['WHATSAPP_PHONE_ID'].strip()}/messages"
+    try:
+        r = requests.post(url, json=payload, timeout=20,
+                          headers={"Authorization": f"Bearer {os.environ['WHATSAPP_TOKEN'].strip()}"})
+        data = r.json() if r.content else {}
+    except (requests.RequestException, ValueError) as e:
+        return None, f"brak połączenia z WhatsApp ({type(e).__name__})"
+    if r.status_code >= 400 or "error" in data:
+        err = data.get("error") or {}
+        return None, f"WhatsApp odrzucił wiadomość: {err.get('message') or r.status_code}" + (
+            f" ({err.get('error_data', {}).get('details')})" if isinstance(err.get("error_data"), dict) else "")
+    return (data.get("messages") or [{}])[0].get("id"), None
+
+
+def wa_window_open(lead):
+    last = get_setting(WA_LAST_IN_KEY.format(lead.id))
+    try:
+        return bool(last) and datetime.utcnow() - datetime.fromisoformat(last) < WA_WINDOW
+    except ValueError:
+        return False
+
+
+def wa_send_quote(lead, text, actor_id):
+    """Wysyła cenę na WhatsApp: w oknie 24 h zwykły tekst, poza nim zatwierdzony szablon. Zwraca błąd albo None."""
+    q = lt_quote(lead, remote_budget=2)
+    digits = lt_phone_digits(lead.contact_phone)
+    if not digits:
+        return "lead nie ma poprawnego numeru telefonu"
+    if wa_window_open(lead) and text:
+        payload = {"messaging_product": "whatsapp", "to": digits, "type": "text", "text": {"body": text[:4096]}}
+        how = "zwykła wiadomość (klient pisał w ostatnich 24 h)"
+    else:
+        name = os.environ.get("WHATSAPP_TEMPLATE", "").strip()
+        if not name:
+            return "brak WHATSAPP_TEMPLATE w Railway (nazwa zatwierdzonego szablonu)"
+        if not q.get("template_params"):
+            return "brak ceny — uzupełnij godziny i miejsce"
+        params = [{"type": "text", "text": re.sub(r"\s+", " ", str(p)).strip()[:300] or "—"} for p in q["template_params"]]
+        payload = {"messaging_product": "whatsapp", "to": digits, "type": "template",
+                   "template": {"name": name, "language": {"code": os.environ.get("WHATSAPP_TEMPLATE_LANG", "").strip() or "lt"},
+                                "components": [{"type": "body", "parameters": params}]}}
+        how = f"szablon „{name}”"
+        text = q.get("message") or text
+    msg_id, err = _wa_post(payload)
+    if err:
+        return err
+    now = datetime.utcnow()
+    for a in Activity.query.filter(Activity.lead_id == lead.id, Activity.done.isnot(True),
+                                   Activity.notes.like("Odpowiedz klientowi na WhatsApp%")).all():
+        a.done, a.done_at = True, now  # odpowiedź poszła — zadanie „Odpowiedz…” się zamyka
+    db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=now, assigned_to=actor_id,
+                            notes=f"💬 WhatsApp wysłany przez CRM ({how})\n---\n{text}"))
+    db.session.commit()
+    return None
+
+
+@app.route("/crm/leads/<int:lead_id>/whatsapp", methods=["POST"])
+def crm_whatsapp_send(lead_id):
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    if not wa_ready():
+        return jsonify({"error": "WhatsApp nie jest podpięty (WHATSAPP_TOKEN i WHATSAPP_PHONE_ID w Railway)."}), 400
+    err = wa_send_quote(lead, (request.form.get("text") or "").strip(), get_current_user(request)["id"])
+    if err:
+        return jsonify({"error": err}), 502
+    return jsonify({"ok": True})
+
+
+def _wa_lead_for(digits):
+    """Lead po numerze nadawcy (porównanie końcówki numeru)."""
+    tail = digits[-8:]
+    if not tail:
+        return None
+    for lead in Lead.query.filter(Lead.contact_phone.isnot(None)).order_by(Lead.created_at.desc()).all():
+        d = lt_phone_digits(lead.contact_phone) or re.sub(r"\D", "", lead.contact_phone or "")
+        if d.endswith(tail):
+            return lead
+    return None
+
+
+@app.route("/whatsapp/webhook", methods=["GET", "POST"])
+def whatsapp_webhook():
+    """Webhook Meta: GET = weryfikacja przy podpinaniu, POST = wiadomości od klientów (trafiają do komentarzy leada)."""
+    if request.method == "GET":
+        token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "").strip()
+        if token and request.args.get("hub.mode") == "subscribe" and hmac.compare_digest(
+                request.args.get("hub.verify_token", ""), token):
+            return request.args.get("hub.challenge", ""), 200
+        return "forbidden", 403
+    secret = os.environ.get("WHATSAPP_APP_SECRET", "").strip()
+    if secret:
+        sig = request.headers.get("X-Hub-Signature-256", "")
+        good = "sha256=" + hmac.new(secret.encode(), request.get_data(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, good):
+            return "bad signature", 403
+    data = request.get_json(silent=True) or {}
+    for entry in data.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            for m in value.get("messages", []):
+                digits = re.sub(r"\D", "", m.get("from", ""))
+                lead = _wa_lead_for(digits)
+                if not lead:
+                    continue
+                kind = m.get("type")
+                if kind == "text":
+                    body = (m.get("text") or {}).get("body", "")
+                elif kind in ("button", "interactive"):
+                    body = (m.get("button") or {}).get("text") or json.dumps(m.get("interactive", {}), ensure_ascii=False)[:500]
+                else:
+                    body = f"[{kind}]"
+                set_setting(WA_LAST_IN_KEY.format(lead.id), datetime.utcnow().isoformat(timespec="seconds"))
+                db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(),
+                                        assigned_to=lead.assigned_to or USERS[0]["id"],
+                                        notes=f"💬 WhatsApp od klienta:\n{body[:3000]}"))
+                db.session.add(Activity(lead_id=lead.id, kind="email", due_date=datetime.utcnow(),
+                                        assigned_to=lead.assigned_to or USERS[0]["id"],
+                                        notes="Odpowiedz klientowi na WhatsApp (napisał — 24 h na zwykłą odpowiedź)."))
+    db.session.commit()
+    return "ok", 200
+
+
+app.jinja_env.globals.update(wa_ready=wa_ready, wa_window_open=wa_window_open)
 
 
 # ---------- PRZENIESIENIE LITEWSKICH LEADÓW Z POLSKIEGO CRM ----------

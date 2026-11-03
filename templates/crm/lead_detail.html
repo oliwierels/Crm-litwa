@@ -191,7 +191,8 @@
           <textarea id="lt-msg" rows="9" style="width:100%;font-size:12.5px;line-height:1.45">{{ lq.message }}</textarea>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
             <button type="button" class="btn btn-secondary btn-sm" onclick="ltMsg('copy')">📋 Kopiuj</button>
-            {% if lq.whatsapp %}<button type="button" class="btn btn-sm" style="background:#25D366;color:#06210f;font-weight:700" onclick="ltMsg('whatsapp')">WhatsApp</button>{% endif %}
+            {% if lq.whatsapp and wa_ready() %}<button type="button" id="wa-api-btn" class="btn btn-sm" style="background:#25D366;color:#06210f;font-weight:700" onclick="waSend()">🚀 Wyślij przez WhatsApp</button>{% endif %}
+            {% if lq.whatsapp %}<button type="button" class="btn btn-sm" style="{{ 'background:none;border:1px solid #25D366;color:#25D366' if wa_ready() else 'background:#25D366;color:#06210f;font-weight:700' }}" onclick="ltMsg('whatsapp')">WhatsApp{{ ' (telefon)' if wa_ready() }}</button>{% endif %}
             {% if lq.viber %}<button type="button" class="btn btn-sm" style="background:#7360F2;color:#fff;font-weight:700" onclick="ltMsg('viber')">Viber</button>{% endif %}
             {% if not lead.value_pln or lead.value_pln|int != lq.price %}
             <form method="post" action="{{ url_for('crm_lt_set_price', lead_id=lead.id) }}" style="display:inline">
@@ -204,6 +205,19 @@
             {% if not lq.whatsapp %}Brak poprawnego numeru telefonu — skopiuj wiadomość i wyślij ręcznie.{% else %}WhatsApp otworzy się z gotową wiadomością. Viber otworzy czat z klientem — wiadomość jest już skopiowana, wystarczy wkleić.{% endif %}
           </div>
           <script>
+          function waSend() {
+            const btn = document.getElementById('wa-api-btn'), info = document.getElementById('lt-msg-info');
+            {% if wa_window_open(lead) %}const msg = 'Wysłać tę wiadomość na WhatsApp (klient pisał w ostatnich 24 h — pójdzie Twój tekst)?';
+            {% else %}const msg = 'Wysłać ofertę na WhatsApp? Pierwsza wiadomość idzie jako zatwierdzony szablon (data, godziny, miejsce, cena) — zmiany w okienku nie wejdą.';{% endif %}
+            if (!confirm(msg)) return;
+            btn.disabled = true; info.textContent = 'Wysyłam…';
+            const fd = new FormData(); fd.append('text', document.getElementById('lt-msg').value);
+            fetch('{{ url_for('crm_whatsapp_send', lead_id=lead.id) }}', {method: 'POST', body: fd})
+              .then(r => r.json()).then(d => {
+                if (d.ok) { info.textContent = '✅ Wysłano na WhatsApp — zapisane w komentarzach leada'; }
+                else { info.textContent = '⚠️ ' + (d.error || 'nie wyszło'); btn.disabled = false; }
+              }).catch(() => { info.textContent = '⚠️ Błąd połączenia — spróbuj jeszcze raz.'; btn.disabled = false; });
+          }
           function ltMsg(kind) {
             const text = document.getElementById('lt-msg').value;
             const done = () => {
