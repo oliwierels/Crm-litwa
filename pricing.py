@@ -1,14 +1,14 @@
-"""Kalkulator wyceny wynajmu robota: stawka za czas na miejscu + dojazd.
+"""Kalkulator wyceny wynajmu robota na Litwie: stawka za czas na miejscu + dojazd od granicy PL–LT.
 
-Zasady (cennik 33bots):
-- 8 h na miejscu = 5500 zł netto (cena startowa), 4 h = 6/8 tej ceny, 2 h = połowa,
-- dojazd = 1,50 zł za km w jedną stronę × 2 (tam i z powrotem),
+Zasady (cennik 33bots LT, EUR, netto):
+- 8 h na miejscu = 2100 € (cena startowa), 4 h = 6/8 tej ceny, 2 h = połowa (mnożniki jak w Polsce),
+- dojazd = 0,75 € za km w jedną stronę × 2 (tam i z powrotem), km liczone od granicy (Budzisko–Kalvarija),
 - każda godzina po 22:00 (do 6:00 rano) liczy się × 1,5 stawki godzinowej pakietu,
-- powyżej 300 km w jedną stronę doliczamy 300 zł za nocleg,
-- dojazd (razem z noclegiem) nie może być więcej niż 30% ceny — jeśli jest, cena idzie
-  w górę tak, żeby stanowił dokładnie 30% (daleki wyjazd zabiera cały dzień ekipy),
-- kilka dni z rzędu: 2 dni −10%, 3 dni i więcej −15% od całości. Do 300 km ekipa wraca
-  codziennie (dojazd za każdy dzień), dalej zostaje na miejscu (jeden dojazd + nocleg za każdy dzień).
+- nocleg jest zawsze — jeden za każdy dzień wynajmu (ekipa zostaje na miejscu, jeden dojazd),
+- dojazd (razem z noclegami) nie może być więcej niż 30% ceny — jeśli jest, cena idzie
+  w górę tak, żeby stanowił dokładnie 30%,
+- kilka dni z rzędu: 2 dni −10%, 3 dni i więcej −15% od całości.
+Stawki można zmienić w Railway → Variables (CALC_BASE_8H, CALC_KM_RATE, CALC_LODGING, CALC_ROUND_TO).
 """
 import math
 import os
@@ -21,23 +21,23 @@ def _env_num(name, default):
         return default
 
 
-# LT CRM: ceny w EUR (stawki z cennika PL przeliczone ~4,25 zł/€; zmienisz je w Railway → Variables)
-BASE_8H = int(_env_num("CALC_BASE_8H", 1300))
+# LT CRM: ceny w EUR (zmienisz je w Railway → Variables)
+BASE_8H = int(_env_num("CALC_BASE_8H", 2100))
 HOUR_FACTORS = {8: 8 / 8, 4: 6 / 8, 2: 4 / 8}
-KM_RATE = _env_num("CALC_KM_RATE", 0.35)
+KM_RATE = _env_num("CALC_KM_RATE", 0.75)
 TRIPS = 2
 TRAVEL_MAX_SHARE = 0.30
 ROUND_TO = int(_env_num("CALC_ROUND_TO", 50))  # cena „do oferty” zaokrąglona w górę
 NIGHT_FROM, NIGHT_TO = 22, 6   # godziny nocne: od 22:00 do 6:00
 NIGHT_MULT = 1.5               # godzina nocna = 1,5 × stawka godzinowa pakietu
-LODGING_KM = 300               # dalej niż tyle km w jedną stronę = nocleg
+LODGING_KM = 0                 # nocleg zawsze (każdy dzień wynajmu)
 LODGING_COST = int(_env_num("CALC_LODGING", 70))  # € za nocleg (liczy się do limitu dojazdu 30%)
 DAY_DISCOUNTS = {2: 0.10, 3: 0.15}  # rabat od całości; więcej dni = jak za 3
 MAX_DAYS = 7
 
 # skąd wyjeżdża ekipa (klucze z logistics.CITIES)
-DEPARTURES = {"warszawa": "Warszawa", "katowice": "Katowice"}
-DEPARTURES_FROM = {"warszawa": "z Warszawy", "katowice": "z Katowic"}
+DEPARTURES = {"granica": "Granica PL–LT (Budzisko)"}
+DEPARTURES_FROM = {"granica": "od granicy"}
 
 
 def parse_start(text):
@@ -89,7 +89,7 @@ def quote(hours, km_one_way, night=0.0, days=1):
     hourly = base / hours
     night_extra = round(night * hourly * (NIGHT_MULT - 1))
     onsite = (base + night_extra) * days
-    stays = km > LODGING_KM  # daleko: ekipa zostaje na miejscu, blisko: wraca codziennie
+    stays = True  # LT: nocleg zawsze — ekipa zostaje na miejscu, jeden dojazd
     round_trips = 1 if stays else days
     travel = round(km * KM_RATE * TRIPS) * round_trips
     nights = days if stays else 0
@@ -143,8 +143,8 @@ def describe(q, departure_label="", place=""):
                  + (f" = {fmt_zl(q['travel'])}" if trips else ""))
     if q.get("lodging"):
         nights = q.get("nights", 1)
-        lines.append(f"Nocleg (powyżej {LODGING_KM} km): {nights} × {fmt_zl(LODGING_COST)} = +{fmt_zl(q['lodging'])}"
-                     if nights > 1 else f"Nocleg (powyżej {LODGING_KM} km): +{fmt_zl(q['lodging'])}")
+        lines.append(f"Nocleg: {nights} × {fmt_zl(LODGING_COST)} = +{fmt_zl(q['lodging'])}"
+                     if nights > 1 else f"Nocleg: +{fmt_zl(q['lodging'])}")
     if q["raise_by"]:
         lines.append(f"Dojazd{' z noclegiem' if q.get('lodging') else ''} > {int(TRAVEL_MAX_SHARE * 100)}% ceny "
                      f"→ cena podniesiona o {fmt_zl(q['raise_by'])}")

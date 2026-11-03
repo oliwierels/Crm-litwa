@@ -3035,7 +3035,7 @@ def _logistics_range():
     return d_from, d_to
 
 
-# ---------- KALKULATOR WYCENY (czas na miejscu + dojazd z Warszawy albo Katowic) ----------
+# ---------- KALKULATOR WYCENY (czas na miejscu + dojazd od granicy PL–LT) ----------
 
 def price_quotes(destination, hours, km=None, departures=None, remote_budget=2, night=0.0, days=1):
     """Wycena dla miejsca (albo podanych km) z każdego punktu wyjazdu.
@@ -3067,7 +3067,7 @@ def _calc_params(src):
     hours = src.get("h", type=int) or 8
     if hours not in pricing.HOUR_FACTORS:
         hours = 8
-    dep = src.get("z") if src.get("z") in pricing.DEPARTURES else "warszawa"
+    dep = src.get("z") if src.get("z") in pricing.DEPARTURES else next(iter(pricing.DEPARTURES))
     km_raw = (src.get("km") or "").replace(",", ".").strip()
     try:
         km = max(0.0, min(float(km_raw), 5000.0)) if km_raw else None
@@ -5479,10 +5479,10 @@ ASSISTANT_TOOLS = [
     {
         "name": "quote_price",
         "description": f"Kalkulator wyceny z cennika 33bots (EUR): 8 h na miejscu {pricing.BASE_8H} € netto, 4 h = 6/8, 2 h = 1/2, "
-                       f"plus dojazd {pricing.KM_RATE:.2f} €/km w jedną stronę × 2, powyżej 300 km + {pricing.LODGING_COST} € za nocleg; każda godzina "
+                       f"plus dojazd {pricing.KM_RATE:.2f} €/km w jedną stronę × 2 liczony od granicy PL–LT, nocleg zawsze {pricing.LODGING_COST} € za każdy dzień; każda godzina "
                        "po 22:00 × 1,5; dojazd z noclegiem max 30% ceny (inaczej cena rośnie); 2 dni −10%, "
                        "3+ dni −15% od całości. "
-                       "Liczy z Warszawy i z Katowic (albo z podanego punktu). Podaj miejsce (miasto/adres) albo km. "
+                       "Liczy od granicy PL–LT (Budzisko). Podaj miejsce (miasto/adres) albo km od granicy. "
                        "Używaj zawsze, gdy trzeba wycenić wynajem.",
         "input_schema": {
             "type": "object",
@@ -6413,7 +6413,7 @@ def _assistant_system_prompt(user):
         f"Użytkownicy CRM: {users_txt}; Jerzy to pracownik do zadań. "
         f"Etapy leada: {', '.join(STAGES)} (Zrealizowany = wygrany po ostatnim dniu realizacji — CRM przenosi "
         f"sam; w statystykach liczy się jako wygrany). Roboty: {', '.join(ROBOT_MODELS)}. "
-        "Do wyceny wynajmu używaj narzędzia quote_price (cennik + dojazd z Warszawy/Katowic). "
+        "Do wyceny wynajmu używaj narzędzia quote_price (cennik + dojazd od granicy PL–LT). "
         f"Waluty: {', '.join(CURRENCIES)} (kwota bez waluty = EUR). Oceny leada: {', '.join(QUALITY_LEVELS)}.\n"
         "Zasady:\n"
         "- Zanim zmienisz leada, znajdź go przez find_leads — nigdy nie zgaduj ID.\n"

@@ -18,6 +18,8 @@ CARPOOL_KM = 60        # ekipa podwójna: bazy operatorów bliżej niż tyle = j
 
 # współrzędne (lat, lon) — klucze po normalizacji (małe litery, bez polskich znaków)
 CITIES = {
+    # przejście graniczne Budzisko–Kalvarija (S61 / Via Baltica) — przybliżona pozycja; od niego liczymy km na Litwie
+    "granica": (float(__import__("os").environ.get("CALC_BORDER_LAT", "54.38")), float(__import__("os").environ.get("CALC_BORDER_LON", "23.02"))),
     "warszawa": (52.2297, 21.0122), "krakow": (50.0647, 19.9450), "lodz": (51.7592, 19.4560),
     "wroclaw": (51.1079, 17.0385), "poznan": (52.4064, 16.9252), "gdansk": (54.3520, 18.6466),
     "gdynia": (54.5189, 18.5305), "sopot": (54.4416, 18.5601), "szczecin": (53.4285, 14.5528),

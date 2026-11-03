@@ -936,4 +936,11 @@ LT = {
     "ostatnio": "paskutinį kartą",
     "problemy:": "problemos:",
     "⚠️ Nie udało się połączyć z bazą polskiego CRM:": "⚠️ Nepavyko prisijungti prie lenkiško CRM duomenų bazės:",
+
+    # --- kalkulator LT ---
+    "Km liczone od": "Km skaičiuojami nuo",
+    "Granica PL–LT (Budzisko)": "PL–LT siena (Budzisko)",
+    "od granicy": "nuo sienos",
+    "Nocleg": "Nakvynė",
+    "Km w jedną stronę": "Km į vieną pusę",
 }

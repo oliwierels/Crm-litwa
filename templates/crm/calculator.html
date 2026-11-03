@@ -60,7 +60,7 @@
         {% if start is not none %}<div class="kc-sub" style="margin-top:4px">{{ start_text }}–{{ end_text }}{% if night %} · {{ fmt_num(night) }} h po {{ cfg.night_from }}:00{% else %} · bez godzin nocnych{% endif %}</div>{% endif %}
       </div>
       <div>
-        <label>Wyjazd z</label>
+        <label>Km liczone od</label>
         <div class="kc-seg">
           {% for key, name in departures.items() %}
           <label class="{{ 'on' if key == dep }}"><input type="radio" name="z" value="{{ key }}" {{ 'checked' if key == dep }} onchange="this.form.submit()">{{ name }}</label>
@@ -76,9 +76,9 @@
       <div class="kc-rules">
         Cennik: 8 h = {{ fmt_zl(cfg.base) }}, 4 h = 6/8, 2 h = 1/2 tej ceny. Każda godzina po {{ cfg.night_from }}:00
         (do {{ cfg.night_to }}:00) liczy się × {{ cfg.night_mult }} stawki godzinowej. Dojazd: {{ ('%.2f'|format(cfg.rate)).replace('.', ',') }} € za km
-        w jedną stronę × 2, powyżej {{ cfg.lodging_km }} km + {{ fmt_zl(cfg.lodging) }} za nocleg. Dojazd (z noclegiem) może być najwyżej {{ cfg.share }}% ceny — jeśli wychodzi więcej, cena rośnie tak, żeby się zmieścił.
-        Kilka dni: 2 dni −{{ cfg.disc[2] }}%, 3 i więcej −{{ cfg.disc[3] }}% od całości; do {{ cfg.lodging_km }} km ekipa wraca codziennie
-        (dojazd za każdy dzień), dalej zostaje na miejscu (jeden dojazd + nocleg za każdy dzień).
+        w jedną stronę × 2, liczony od granicy PL–LT (Budzisko). Nocleg jest zawsze: {{ fmt_zl(cfg.lodging) }} za każdy dzień wynajmu.
+        Dojazd z noclegami może być najwyżej {{ cfg.share }}% ceny — jeśli wychodzi więcej, cena rośnie tak, żeby się zmieścił.
+        Kilka dni: 2 dni −{{ cfg.disc[2] }}%, 3 i więcej −{{ cfg.disc[3] }}% od całości (jeden dojazd, ekipa zostaje na miejscu).
         Km z mapy są szacunkowe (linia prosta × 1,25) — wpisz własne, jeśli znasz trasę.
       </div>
     </div>
@@ -105,7 +105,7 @@
           {% if q.night_extra %}<div class="kc-row"><span>Dopłata nocna: {{ fmt_num(q.night) }} h po {{ cfg.night_from }}:00 × {{ cfg.night_mult }} ({{ fmt_zl(q.hourly) }}/h){{ pd }}</span><span>+{{ fmt_zl(q.night_extra) }}</span></div>{% endif %}
           {% if q.days > 1 %}<div class="kc-row"><span>Na miejscu razem ({{ q.days }} dni)</span><span>{{ fmt_zl(q.onsite) }}</span></div>{% endif %}
           <div class="kc-row"><span>Dojazd: {{ q.km }} km × 2 × {{ ('%.2f'|format(cfg.rate)).replace('.', ',') }} €{% if q.round_trips > 1 %} × {{ q.round_trips }} (codzienny powrót){% endif %}</span><span>{{ fmt_zl(q.travel) }}</span></div>
-          {% if q.lodging %}<div class="kc-row"><span>Nocleg (powyżej {{ cfg.lodging_km }} km){% if q.nights > 1 %}: {{ q.nights }} × {{ fmt_zl(cfg.lodging) }}{% endif %}</span><span>+{{ fmt_zl(q.lodging) }}</span></div>{% endif %}
+          {% if q.lodging %}<div class="kc-row"><span>Nocleg{% if q.nights > 1 %}: {{ q.nights }} × {{ fmt_zl(cfg.lodging) }}{% endif %}</span><span>+{{ fmt_zl(q.lodging) }}</span></div>{% endif %}
           {% if q.raise_by %}<div class="kc-row"><span>Podniesienie (limit dojazdu {{ cfg.share }}%)</span><span>{{ fmt_zl(q.raise_by) }}</span></div>{% endif %}
           {% if q.discount %}
           <div class="kc-row"><span>Suma przed rabatem</span><span>{{ fmt_zl(q.subtotal) }}</span></div>
