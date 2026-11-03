@@ -943,4 +943,8 @@ LT = {
     "od granicy": "nuo sienos",
     "Nocleg": "Nakvynė",
     "Km w jedną stronę": "Km į vieną pusę",
+    "⏳ Przenoszę leady w tle…": "⏳ Perkeliu užklausas fone…",
+    "Strona odświeża się sama — możesz też ją zamknąć, przenoszenie i tak się dokończy.": "Puslapis atsinaujina pats – galite jį ir uždaryti, perkėlimas vis tiek bus užbaigtas.",
+    "✅ Gotowe: przeniesiono": "✅ Atlikta: perkelta",
+    "leadów z polskiego CRM.": "užklausų iš lenkiško CRM.",
 }

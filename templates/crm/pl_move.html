@@ -4,21 +4,34 @@
 {% block content %}
 <div class="panel" style="max-width:760px">
   <div class="panel-body" style="font-size:13px;line-height:1.7">
-    {% if msg %}<div style="background:#22c55e1a;border:1px solid #22c55e55;color:var(--green);border-radius:8px;padding:9px 12px;margin-bottom:12px">{{ msg }}</div>{% endif %}
+    {% if running %}
+      <meta http-equiv="refresh" content="4">
+      <div style="background:#6366f11a;border:1px solid #6366f155;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:15px">
+        ⏳ Przenoszę leady w tle… <b>{{ progress.done }}</b>{% if progress.total %} z <b>{{ progress.total }}</b>{% endif %}.
+        Strona odświeża się sama — możesz też ją zamknąć, przenoszenie i tak się dokończy.
+      </div>
+    {% elif progress.finished_at %}
+      <div style="background:#22c55e1a;border:1px solid #22c55e55;color:var(--green);border-radius:8px;padding:9px 12px;margin-bottom:12px">
+        ✅ Gotowe: przeniesiono {{ progress.done }} leadów z polskiego CRM.
+        {% if progress.errors %}<br><span style="color:var(--red)">Problemy: {{ progress.errors[:5]|join('; ') }}</span>{% endif %}
+      </div>
+    {% endif %}
     {% if not configured %}
       <p>Żeby przenieść litewskie leady z polskiego CRM, dodaj w Railway (serwis LT CRM → Variables) zmienną
         <code>PL_DATABASE_URL</code> z adresem bazy polskiego CRM (Add Reference → Postgres z projektu polskiego CRM
         albo skopiuj DATABASE_URL z polskiego CRM).</p>
     {% else %}
       {% if error %}<p style="color:var(--red)">⚠️ Nie udało się połączyć z bazą polskiego CRM: {{ error }}</p>{% endif %}
-      <p style="font-size:15px">W polskim CRM czeka <b>{{ count if count is not none else '?' }}</b> litewskich leadów
-        (telefon +370, e-mail .lt, kraj LT albo miasto na Litwie).</p>
+      {% if not running %}<p style="font-size:15px">W polskim CRM czeka <b>{{ count if count is not none else '?' }}</b> litewskich leadów
+        (telefon +370, e-mail .lt, kraj LT albo miasto na Litwie).</p>{% endif %}
       <p class="muted">Przeniesienie kopiuje leada razem z zadaniami, komentarzami, historią etapów, ofertami,
         Customer Journey i dokumentami. Dopiero gdy zapisze się tutaj, znika z polskiego CRM (statystyki PL go już nie liczą).
         Operatorów i roboty w logistyce trzeba przypisać tutaj od nowa.</p>
+      {% if not running %}
       <form method="post" onsubmit="if (!confirm('Przenieść litewskie leady z polskiego CRM? Znikną z polskiego CRM.')) return false; this.querySelector('button').disabled = true; return true;">
         <button class="btn btn-primary" {{ 'disabled' if not count }}>📦 Przenieś teraz</button>
       </form>
+      {% endif %}
       <p class="muted" style="margin-top:12px">
         {% if auto %}✅ Nowe litewskie leady, które wpadną do polskiego CRM, przenoszą się same co 10 minut.
         {% else %}Po pierwszym przeniesieniu nowe litewskie leady z polskiego CRM będą się przenosić same co 10 minut.{% endif %}

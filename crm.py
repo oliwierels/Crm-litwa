@@ -7765,37 +7765,59 @@ def pl_pending_count(max_age=300):
     return _pl_count_cache["n"]
 
 
+PL_MOVE_PROGRESS = {"running": False, "done": 0, "total": 0, "errors": [], "finished_at": None}
+
+
 def run_pl_move(actor_id=None):
     """Przenosi teraz wszystkie litewskie leady z PL. Zwraca (przeniesione, błędy)."""
     if not _pl_move_lock.acquire(blocking=False):
         return 0, ["przenoszenie już trwa"]
+    PL_MOVE_PROGRESS.update(running=True, done=0, total=0, errors=[], finished_at=None)
     try:
         moved, errors = pl_move.move_all(pl_move.engine(), db, {
             "Lead": Lead, "LeadEventDate": LeadEventDate, "Activity": Activity, "ActivityComment": ActivityComment,
             "StageHistory": StageHistory, "Crew": Crew, "Journey": Journey, "JourneyMail": JourneyMail,
             "JourneyDocument": JourneyDocument, "ContractRequest": ContractRequest, "SentOffer": SentOffer,
             "InboxMessage": InboxMessage,
-        }, actor_id or USERS[0]["id"])
+        }, actor_id or USERS[0]["id"], progress=PL_MOVE_PROGRESS)
+        PL_MOVE_PROGRESS["errors"] = errors
         set_setting(PL_MOVE_LAST_KEY, f"{datetime.utcnow().isoformat(timespec='seconds')}|{moved}|{'; '.join(errors)[:500]}")
         db.session.commit()
         _pl_count_cache["at"] = 0.0
         return moved, errors
+    except Exception as e:
+        PL_MOVE_PROGRESS["errors"] = [f"{type(e).__name__}: {str(e)[:200]}"]
+        raise
     finally:
+        PL_MOVE_PROGRESS.update(running=False, finished_at=datetime.utcnow())
         _pl_move_lock.release()
+
+
+def _pl_move_background(actor_id):
+    with app.app_context():
+        try:
+            run_pl_move(actor_id)
+        except Exception:
+            app.logger.exception("pl_move")
+        finally:
+            db.session.remove()
 
 
 @app.route("/crm/przenies-z-pl", methods=["GET", "POST"])
 def crm_pl_move():
-    msg = ""
     if request.method == "POST":
-        moved, errors = run_pl_move(get_current_user(request)["id"])
-        set_setting(PL_MOVE_AUTO_KEY, "1")  # od teraz nowe litewskie leady przenoszą się same
+        # od teraz nowe litewskie leady przenoszą się same; samo przenoszenie idzie w tle (może trwać kilka minut)
+        set_setting(PL_MOVE_AUTO_KEY, "1")
         db.session.commit()
-        msg = f"Przeniesiono {moved} leadów z polskiego CRM." + (f" Problemy: {'; '.join(errors[:5])}" if errors else "")
+        if not PL_MOVE_PROGRESS["running"]:
+            threading.Thread(target=_pl_move_background, args=(get_current_user(request)["id"],), daemon=True).start()
+        return redirect(url_for("crm_pl_move"))
+    running = PL_MOVE_PROGRESS["running"]
     last = (get_setting(PL_MOVE_LAST_KEY) or "").split("|", 2)
-    return render_template("crm/pl_move.html", configured=pl_move_configured(), count=pl_pending_count(max_age=0),
-                           error=_pl_count_cache["err"], msg=msg, auto=get_setting(PL_MOVE_AUTO_KEY) == "1",
-                           last=last if len(last) == 3 else None,
+    return render_template("crm/pl_move.html", configured=pl_move_configured(),
+                           count=None if running else pl_pending_count(max_age=0),
+                           error="" if running else _pl_count_cache["err"], running=running, progress=PL_MOVE_PROGRESS,
+                           auto=get_setting(PL_MOVE_AUTO_KEY) == "1", last=last if len(last) == 3 else None,
                            moved_total=Lead.query.filter(Lead.pl_id.isnot(None)).count())
 
 

@@ -158,10 +158,12 @@ def _delete_in_pl(conn, meta, pl_id, clickup_task_id):
             conn.execute(insert(t["app_settings"]).values(key=key, value="przeniesiony do LT CRM"))
 
 
-def move_all(eng, db, M, actor_id, limit=200):
+def move_all(eng, db, M, actor_id, limit=200, progress=None):
     """Przenosi litewskie leady z PL. Zwraca (liczba przeniesionych, lista problemów)."""
     meta = _meta(eng)
     found = find_lithuanian(eng, meta)[:limit]
+    if progress is not None:
+        progress.update(total=len(found), done=0)
     moved, errors = 0, []
     for row, _places in found:
         pl_id = row["id"]
@@ -174,6 +176,8 @@ def move_all(eng, db, M, actor_id, limit=200):
             with eng.begin() as conn:  # …dopiero potem usunięte w PL
                 _delete_in_pl(conn, meta, pl_id, row.get("clickup_task_id"))
             moved += 1
+            if progress is not None:
+                progress["done"] = moved
         except Exception as e:
             db.session.rollback()
             errors.append(f"#{pl_id} {row.get('company')}: {type(e).__name__}: {str(e)[:120]}")
