@@ -7,13 +7,25 @@
     {% if running %}
       <meta http-equiv="refresh" content="4">
       <div style="background:#6366f11a;border:1px solid #6366f155;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:15px">
-        ⏳ Przenoszę leady w tle… <b>{{ progress.done }}</b>{% if progress.total %} z <b>{{ progress.total }}</b>{% endif %}.
-        Strona odświeża się sama — możesz też ją zamknąć, przenoszenie i tak się dokończy.
+        ⏳ Przenoszę leady w tle… <b>{{ progress.done or 0 }}</b>{% if progress.total %} z <b>{{ progress.total }}</b>{% endif %}.
+        {% if progress.current %}<div style="font-size:12px;color:var(--muted)">Teraz: {{ progress.current }}</div>{% endif %}
+        <div style="font-size:12px;color:var(--muted)">Strona odświeża się sama — możesz też ją zamknąć, przenoszenie i tak się dokończy.</div>
+      </div>
+    {% elif progress.stalled %}
+      <div style="background:#f59e0b1a;border:1px solid #f59e0b55;border-radius:8px;padding:9px 12px;margin-bottom:12px">
+        ⚠️ Poprzednie przenoszenie zostało przerwane (restart serwera) przy: {{ progress.current or '—' }} — przeniesiono {{ progress.done or 0 }}.
+        Kliknij „Przenieś teraz”, żeby dokończyć (wznowi się też samo w ciągu kilku minut).
       </div>
     {% elif progress.finished_at %}
       <div style="background:#22c55e1a;border:1px solid #22c55e55;color:var(--green);border-radius:8px;padding:9px 12px;margin-bottom:12px">
-        ✅ Gotowe: przeniesiono {{ progress.done }} leadów z polskiego CRM.
-        {% if progress.errors %}<br><span style="color:var(--red)">Problemy: {{ progress.errors[:5]|join('; ') }}</span>{% endif %}
+        ✅ Ostatnie przenoszenie ({{ progress.finished_at.replace('T', ' ') }} UTC): przeniesiono {{ progress.done or 0 }}{% if progress.total %} z {{ progress.total }}{% endif %}.
+      </div>
+    {% endif %}
+    {% if progress.errors %}
+      <div style="background:#ef44441a;border:1px solid #ef444455;border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12px">
+        <b style="color:var(--red)">Nie udało się przenieść ({{ progress.errors|length }}):</b>
+        <ul style="margin:6px 0 0 16px;padding:0">{% for e in progress.errors[:15] %}<li>{{ e }}</li>{% endfor %}</ul>
+        <div style="color:var(--muted);margin-top:4px">Skopiuj to i wyślij — poprawię.</div>
       </div>
     {% endif %}
     {% if not configured %}

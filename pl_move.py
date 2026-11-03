@@ -29,7 +29,9 @@ def engine():
         url = os.environ.get("PL_DATABASE_URL", "").strip()
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
-        _engine = create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=0)
+        _engine = create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=0, pool_recycle=300,
+                                connect_args={"connect_timeout": 15, "options": "-c statement_timeout=120000"}
+                                if url.startswith("postgresql") else {})
     return _engine
 
 
@@ -107,6 +109,12 @@ def _copy_lead(conn, meta, db, M, row, actor_id):
         db.session.add(M["Journey"](**dict(_cols(M["Journey"], r), lead_id=lead.id)))
     mail_ids = {}
     for r in rows("journey_mails"):
+        same = M["JourneyMail"].query.filter_by(message_key=r.get("message_key")).first() if r.get("message_key") else None
+        if same is not None:  # ten mail CRM LT już zna (np. przeczytał go ze swojej skrzynki) — tylko przypnij do leada
+            if same.lead_id is None:
+                same.lead_id = lead.id
+            mail_ids[r["id"]] = same.id
+            continue
         jm = M["JourneyMail"](**dict(_cols(M["JourneyMail"], r), lead_id=lead.id))
         db.session.add(jm)
         db.session.flush()
@@ -158,15 +166,21 @@ def _delete_in_pl(conn, meta, pl_id, clickup_task_id):
             conn.execute(insert(t["app_settings"]).values(key=key, value="przeniesiony do LT CRM"))
 
 
-def move_all(eng, db, M, actor_id, limit=200, progress=None):
-    """Przenosi litewskie leady z PL. Zwraca (liczba przeniesionych, lista problemów)."""
+def move_all(eng, db, M, actor_id, limit=200, progress=None, on_step=None):
+    """Przenosi litewskie leady z PL. Zwraca (liczba przeniesionych, lista problemów).
+    on_step(stan) jest wołane przed i po każdym leadzie — zapisuje postęp, żeby było go widać po restarcie."""
     meta = _meta(eng)
     found = find_lithuanian(eng, meta)[:limit]
-    if progress is not None:
-        progress.update(total=len(found), done=0)
-    moved, errors = 0, []
+    state = progress if progress is not None else {}
+    state.update(total=len(found), done=0, current="", errors=[])
+    if on_step:
+        on_step(state)
+    moved, errors = 0, state["errors"]
     for row, _places in found:
         pl_id = row["id"]
+        state["current"] = f"#{pl_id} {row.get('company') or ''}"[:120]
+        if on_step:
+            on_step(state)
         try:
             existing = M["Lead"].query.filter_by(pl_id=pl_id).first()
             if existing is None:
@@ -176,9 +190,11 @@ def move_all(eng, db, M, actor_id, limit=200, progress=None):
             with eng.begin() as conn:  # …dopiero potem usunięte w PL
                 _delete_in_pl(conn, meta, pl_id, row.get("clickup_task_id"))
             moved += 1
-            if progress is not None:
-                progress["done"] = moved
+            state["done"] = moved
         except Exception as e:
             db.session.rollback()
-            errors.append(f"#{pl_id} {row.get('company')}: {type(e).__name__}: {str(e)[:120]}")
+            errors.append(f"#{pl_id} {row.get('company')}: {type(e).__name__}: {str(e).splitlines()[0][:160]}")
+    state["current"] = ""
+    if on_step:
+        on_step(state)
     return moved, errors

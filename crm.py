@@ -8109,31 +8109,58 @@ def pl_pending_count(max_age=300):
     return _pl_count_cache["n"]
 
 
-PL_MOVE_PROGRESS = {"running": False, "done": 0, "total": 0, "errors": [], "finished_at": None}
+PL_MOVE_STATE_KEY = "pl_move_state"  # postęp w bazie: widać go po restarcie i z każdego procesu
+
+
+def pl_move_state():
+    try:
+        st = json.loads(get_setting(PL_MOVE_STATE_KEY) or "{}")
+    except ValueError:
+        st = {}
+    beat = st.get("heartbeat")
+    try:
+        alive = bool(beat) and datetime.utcnow() - datetime.fromisoformat(beat) < timedelta(minutes=3)
+    except ValueError:
+        alive = False
+    st["running"] = bool(st.get("running")) and alive
+    st["stalled"] = bool(st.get("running_flag")) and not alive and not st.get("finished_at")
+    return st
+
+
+def _save_move_state(state, **extra):
+    st = dict(state, **extra, heartbeat=datetime.utcnow().isoformat(timespec="seconds"))
+    st["running_flag"] = st.get("running", False)
+    try:
+        set_setting(PL_MOVE_STATE_KEY, json.dumps(st, ensure_ascii=False, default=str)[:20000])
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 def run_pl_move(actor_id=None):
     """Przenosi teraz wszystkie litewskie leady z PL. Zwraca (przeniesione, błędy)."""
     if not _pl_move_lock.acquire(blocking=False):
         return 0, ["przenoszenie już trwa"]
-    PL_MOVE_PROGRESS.update(running=True, done=0, total=0, errors=[], finished_at=None)
+    state = {"running": True, "started_at": datetime.utcnow().isoformat(timespec="seconds"), "finished_at": None}
     try:
+        _save_move_state(state)
         moved, errors = pl_move.move_all(pl_move.engine(), db, {
             "Lead": Lead, "LeadEventDate": LeadEventDate, "Activity": Activity, "ActivityComment": ActivityComment,
             "StageHistory": StageHistory, "Crew": Crew, "Journey": Journey, "JourneyMail": JourneyMail,
             "JourneyDocument": JourneyDocument, "ContractRequest": ContractRequest, "SentOffer": SentOffer,
             "InboxMessage": InboxMessage,
-        }, actor_id or USERS[0]["id"], progress=PL_MOVE_PROGRESS)
-        PL_MOVE_PROGRESS["errors"] = errors
+        }, actor_id or USERS[0]["id"], progress=state, on_step=lambda s: _save_move_state(s, running=True))
         set_setting(PL_MOVE_LAST_KEY, f"{datetime.utcnow().isoformat(timespec='seconds')}|{moved}|{'; '.join(errors)[:500]}")
         db.session.commit()
         _pl_count_cache["at"] = 0.0
         return moved, errors
     except Exception as e:
-        PL_MOVE_PROGRESS["errors"] = [f"{type(e).__name__}: {str(e)[:200]}"]
-        raise
+        db.session.rollback()
+        state.setdefault("errors", []).append(f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}")
+        app.logger.exception("pl_move")
+        return state.get("done", 0), state["errors"]
     finally:
-        PL_MOVE_PROGRESS.update(running=False, finished_at=datetime.utcnow())
+        _save_move_state(state, running=False, current="", finished_at=datetime.utcnow().isoformat(timespec="seconds"))
         _pl_move_lock.release()
 
 
@@ -8141,8 +8168,6 @@ def _pl_move_background(actor_id):
     with app.app_context():
         try:
             run_pl_move(actor_id)
-        except Exception:
-            app.logger.exception("pl_move")
         finally:
             db.session.remove()
 
@@ -8153,20 +8178,22 @@ def crm_pl_move():
         # od teraz nowe litewskie leady przenoszą się same; samo przenoszenie idzie w tle (może trwać kilka minut)
         set_setting(PL_MOVE_AUTO_KEY, "1")
         db.session.commit()
-        if not PL_MOVE_PROGRESS["running"]:
+        if not pl_move_state().get("running"):
             threading.Thread(target=_pl_move_background, args=(get_current_user(request)["id"],), daemon=True).start()
+            time.sleep(1.5)
         return redirect(url_for("crm_pl_move"))
-    running = PL_MOVE_PROGRESS["running"]
+    st = pl_move_state()
+    running = st.get("running")
     last = (get_setting(PL_MOVE_LAST_KEY) or "").split("|", 2)
     return render_template("crm/pl_move.html", configured=pl_move_configured(),
                            count=None if running else pl_pending_count(max_age=0),
-                           error="" if running else _pl_count_cache["err"], running=running, progress=PL_MOVE_PROGRESS,
+                           error="" if running else _pl_count_cache["err"], running=running, progress=st,
                            auto=get_setting(PL_MOVE_AUTO_KEY) == "1", last=last if len(last) == 3 else None,
                            moved_total=Lead.query.filter(Lead.pl_id.isnot(None)).count())
 
 
 def _pl_move_scheduler():
-    time.sleep(90)
+    time.sleep(30)
     while True:
         try:
             with app.app_context():
