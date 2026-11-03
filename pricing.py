@@ -109,8 +109,17 @@ def quote(hours, km_one_way, night=0.0, days=1):
         "nights": nights, "lodging": lodging, "raise_by": raise_by, "subtotal": subtotal,
         "discount_pct": pct, "discount": discount, "total": total,
         "travel_share": trip / subtotal if subtotal else 0.0,
-        "rounded": int(math.ceil(total / ROUND_TO) * ROUND_TO),
+        "rounded": round_price(total),
     }
+
+
+ROUND_UP_FROM = int(_env_num("CALC_ROUND_UP_FROM", 25))  # reszta od tylu € w górę -> następna setka
+
+
+def round_price(total):
+    """Cena do oferty: pełne setki, od 25 € w górę — 2024 → 2000, 2125 → 2200."""
+    base = int(total // 100) * 100
+    return base + 100 if total - base >= ROUND_UP_FROM else base
 
 
 def fmt_num(value):

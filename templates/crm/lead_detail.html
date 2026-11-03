@@ -171,6 +171,60 @@
         {% else %}<div style="color:var(--yellow);margin-top:6px">Skrzynka 33bots.lt niepodpięta (SMTP_PASS_LT w Railway).</div>{% endif %}
       </div>
     </div>
+
+    {% set lq = lt_quote(lead) %}
+    <div class="panel" id="lt-price">
+      <div class="panel-header">💶 Cena i wiadomość na WhatsApp / Viber</div>
+      <div class="panel-body" style="font-size:12.5px">
+        {% if lq.price %}
+          <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+            <span style="font-size:24px;font-weight:800;color:var(--green)">{{ '{:,}'.format(lq.price).replace(',', ' ') }} €</span>
+            <span style="color:var(--muted)">netto · dokładnie {{ '{:,}'.format(lq.exact).replace(',', ' ') }} €</span>
+          </div>
+          <div style="color:var(--muted);margin:4px 0 8px">
+            🕒 {{ lq.time }} ({{ (lq.duration|round(1)|string).replace('.0', '') }} h → pakiet {{ lq.hours }} h){% if lq.when %} · 📅 {{ lq.when }}{% endif %}
+            · 📍 {{ lq.place }} (≈{{ lq.km }} km od granicy){% if lq.days > 1 %} · {{ lq.days }} dni{% endif %}
+          </div>
+          {% if lq.over8 %}<div style="color:var(--yellow);margin-bottom:6px">⚠️ Ponad 8 h — policzone jak 8 h, sprawdź w kalkulatorze.</div>{% endif %}
+          <details style="margin-bottom:8px"><summary style="cursor:pointer;color:var(--accent)">Rozbicie ceny</summary>
+            <div style="white-space:pre-wrap;color:var(--muted);margin-top:4px">{{ lq.breakdown }}</div></details>
+          <textarea id="lt-msg" rows="9" style="width:100%;font-size:12.5px;line-height:1.45">{{ lq.message }}</textarea>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="ltMsg('copy')">📋 Kopiuj</button>
+            {% if lq.whatsapp %}<button type="button" class="btn btn-sm" style="background:#25D366;color:#06210f;font-weight:700" onclick="ltMsg('whatsapp')">WhatsApp</button>{% endif %}
+            {% if lq.viber %}<button type="button" class="btn btn-sm" style="background:#7360F2;color:#fff;font-weight:700" onclick="ltMsg('viber')">Viber</button>{% endif %}
+            {% if not lead.value_pln or lead.value_pln|int != lq.price %}
+            <form method="post" action="{{ url_for('crm_lt_set_price', lead_id=lead.id) }}" style="display:inline">
+              <button class="btn btn-secondary btn-sm">💾 Ustaw {{ lq.price }} € jako wartość leada</button>
+            </form>
+            {% endif %}
+            <a class="btn btn-ghost btn-sm" href="{{ lq.calc_url }}">🧮 Kalkulator</a>
+          </div>
+          <div id="lt-msg-info" style="color:var(--muted);margin-top:6px">
+            {% if not lq.whatsapp %}Brak poprawnego numeru telefonu — skopiuj wiadomość i wyślij ręcznie.{% else %}WhatsApp otworzy się z gotową wiadomością. Viber otworzy czat z klientem — wiadomość jest już skopiowana, wystarczy wkleić.{% endif %}
+          </div>
+          <script>
+          function ltMsg(kind) {
+            const text = document.getElementById('lt-msg').value;
+            const done = () => {
+              const info = document.getElementById('lt-msg-info');
+              if (kind === 'copy') { info.textContent = '✅ Skopiowano'; return; }
+              const fd = new FormData(); fd.append('channel', kind); fd.append('text', text);
+              fetch('{{ url_for('crm_lt_message_sent', lead_id=lead.id) }}', {method: 'POST', body: fd});
+              info.textContent = '✅ Zapisano w komentarzach leada' + (kind === 'viber' ? ' — wklej wiadomość w Viberze' : '');
+            };
+            (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).catch(() => {}).finally(done);
+            if (kind === 'whatsapp') window.open('https://wa.me/{{ lq.whatsapp.split('wa.me/')[1].split('?')[0] if lq.whatsapp else '' }}?text=' + encodeURIComponent(text), '_blank');
+            if (kind === 'viber') window.location.href = {{ lq.viber|tojson }};
+          }
+          </script>
+        {% else %}
+          <div style="color:var(--muted)">Cena pojawi się, gdy będą znane: {{ lq.missing|join(', ') }}.
+            {% if not lead.form_filled_at %}Klient jeszcze nie wypełnił formularza.{% endif %}</div>
+          <a class="btn btn-ghost btn-sm" style="margin-top:6px" href="{{ url_for('crm_calculator', lead=lead.id) }}">🧮 Policz w kalkulatorze</a>
+        {% endif %}
+      </div>
+    </div>
     {% endif %}
 
     <!-- Info -->

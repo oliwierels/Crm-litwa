@@ -105,7 +105,14 @@ CITIES = {
     "ostrawa": (49.8209, 18.2625), "ostrava": (49.8209, 18.2625), "berlin": (52.5200, 13.4050),
     "drezno": (51.0504, 13.7373), "dresden": (51.0504, 13.7373), "lipsk": (51.3397, 12.3731),
     "leipzig": (51.3397, 12.3731), "wilno": (54.6872, 25.2797), "vilnius": (54.6872, 25.2797),
-    "kowno": (54.8985, 23.9036), "kaunas": (54.8985, 23.9036), "bratyslawa": (48.1486, 17.1077),
+    "kowno": (54.8985, 23.9036), "kaunas": (54.8985, 23.9036),
+    "klaipeda": (55.7033, 21.1443), "siauliai": (55.9349, 23.3137), "panevezys": (55.7348, 24.3575),
+    "alytus": (54.3963, 24.0459), "marijampole": (54.5593, 23.3541), "palanga": (55.9175, 21.0686),
+    "druskininkai": (54.0167, 23.9667), "utena": (55.4979, 25.5992), "jonava": (55.0833, 24.2833),
+    "kedainiai": (55.2883, 23.9744), "telsiai": (55.9814, 22.2472), "taurage": (55.2522, 22.2897),
+    "mazeikiai": (56.3092, 22.3414), "visaginas": (55.5967, 26.4369), "trakai": (54.6378, 24.9347),
+    "skuodas": (56.2667, 21.5333), "plunge": (55.9111, 21.8442), "kretinga": (55.8892, 21.2425),
+    "birzai": (56.2000, 24.7500), "rokiskis": (55.9616, 25.5807), "elektrenai": (54.7853, 24.6614), "bratyslawa": (48.1486, 17.1077),
     "bratislava": (48.1486, 17.1077), "wieden": (48.2082, 16.3738), "wien": (48.2082, 16.3738),
     "bukareszt": (44.4268, 26.1025), "bucharest": (44.4268, 26.1025), "bucuresti": (44.4268, 26.1025),
     "budapeszt": (47.4979, 19.0402), "budapest": (47.4979, 19.0402), "ryga": (56.9496, 24.1052),
@@ -173,6 +180,12 @@ CITY_NAMES = {
 
 # skróty i formy spotykane w CRM
 CITY_ALIASES = {
+    "vilniaus": "vilnius", "vilniuje": "vilnius", "kauno": "kaunas", "kaune": "kaunas", "klaipedos": "klaipeda",
+    "klaipedoje": "klaipeda", "siauliu": "siauliai", "siauliuose": "siauliai", "panevezio": "panevezys",
+    "alytaus": "alytus", "marijampoles": "marijampole", "palangos": "palanga", "palangoje": "palanga",
+    "druskininku": "druskininkai", "utenos": "utena", "jonavos": "jonava", "kedainiu": "kedainiai",
+    "telsiu": "telsiai", "taurages": "taurage", "mazeikiu": "mazeikiai", "traku": "trakai", "skuodo": "skuodas",
+    "plunges": "plunge", "kretingos": "kretinga", "birzu": "birzai", "rokiskio": "rokiskis", "elektrenu": "elektrenai",
     "wwa": "warszawa", "waw": "warszawa", "warsaw": "warszawa", "lodzi": "lodz",
     "trojmiasto": "gdansk", "3miasto": "gdansk", "krk": "krakow", "cracow": "krakow",
     "wroc": "wroclaw", "poz": "poznan", "bb": "bielsko biala",

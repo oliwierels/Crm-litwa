@@ -7736,6 +7736,129 @@ if os.environ.get("SMTP_PASS_LT"):
 app.jinja_env.globals.update(is_lithuanian=is_lithuanian, lt_mailbox_ready=lt_mailbox_ready, lt_backlog=lt_backlog)
 
 
+# ---------- CENA Z FORMULARZA + GOTOWA WIADOMOŚĆ NA WHATSAPP / VIBER ----------
+# Z formularza LT znamy godziny („Godziny: 14:00–18:00” w notatce), miejsce i dni. Z tego kalkulator liczy cenę
+# (pakiet 2 / 4 / 8 h, km od granicy, nocleg), zaokrągloną do pełnych setek (od 25 € w górę), a CRM składa
+# gotową wiadomość po litewsku do skopiowania albo otwarcia w WhatsApp / Viber.
+_LT_FORM_HOURS = re.compile(r"Godziny:\s*(\d{1,2}(?:[:.]\d{2})?)\s*[–-]\s*(\d{1,2}(?:[:.]\d{2})?)")
+
+
+def lt_form_hours(lead):
+    """(start, koniec, długość w h) z ostatniego wpisu „Godziny:” z formularza albo None."""
+    texts = [lead.notes or ""] + [a.notes or "" for a in sorted(lead.activities, key=lambda a: a.created_at or datetime.min,
+                                                                reverse=True)]
+    for text in texts:
+        found = _LT_FORM_HOURS.findall(text)
+        if found:
+            a, b = (pricing.parse_start(x) for x in found[-1])
+            if a is None or b is None:
+                continue
+            dur = (b - a) % 24 or 24
+            return a, b, dur
+    return None
+
+
+def lt_phone_digits(phone):
+    """'+370 612 34567' / '861234567' / '61234567' -> '37061234567' (do linków wa.me / viber)."""
+    d = re.sub(r"\D", "", phone or "")
+    if d.startswith("00"):
+        d = d[2:]
+    if d.startswith("86") and len(d) == 9:  # numer komórkowy w zapisie krajowym (8 6xx xxxxx)
+        d = "370" + d[1:]
+    elif d.startswith("6") and len(d) == 8:
+        d = "370" + d
+    return d if len(d) >= 10 else ""
+
+
+def _lt_dates_text(lead):
+    days = sorted(d.event_date for d in lead.event_days)
+    if not days:
+        return ""
+    if len(days) == 1:
+        return f"{days[0]:%Y-%m-%d}"
+    if all((b - a).days == 1 for a, b in zip(days, days[1:])):
+        return f"{days[0]:%Y-%m-%d}–{days[-1]:%m-%d}"
+    return ", ".join(f"{d:%Y-%m-%d}" for d in days)
+
+
+def lt_quote(lead, remote_budget=1):
+    """Cena dla leada z formularza: dict z ceną, rozbiciem i wiadomością albo {'missing': [...]}."""
+    place = _lead_place(lead)
+    hrs = lt_form_hours(lead)
+    missing = [x for x, ok in (("godzin", hrs), ("miejsca", place)) if not ok]
+    if missing:
+        return {"missing": missing}
+    start, end, dur = hrs
+    tier = next((h for h in sorted(pricing.HOUR_FACTORS) if dur <= h), max(pricing.HOUR_FACTORS))
+    days = max(1, min(len(lead.event_days) or 1, pricing.MAX_DAYS))
+    res = price_quotes(place, tier, None, remote_budget=remote_budget, night=pricing.night_hours(start, tier), days=days)
+    opt = next(iter(res["options"].values()), None)
+    if not opt:
+        return {"missing": [f"km do „{place}” (wpisz w kalkulatorze)"], "place": place}
+    q = opt["quote"]
+    price = pricing.round_price(q["total"])
+    time_txt = f"{pricing.fmt_hour(start)}–{pricing.fmt_hour(end)}"
+    price_txt = f"{price:,}".replace(",", " ")
+    owner = USERS_BY_ID.get(lead.assigned_to) or USERS[0]
+    when = _lt_dates_text(lead)
+    lines = [
+        "Laba diena!",
+        "",
+        "Dėkojame, kad užpildėte formą. Humanoidinio roboto Unitree G1 nuoma jūsų renginiui"
+        + (f" {when}" if when else "") + f" ({time_txt}, {place}) kainuotų {price_txt} € be PVM.",
+        "",
+        "Į kainą įskaičiuota: atvykimas, asmeninis operatorius, roboto pritaikymas jūsų renginiui "
+        "ir techninė pagalba vietoje.",
+        "",
+        "Ar rezervuojame šią datą? Mielai atsakysiu į klausimus.",
+        "",
+        f"{owner.get('full_name') or owner['name']}, 33bots",
+    ]
+    message = "\n".join(lines)
+    digits = lt_phone_digits(lead.contact_phone)
+    from urllib.parse import quote as _q
+    return {
+        "price": price, "exact": q["total"], "hours": tier, "duration": dur, "time": time_txt, "place": place,
+        "km": int(round(opt["km"])), "days": days, "when": when, "over8": dur > max(pricing.HOUR_FACTORS),
+        "breakdown": pricing.describe(q, opt["label"], res["place"] or place), "message": message,
+        "whatsapp": f"https://wa.me/{digits}?text={_q(message)}" if digits else "",
+        "viber": f"viber://chat?number=%2B{digits}" if digits else "",
+        "calc_url": url_for("crm_calculator", lead=lead.id, cel=place, h=tier, od=pricing.fmt_hour(start), dni=days),
+    }
+
+
+@app.route("/crm/leads/<int:lead_id>/lt-cena", methods=["POST"])
+def crm_lt_set_price(lead_id):
+    """Ustawia wartość leada na cenę z formularza i zapisuje rozbicie w komentarzu."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    q = lt_quote(lead, remote_budget=2)
+    if q.get("price"):
+        lead.value_pln, lead.currency = float(q["price"]), "EUR"
+        db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(),
+                                assigned_to=get_current_user(request)["id"],
+                                notes=f"🧮 {q['breakdown']}\nWartość leada ustawiona na {q['price']} € netto "
+                                      f"(pełne setki, od 25 € w górę)."))
+        db.session.commit()
+    return redirect(url_for("crm_lead_detail", lead_id=lead.id))
+
+
+@app.route("/crm/leads/<int:lead_id>/lt-wiadomosc", methods=["POST"])
+def crm_lt_message_sent(lead_id):
+    """Zapisuje w leadzie, że wiadomość z ceną poszła na WhatsApp / Viber (ręcznie z telefonu)."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    channel = "WhatsApp" if request.form.get("channel") == "whatsapp" else "Viber"
+    text = (request.form.get("text") or "").strip()[:3000]
+    now = datetime.utcnow()
+    db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=now,
+                            assigned_to=get_current_user(request)["id"],
+                            notes=f"💬 Wiadomość z ceną wysłana na {channel}\n---\n{text}"))
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+app.jinja_env.globals.update(lt_quote=lt_quote)
+
+
 # ---------- PRZENIESIENIE LITEWSKICH LEADÓW Z POLSKIEGO CRM ----------
 # W Railway: PL_DATABASE_URL = adres bazy polskiego CRM (Add Reference → Postgres z projektu PL).
 # Przycisk „Przenieś” kopiuje litewskie leady razem z zadaniami, komentarzami, historią etapów, ofertami,

@@ -95,7 +95,7 @@
         {% set q = opt.quote %}
         <div class="kc-sub">{{ opt.label }} → {{ result.place }} · ≈{{ q.km }} km w jedną stronę · {{ q.hours }} h na miejscu{% if start is not none %} ({{ start_text }}–{{ end_text }}){% endif %}{% if q.days > 1 %} · <b style="color:var(--text)">{{ q.days }} dni</b>{% endif %}</div>
         <div class="kc-total">{{ fmt_zl(q.total) }} <span style="font-size:14px;font-weight:600;color:var(--muted)">netto</span></div>
-        <div class="kc-sub">do oferty (w górę do {{ cfg.round }} €): <b style="color:var(--text)">{{ fmt_zl(q.rounded) }}</b></div>
+        <div class="kc-sub">do oferty (pełne setki, od 25 € w górę): <b style="color:var(--text)">{{ fmt_zl(q.rounded) }}</b></div>
         {% if q.raise_by %}
         <div class="kc-warn">⚠️ Dojazd{{ ' z noclegiem' if q.lodging }} wychodził ponad {{ cfg.share }}% ceny — cena podniesiona o {{ fmt_zl(q.raise_by) }}, żeby był {{ cfg.share }}%.</div>
         {% endif %}
