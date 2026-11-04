@@ -3279,6 +3279,14 @@ def _sales_helpers():
             "callback_ask": callback_ask_due()}
 
 
+@app.route("/crm/wersja")
+def crm_version():
+    """Która wersja kodu działa na serwerze (commit z Railway) — do sprawdzenia, czy wdrożenie weszło."""
+    sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")
+    return jsonify({"commit": sha[:7] or "nieznany", "branch": os.environ.get("RAILWAY_GIT_BRANCH", ""),
+                    "deployment": os.environ.get("RAILWAY_DEPLOYMENT_ID", "")})
+
+
 @app.route("/crm/skutecznosc", methods=["GET", "POST"])
 def crm_sales_panel():
     if request.method == "POST":
