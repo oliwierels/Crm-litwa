@@ -114,6 +114,13 @@
   const baseTitle = document.title.replace(/^\(\d+\)\s*🚨\s*/, '');
   function setTitle() { document.title = count ? '(' + count + ') 🚨 ' + baseTitle : baseTitle; }
   setTitle();
+  // link z okna (otwórz maila / leada / odpowiedz) — okno nie zasłania tej strony przez 15 minut, żeby dało się działać
+  document.querySelectorAll('#al-overlay a[href]').forEach(function (el) {
+    el.addEventListener('click', function () {
+      const until = Date.now() / 1000 + 15 * 60;
+      document.cookie = '{{ "alert_snooze" }}=' + until + '; max-age=900; path=/; samesite=lax';
+    });
+  });
   window.alOpen = function () { const o = document.getElementById('al-overlay'); if (o) { o.hidden = false; o.scrollTop = 0; } };
   function gone(sel) {
     const row = document.querySelector(sel); if (row) row.remove();

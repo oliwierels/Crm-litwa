@@ -59,6 +59,19 @@
     </div>
   </div>
 
+  <div class="mc-ai" style="background:color-mix(in srgb, var(--green) 7%, var(--panel));border-color:color-mix(in srgb, var(--green) 35%, var(--border))">
+    <div class="mc-ai-head">📄 Oferta PDF do tego maila
+      <span class="mc-status">— Claude przygotuje PDF {{ lang_names.get(target_lang, target_lang) }} (ten sam wygląd co oferty z CRM), a CRM doda go jako załącznik</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <label style="font-size:12px;color:var(--muted)">Cena netto</label>
+      <input type="text" id="mc-of-price" value="{{ offer_price }}" placeholder="np. 2 100 €" style="width:130px">
+      <input type="text" id="mc-of-instr" placeholder="Co ma być w ofercie (opcjonalnie), np. 4 h w strefie VIP, powitanie gości" style="flex:1;min-width:240px">
+      <button type="button" class="btn btn-primary btn-sm" id="mc-of-btn" onclick="mcOffer()">📄 Wygeneruj ofertę PDF</button>
+    </div>
+    <input type="hidden" name="offer_id" id="mc-of-id" value="">
+    <div class="mc-status" id="mc-of-out" style="margin-top:6px;color:var(--text)"></div>
+  </div>
+
   <div class="mc-grid">
     <div class="mc-col">
       <h4>🇵🇱 Piszesz po polsku</h4>
@@ -133,6 +146,7 @@ async function mcGenerate() {
   fd.append('reply', '{{ reply.id if reply else (fwd.id if fwd else '') }}'); fd.append('lead', '{{ lead.id if lead else '' }}');
   fd.append('to', document.querySelector('input[name=to]').value);
   fd.append('draft_pl', document.getElementById('mc-body').value); fd.append('draft_out', document.getElementById('mc-body-out').value);
+  if (document.getElementById('mc-of-id').value) fd.append('offer', MC_OFFER_PRICE || '');
   try {
     const start = await (await fetch('{{ url_for('crm_mail_ai_draft') }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})).json();
     if (start.error) throw new Error(start.error);
@@ -161,6 +175,41 @@ async function mcGenerate() {
 }
 {% if ai_auto and ai_instruction %}window.addEventListener('load', () => mcGenerate());{% endif %}
 document.getElementById('mc-ai-instr').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); mcGenerate(); } });
+let MC_OFFER_PRICE = '';
+async function mcOffer() {
+  const btn = document.getElementById('mc-of-btn'), out = document.getElementById('mc-of-out');
+  if (btn.disabled) return;
+  if (!MC_AI) { out.textContent = '⚠️ Brak ANTHROPIC_API_KEY w Railway.'; return; }
+  btn.disabled = true; out.textContent = '⏳ Claude przygotowuje ofertę PDF… (zwykle 15–40 s)';
+  const fd = new FormData();
+  fd.append('price', document.getElementById('mc-of-price').value); fd.append('instruction', document.getElementById('mc-of-instr').value);
+  fd.append('reply', '{{ reply.id if reply else (fwd.id if fwd else '') }}'); fd.append('lead', '{{ lead.id if lead else '' }}');
+  fd.append('from', document.getElementById('mc-from').value);
+  try {
+    const start = await (await fetch('{{ url_for('crm_mail_offer_pdf') }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})).json();
+    if (start.error) throw new Error(start.error);
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const job = await (await fetch(start.poll, {headers: {'X-Requested-With': 'fetch'}})).json();
+      if (job.status === 'pending') continue;
+      if (job.status === 'error' || !job.offer) throw new Error(job.error || 'oferta się nie wygenerowała');
+      const o = job.offer;
+      MC_OFFER_PRICE = o.price;
+      document.getElementById('mc-of-id').value = o.id;
+      out.innerHTML = '';
+      const a = document.createElement('a'); a.href = o.url; a.target = '_blank'; a.textContent = '📎 ' + o.filename; a.style.color = 'var(--accent)';
+      const x = document.createElement('a'); x.href = '#'; x.textContent = ' ✕ usuń'; x.style.color = 'var(--muted)';
+      x.onclick = (e) => { e.preventDefault(); document.getElementById('mc-of-id').value = ''; MC_OFFER_PRICE = ''; out.textContent = 'Oferta usunięta z maila.'; };
+      out.append(a, document.createTextNode(' (' + o.price + ' netto) — dołączy się do maila. '), x);
+      return;
+    }
+    throw new Error('nie zdążyło w 3 minuty — spróbuj jeszcze raz.');
+  } catch (e) {
+    out.textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
 function mcBack() {
   const fd = new FormData();
   fd.append('subject', document.getElementById('mc-subj-out').value);
@@ -175,7 +224,7 @@ function mcSend(ev) {
   ev.preventDefault();
   const btn = document.getElementById('mc-send'), msg = document.getElementById('mc-msg');
   if (!document.getElementById('mc-body-out').value.trim()) { msg.textContent = '⚠️ Brak treści w języku klienta — kliknij „Przetłumacz”.'; return false; }
-  if (!confirm('Wysłać mail do: ' + document.querySelector('input[name=to]').value + '?')) return false;
+  if (!confirm('Wysłać mail do: ' + document.querySelector('input[name=to]').value + (document.getElementById('mc-of-id').value ? ' (z ofertą PDF)' : '') + '?')) return false;
   btn.disabled = true; msg.textContent = 'Wysyłam…';
   fetch('{{ url_for('crm_mail_compose') }}', {method: 'POST', body: new FormData(document.getElementById('mc-form')), headers: {'X-Requested-With': 'fetch'}})
     .then(r => r.json()).then(d => {

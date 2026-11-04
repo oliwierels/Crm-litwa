@@ -1089,7 +1089,7 @@ def inject_globals():
         "event_date_min": f"{MIN_EVENT_YEAR}-01-01",
         "event_date_max": f"{date.today().year + 15}-12-31",
         "clickup_pending_count": Lead.query.filter_by(clickup_pending=True).count(),
-        "offer_drafts_count": SentOffer.query.filter(SentOffer.sent_at.is_(None)).count(),
+        "offer_drafts_count": SentOffer.query.filter(SentOffer.sent_at.is_(None), _not_compose_offer()).count(),
         "ai_ready": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
         "campaigns_running": Campaign.query.filter_by(status="trwa").count(),
         "crm_locked": bool(crm_password()),
@@ -3697,7 +3697,7 @@ def _pdf_response(pdf_bytes, filename):
 
 @app.route("/crm/oferty")
 def crm_offers():
-    drafts = SentOffer.query.filter(SentOffer.sent_at.is_(None)).order_by(SentOffer.created_at.desc()).all()
+    drafts = SentOffer.query.filter(SentOffer.sent_at.is_(None), _not_compose_offer()).order_by(SentOffer.created_at.desc()).all()
     sent = SentOffer.query.filter(SentOffer.sent_at.isnot(None)).order_by(SentOffer.sent_at.desc()).limit(50).all()
     return render_template("crm/offers.html", drafts=drafts, sent=sent)
 
@@ -6029,6 +6029,11 @@ def offer_value(offer):
         return None, None
 
 
+def _not_compose_offer():
+    """Szkic oferty z okna pisania maila (czeka na „Wyślij” razem z mailem) — nie pokazujemy go w „Ofertach”."""
+    return db.or_(SentOffer.data.is_(None), db.not_(SentOffer.data.like('%"compose": true%')))
+
+
 def deliver_offer(offer, actor):
     """Wysyła szkic oferty (mail + PDF) ze skrzynki nadawcy i aktualizuje leada.
     Zwraca (błąd albo None, ostrzeżenie albo None, lista zmian w leadzie)."""
@@ -7494,7 +7499,7 @@ def crm_job(jid):
     if not job:
         abort(404)
     if request.args.get("format") == "json":
-        return jsonify({k: v for k, v in job.items() if k in ("status", "url", "info", "error", "lead_ids", "draft")})
+        return jsonify({k: v for k, v in job.items() if k in ("status", "url", "info", "error", "lead_ids", "draft", "offer")})
     return render_template("crm/job.html", jid=jid, job=job)
 
 
@@ -9621,7 +9626,7 @@ def _mail_draft_context(code, reply_id=None, lead_id=None, pasted="", to=""):
 
 
 def mail_ai_draft(code, instruction, pasted="", reply_id=None, lead_id=None, to="", writer_id=None,
-                  draft_pl="", draft_out="", is_reply=False):
+                  draft_pl="", draft_out="", is_reply=False, offer_price=""):
     """Claude pisze maila: polska wersja + ta sama treść w języku rynku (lt/de). Zadanie w tle — zwraca {'draft': …}."""
     m = markets.get(code)
     writer = USERS_BY_ID.get(writer_id) or USERS[0]
@@ -9650,7 +9655,9 @@ def mail_ai_draft(code, instruction, pasted="", reply_id=None, lead_id=None, to=
             + (ctx + "\n\n" if ctx else "")
             + (f"OBECNY SZKIC (popraw go zgodnie z poleceniem):\nPL: {draft_pl[:4000]}\n"
                f"{m['lang_name_pl']}: {draft_out[:4000]}\n\n" if (draft_pl.strip() or draft_out.strip()) else "")
-            + ("To odpowiedź w istniejącym wątku — temat zostaw jako „Re: …”." if is_reply else ""))
+            + ("To odpowiedź w istniejącym wątku — temat zostaw jako „Re: …”." if is_reply else "")
+            + (f"\nDo maila dołączona jest oferta PDF (cena {offer_price} netto) — napisz, że jest w załączniku, "
+               "i podaj tę cenę." if offer_price else ""))
     res = {}
     for attempt in range(2):
         res = _ai_forced_tool(MAIL_REPLY_AI_MODEL, system, task, MAIL_DRAFT_TOOL, max_tokens=4000)
@@ -9682,7 +9689,140 @@ def crm_mail_ai_draft():
         lead_id = None
     jid = _start_job("Claude pisze maila", mail_ai_draft, current_market(), instruction, pasted, reply_id, lead_id,
                      (f.get("to") or "")[:500], get_current_user(request)["id"], (f.get("draft_pl") or "")[:6000],
-                     (f.get("draft_out") or "")[:6000], bool(reply_id))
+                     (f.get("draft_out") or "")[:6000], bool(reply_id), (f.get("offer") or "")[:40])
+    return jsonify({"jid": jid, "poll": url_for("crm_job", jid=jid, format="json")})
+
+
+# --- oferta PDF z okna pisania maila ---
+COMPOSE_OFFER_TOOL = {
+    "name": "offer_pdf",
+    "description": "Treść oferty PDF (2 strony, firmowy wygląd 33Bots) dopasowana do wydarzenia klienta.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "client": {"type": "string", "description": "Oficjalna nazwa klienta (firma / instytucja), max 80 znaków"},
+            "subtitle": {"type": "string", "description": "1 zdanie pod tytułem okładki: czym robot będzie na tym wydarzeniu (max 200 znaków)"},
+            "cover": {"type": "array", "description": "3 pola okładki, np. data / miejsce / godziny",
+                      "items": {"type": "object", "properties": {
+                          "label": {"type": "string", "description": "max 20 znaków, WIELKIE LITERY"},
+                          "value": {"type": "string", "description": "max 32 znaki"}}, "required": ["label", "value"]}},
+            "intro": {"type": "string", "description": "Akapit strony 2 (max 330 znaków): co robot zrobi na tym wydarzeniu — "
+                                                       "wita gości, rozmawia na podstawie bazy wiedzy, tańczy, pozuje do zdjęć"},
+            "cards": {"type": "array", "description": "Dokładnie 2 karty: rola robota na wydarzeniu i przygotowanie",
+                      "items": {"type": "object", "properties": {
+                          "label": {"type": "string", "description": "max 22 znaki, WIELKIE LITERY"},
+                          "title": {"type": "string", "description": "max 30 znaków"},
+                          "items": {"type": "array", "items": {"type": "string"},
+                                    "description": "dokładnie 3 krótkie punkty, każdy max 55 znaków"}},
+                          "required": ["label", "title", "items"]}},
+            "price_title": {"type": "string", "description": "np. czas obecności robota (max 55 znaków)"},
+            "price_sub": {"type": "string", "description": "miejsce · data (max 85 znaków)"},
+        },
+        "required": ["client", "subtitle", "cover", "intro", "cards", "price_title", "price_sub"],
+    },
+}
+
+
+def _price_text(raw, currency="€"):
+    """'2100' / '2 100' / '2100 eur' → '2 100 €'; tekst z walutą zostaje."""
+    raw = (raw or "").strip()
+    digits = re.sub(r"[^\d]", "", raw)
+    if digits and re.fullmatch(r"[\d\s.,]*(eur|€|euro)?", raw.lower().replace(" ", "")):
+        return f"{int(digits):,}".replace(",", " ") + f" {currency}"
+    return raw[:20]
+
+
+def _compose_offer_sender(box_login, writer_id):
+    box = mail_box(box_login) or {}
+    owner = USERS_BY_ID.get(box.get("user_id")) or USERS_BY_ID.get(writer_id) or USERS[0]
+    return dict(owner, email=box.get("login") or owner.get("email") or "")
+
+
+def mail_offer_pdf(code, instruction, price, reply_id=None, lead_id=None, writer_id=None, box_login=""):
+    """Zadanie w tle: Claude przygotowuje treść oferty PDF w języku rynku; zapisuje szkic (SentOffer) do dołączenia."""
+    m = markets.get(code)
+    reply = db.session.get(MailMessage, reply_id) if reply_id else None
+    lead = db.session.get(Lead, lead_id) if lead_id else (mail_lead_for(reply) if reply else None)
+    sender = _compose_offer_sender(box_login, writer_id)
+    if not price and lead:
+        with app.test_request_context(base_url="http://localhost"):
+            q = lt_quote(lead, remote_budget=1)
+        price = str(q.get("price") or (int(lead.value_pln) if lead.value_pln else ""))
+    price = _price_text(price)
+    if not price:
+        return {"error": "Podaj cenę netto oferty (np. 2 100 €)."}
+    ctx = _mail_draft_context(code, reply.id if reply else None, lead.id if lead else None)
+    system = (m["ai_offer"] + "\nPrzygotowujesz TYLKO treść oferty PDF (mail pisze się osobno) — narzędziem offer_pdf. "
+              f"Wszystkie pola {m['lang_in_pl']}, nigdy po angielsku ani po polsku. Cena jest już ustalona: {price} netto "
+              "(nie wpisuj innych kwot). Trzymaj się limitów długości z opisu narzędzia — PDF ma stały układ. "
+              "Pisz konkretnie o TYM wydarzeniu klienta (miejsce, charakter, goście), bez wymyślania faktów.")
+    text = (f"POLECENIE: {instruction.strip() or 'Przygotuj ofertę na podstawie maila i danych z CRM.'}\n\n{ctx}")
+    data = None
+    note = ""
+    for attempt in range(3):
+        try:
+            args = _ai_forced_tool(OFFER_AI_MODEL, system, text + note, COMPOSE_OFFER_TOOL, max_tokens=3000)
+        except Exception as e:
+            note = ""
+            if attempt == 2:
+                app.logger.warning("mail_offer_pdf AI: %s", e)
+            continue
+        cards = [{"label": str(k.get("label") or "")[:24], "title": str(k.get("title") or "")[:32],
+                  "items": [str(i)[:90] for i in (k.get("items") or [])][:3]} for k in (args.get("cards") or [])[:2]]
+        joined = " ".join([str(args.get("subtitle") or ""), str(args.get("intro") or "")] +
+                          [k["title"] + " " + " ".join(k["items"]) for k in cards])
+        bad = wrong_language(code, joined)
+        if bad:
+            note = f"\n\nUWAGA: poprzednia wersja nie była {m['lang_in_pl']} (wykryto: {bad}). Napisz wszystko {m['lang_in_pl']}."
+            continue
+        offer_in = {"language": m["lang"], "client": str(args.get("client") or (lead.company if lead else "") or "33Bots")[:80],
+                    "headline": m["offer_pdf"]["headline"], "subtitle": str(args.get("subtitle") or "")[:220],
+                    "cover": [{"label": str(x.get("label") or "")[:22], "value": str(x.get("value") or "")[:34]}
+                              for x in (args.get("cover") or [])[:3] if isinstance(x, dict)] or
+                             [{"label": m["offer_pdf"]["cover"][0], "value": m["offer_pdf"]["soon"]}],
+                    "intro": str(args.get("intro") or "")[:600], "cards": cards,
+                    "price_title": str(args.get("price_title") or m["offer_pdf"]["price_title"])[:60],
+                    "price_sub": str(args.get("price_sub") or "")[:90], "price": price}
+        try:
+            data = offers.normalize(offer_in)
+            pdf = offers.render_offer_pdf(data, (sender.get("full_name") or sender.get("name") or "", sender["email"],
+                                                 sender.get("phone") or ""))
+            break
+        except offers.OfferError as e:
+            data = None
+            note = f"\n\nPOPRAWKA: PDF się nie zmieścił ({e}). Skróć intro i punkty kart."
+    if data is None:  # awaryjnie: stała treść rynku — oferta i tak musi się dać dołączyć
+        o = m["offer_pdf"]
+        offer_in = {"language": m["lang"], "client": ((lead.company if lead else "") or "33Bots")[:80],
+                    "headline": o["headline"], "subtitle": o["subtitle"],
+                    "cover": [{"label": o["cover"][0], "value": o["soon"]}], "intro": o["intro"],
+                    "cards": [{"label": a, "title": b, "items": i} for a, b, i in o["cards"]],
+                    "price_title": o["price_title"], "price_sub": "", "price": price}
+        data = offers.normalize(offer_in)
+        pdf = offers.render_offer_pdf(data, (sender.get("full_name") or sender.get("name") or "", sender["email"],
+                                             sender.get("phone") or ""))
+    offer = SentOffer(lead_id=lead.id if lead else None, filename=offers.offer_filename(data["client"]), pdf=pdf,
+                      data=json.dumps({"compose": True, "offer": offer_in}, ensure_ascii=False),
+                      price=data["price"], sender_id=sender.get("id"))
+    db.session.add(offer)
+    db.session.commit()
+    return {"offer": {"id": offer.id, "filename": offer.filename, "price": offer.price,
+                      "url": f"/crm/oferty/{offer.id}/{offer.filename}"}, "info": "gotowe"}
+
+
+@app.route("/crm/poczta/oferta", methods=["POST"])
+def crm_mail_offer_pdf():
+    """📄 w okienku pisania: oferta PDF do dołączenia (w tle)."""
+    if _ai_client() is None:
+        return jsonify({"error": "Brak ANTHROPIC_API_KEY w Railway."}), 400
+    f = request.form
+    reply_id, lead_id = f.get("reply", type=int), f.get("lead", type=int)
+    if reply_id and not db.session.get(MailMessage, reply_id):
+        reply_id = None
+    if lead_id and not db.session.get(Lead, lead_id):
+        lead_id = None
+    jid = _start_job("Claude przygotowuje ofertę PDF", mail_offer_pdf, current_market(), (f.get("instruction") or "")[:2000],
+                     (f.get("price") or "")[:30], reply_id, lead_id, get_current_user(request)["id"], (f.get("from") or "")[:200])
     return jsonify({"jid": jid, "poll": url_for("crm_job", jid=jid, format="json")})
 
 
@@ -9735,8 +9875,15 @@ def crm_mail_compose():
         from_box = (mine or (boxes[0] if boxes else {"login": ""}))["login"]
     task = db.session.get(MailTask, request.args.get("task", type=int) or 0)
     ai_instruction = (request.args.get("ai") or (task.reply_hint if task else "") or "")[:2000]
+    offer_price = ""
+    if lead:
+        try:
+            q = lt_quote(lead, remote_budget=1)
+            offer_price = _price_text(str(q.get("price") or (int(lead.value_pln) if lead.value_pln else "")))
+        except Exception:
+            db.session.rollback()
     return render_template(
-        "crm/poczta_nowa.html", boxes=boxes, from_box=from_box, to=to, cc=cc, subject=subject, subject_pl=subject_pl,
+        "crm/poczta_nowa.html", offer_price=offer_price, boxes=boxes, from_box=from_box, to=to, cc=cc, subject=subject, subject_pl=subject_pl,
         quoted=quoted, task=task, ai_instruction=ai_instruction, ai_auto=request.args.get("auto") == "1",
         reply=reply, fwd=fwd, lead=lead, target_lang=M()["lang"], lang_names=MAIL_LANG_NAMES,
         lang_flags=MAIL_LANG_FLAGS, signatures={b["login"]: mail_signature(b, user) for b in boxes}, ai_ok=bool(_ai_client()),
@@ -9773,6 +9920,9 @@ def _mail_send_from_form(boxes, user):
         if total > 15 * 1024 * 1024:
             return jsonify({"error": "Załączniki razem ponad 15 MB."}), 400
         files.append((journey.safe_filename(up.filename), data, up.mimetype or "application/octet-stream"))
+    offer = db.session.get(SentOffer, f.get("offer_id", type=int) or 0)
+    if offer and not offer.sent_at:
+        files.append((offer.filename, offer.pdf, "application/pdf"))
     reply = db.session.get(MailMessage, f.get("reply", type=int) or 0)
     headers = {}
     if reply and reply.message_id:
@@ -9805,6 +9955,23 @@ def _mail_send_from_form(boxes, user):
                                 notes=f"✉️ Mail z CRM do {', '.join(recipients)} (od: {box['login']})\nTemat: {subject}\n---\n"
                                       f"{body.split(chr(10) + chr(10) + '>')[0][:4000]}"
                                       + (f"\n---\n🇵🇱 {body_pl[:3000]}" if body_pl else "")))
+    if offer and not offer.sent_at:  # oferta PDF poszła z tym mailem — jak oferta z „Ofert”
+        offer.sent_at, offer.to_addr, offer.subject = now, ", ".join(recipients), subject
+        offer.body = body.split(chr(10) + chr(10) + ">")[0][:20000]
+        offer.sender_id = sender.get("id")
+        offer.data = (offer.data or "").replace('"compose": true', '"compose": false')
+        olead = lead or (db.session.get(Lead, offer.lead_id) if offer.lead_id else None)
+        if olead:
+            offer.lead_id = olead.id
+            if olead.stage == "Nowy":
+                record_stage_change(olead, "Oferta", user["id"])
+            value, currency = offer_value(offer)
+            if value is not None:
+                olead.value_pln = value
+                olead.currency = currency or olead.currency
+            due = datetime.combine(date.today() + timedelta(days=3), datetime.min.time())
+            db.session.add(Activity(lead_id=olead.id, kind="email", due_date=due, assigned_to=user["id"],
+                                    notes=f"Follow-up oferty ({offer.price} netto) wysłanej {date.today():%d.%m}"))
     task = db.session.get(MailTask, f.get("task", type=int) or 0)
     if task and task.status == "open":  # odpowiedź na sprawę z przeglądu poczty — sprawa załatwiona
         task.status, task.done_at, task.done_by, task.done_how = "done", now, user["id"], "odpowiedź wysłana"
@@ -10050,7 +10217,7 @@ def _mail_task_row(t):
 
 
 _ALERT_QUIET_ENDPOINTS = {"crm_mail_compose", "crm_calculator", "crm_offer_review", "crm_job", "crm_lead_detail",
-                          "crm_profile", "crm_login"}
+                          "crm_profile", "crm_login", "crm_mail", "crm_badlink_list"}
 
 
 @app.context_processor
