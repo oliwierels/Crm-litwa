@@ -8814,7 +8814,7 @@ app.jinja_env.globals.update(wa_ready=wa_ready, wa_window_open=wa_window_open)
 # W Railway: PL_DATABASE_URL = adres bazy polskiego CRM (Add Reference → Postgres z projektu PL).
 # Przycisk „Przenieś” kopiuje litewskie leady razem z zadaniami, komentarzami, historią etapów, ofertami,
 # Customer Journey i dokumentami, a dopiero po udanym zapisie tutaj usuwa je z polskiego CRM.
-# Potem CRM sam co 10 minut przenosi nowe litewskie leady, które wpadną do polskiego CRM.
+# Potem CRM sam co 2 minuty przenosi nowe litewskie i niemieckie leady, które wpadną do polskiego CRM.
 import pl_move  # noqa: E402
 
 PL_MOVE_AUTO_KEY = "pl_move_auto"  # litewskie: włączane pierwszym kliknięciem „Przenieś”
@@ -9003,8 +9003,13 @@ def crm_pl_move():
                                         for c in markets.MARKETS})
 
 
+PL_MOVE_EVERY = max(60, int(os.environ.get("PL_MOVE_EVERY", 120)))  # s — nowy lead LT/DE znika z polskiego CRM po ~2 min
+PL_WON_EVERY = 600  # s — wygrane do polskiego CRM
+
+
 def _pl_move_scheduler():
     time.sleep(30)
+    last_won = 0.0
     while True:
         try:
             with app.app_context():
@@ -9012,13 +9017,15 @@ def _pl_move_scheduler():
                 db.session.remove()
         except Exception:
             app.logger.exception("pl_move")
-        try:
-            with app.app_context():
-                sync_won_to_pl()
-                db.session.remove()
-        except Exception:
-            app.logger.exception("pl_won")
-        time.sleep(600)
+        if time.time() - last_won >= PL_WON_EVERY:
+            last_won = time.time()
+            try:
+                with app.app_context():
+                    sync_won_to_pl()
+                    db.session.remove()
+            except Exception:
+                app.logger.exception("pl_won")
+        time.sleep(PL_MOVE_EVERY)
 
 
 if pl_move_configured() and os.environ.get("PL_MOVE", "1") != "0":

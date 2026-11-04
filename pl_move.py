@@ -55,7 +55,20 @@ def is_lithuanian(row, places):
     if (row.get("billing_country") or "").upper() == "LT":
         return True
     place = " ".join([row.get("location") or ""] + places).lower()
-    return any(re.search(r"(?<![a-ząčęėįšųūž])" + re.escape(c), place) for c in LT_CITIES)
+    if any(re.search(r"(?<![a-ząčęėįšųūž])" + re.escape(c), place) for c in LT_CITIES) or _LT_PLACE.search(place):
+        return True
+    return bool(_LT_PLACE_LT.search(row.get("notes") or ""))  # „Wydarzenie … w Vilniaus rajonas” w opisie zapytania
+
+
+# Miasta na Litwie z litewskimi odmianami (Vilniaus, Vilniuje, Kauno, Kaune…) — ta sama reguła co w polskim CRM.
+# W opisie zapytania liczą się tylko formy litewskie (nie „Litwa”/„Wilno” — polski klient może o Litwę tylko zapytać).
+_LT_PLACE_LT_STEMS = (r"vilni(?:us|aus|uje|ų)", r"kaun(?:as|o|e)\b", r"klaip[eė]d", r"[sš]iauli(?:ai|ų|uose)\b",
+                      r"panev[eė][zž]", r"alyt(?:us|aus|uje)\b", r"marijampol", r"palang(?:a|os|oje)\b", r"druskinink",
+                      r"uten(?:a|os|oje)\b", r"jonav(?:a|os|oje)\b", r"ma[zž]eiki", r"lietuv", r"trak(?:ai|ų|uose)\b",
+                      r"k[eė]daini", r"taurag[eė]", r"ukmerg", r"visagin", r"bir[sš]ton", r"gargžd", r"gargzd")
+_LT_PLACE_LT = re.compile(r"(?<![a-ząćęłńóśźżčėįšųū])(?:" + "|".join(_LT_PLACE_LT_STEMS) + ")", re.I)
+_LT_PLACE = re.compile(r"(?<![a-ząćęłńóśźżčėįšųū])(?:" + "|".join(_LT_PLACE_LT_STEMS + (
+    r"lithuan", r"litw(?:a|ie|y|ę|ą)\b", r"litauen", r"wiln(?:o|ie|a)\b", r"kown(?:o|ie|a)\b", r"kłajped")) + ")", re.I)
 
 
 _DE_TLDS = (".de", ".at", ".ch")

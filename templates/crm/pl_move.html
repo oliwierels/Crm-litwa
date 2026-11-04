@@ -39,7 +39,7 @@
       <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">
         {% if not running %}<div style="font-size:15px">W polskim CRM czeka <b>{{ counts.get(code) if counts.get(code) is not none else '?' }}</b> {{ label }} leadów</div>{% endif %}
         <div class="muted" style="font-size:12px">{{ rule }}</div>
-        <div class="muted" style="font-size:12px">{% if auto[code] %}✅ Nowe przenoszą się same co 10 minut.{% else %}Po pierwszym przeniesieniu nowe będą się przenosić same co 10 minut.{% endif %}
+        <div class="muted" style="font-size:12px">{% if auto[code] %}✅ Nowe przenoszą się same co 2 minuty.{% else %}Po pierwszym przeniesieniu nowe będą się przenosić same co 2 minuty.{% endif %}
           Przeniesionych łącznie: {{ moved_total[code] }}</div>
         {% if not running %}
         <form method="post" style="margin-top:6px" onsubmit="if (!confirm('Przenieść {{ label }} leady z polskiego CRM? Znikną z polskiego CRM (wygrane zostaną tam jako kopia do logistyki).')) return false; this.querySelector('button').disabled = true; return true;">
