@@ -65,8 +65,9 @@
           </div>
         </form>
         {% set fails = lead_failed_attempts(lead) %}
-        <div>📵 Nieudane próby kontaktu z rzędu: <b style="color:{{ 'var(--red)' if fails >= attempt_limit else 'inherit' }}">{{ fails }}/{{ attempt_limit }}</b>
-          {% if fails >= attempt_limit %}<span style="color:var(--red)"> — zdecyduj (zadanie ⚖️)</span>{% endif %}</div>
+        {% set alimit = lead_attempt_limit(lead) %}
+        <div>📵 Nieudane próby kontaktu z rzędu: <b style="color:{{ 'var(--red)' if fails >= alimit else 'inherit' }}">{{ fails }}/{{ alimit }}</b>
+          {% if fails >= alimit %}<span style="color:var(--red)"> — zdecyduj (zadanie ⚖️)</span>{% endif %}</div>
         {% set rmin = lead_response_minutes(lead) %}
         {% if rmin is not none and lead.created_at and (lead.handled_at or lead.stage == 'Nowy') %}
           <div>⏱ Czas reakcji: <b style="color:{{ 'var(--red)' if rmin > response_target else 'var(--green)' }}">{{ rmin }} min</b> pracy

@@ -11,10 +11,13 @@ Decyzje (Krok 2), które tu są zapisane — zmiana = edycja stałych poniżej:
 - typ klienta wymagany najpóźniej przy wysłaniu oferty (i przy ręcznym przejściu na Oferta),
 - telefon potwierdzający: następny dzień roboczy po ofercie, dla firm / agencji / partnerów i każdej oferty
   od 10 000 zł (równowartość w EUR po kursie), dzwonimy pn–pt 9:00–17:00,
-- limit prób kontaktu: 3 nieudane (telefon nieodebrany, SMS / mail bez odpowiedzi) → zadanie „Zdecyduj”
-  dla opiekuna (bez automatycznego przenoszenia na Stracony),
-- czas reakcji: cel 30 min w godzinach pracy pn–pt 8:00–18:00, alert w CRM (okno alarmów) dla wszystkich,
-- osoby prywatne: szkic pierwszej odpowiedzi do zatwierdzenia (nic nie wychodzi samo),
+- limit prób kontaktu: 3 nieudane (telefon nieodebrany, SMS / mail bez odpowiedzi), u osób prywatnych 2 →
+  zadanie „Zdecyduj” dla opiekuna (bez automatycznego przenoszenia na Stracony),
+- czas reakcji: cel 30 min w godzinach pracy pn–pt 9:00–18:00 (lead z wieczora liczy się od 9:00 następnego dnia
+  roboczego), alert w CRM (okno alarmów) dla wszystkich,
+- osoby prywatne: szkic pierwszej odpowiedzi do zatwierdzenia (nic nie wychodzi samo) + telefon (1–2 próby),
+- „Czy ktoś oddzwaniał?”: raz dziennie na każdym komputerze od 16:00 — numer, który oddzwonił, zapisuje się
+  przy leadzie jako udany kontakt,
 - wyjątki: zmiany robione przez automaty CRM (bez osoby) nie są blokowane; awaryjnie STAGE_GATES=0 wyłącza bramki.
 """
 import re
@@ -63,9 +66,12 @@ REPLY_CALL_PREFIX = "📞 Klient odpisał"
 CONFIRM_CALL_TYPES = ("firma", "agencja", "partner")
 CONFIRM_CALL_MIN_PLN = 10000
 CONTACT_ATTEMPT_LIMIT = 3
+PRIVATE_ATTEMPT_LIMIT = 2  # osoby prywatne: dzwonimy raz, najwyżej dwa razy
+CALLBACK_ASK_FROM = 16  # od tej godziny raz dziennie pytanie „czy ktoś oddzwaniał?”
+CALLBACK_PREFIX = "📲 Klient oddzwonił"
 RESPONSE_TARGET_MIN = 30
 WORK_DAYS = (0, 1, 2, 3, 4)  # pn–pt
-WORK_START, WORK_END = 8, 18  # godziny pracy (czas reakcji)
+WORK_START, WORK_END = 9, 18  # godziny pracy (czas reakcji): lead po 18:00 liczy się od 9:00 kolejnego dnia roboczego
 CALL_HOURS = "pn–pt 9:00–17:00"
 MIN_NEW_EVENT_YEAR = 2025  # nowych dni wynajmu sprzed 2025 r. nie da się zapisać (literówka „0002”)
 LONG_RANGE_DAYS = 14  # dłuższy zakres = ostrzeżenie
@@ -200,6 +206,17 @@ def needs_confirm_call(client_type, value_pln_equiv):
     return client_type in CONFIRM_CALL_TYPES or (value_pln_equiv or 0) >= CONFIRM_CALL_MIN_PLN
 
 
+def attempt_limit(client_type):
+    """Ile nieudanych prób z rzędu, zanim CRM każe zdecydować: osoby prywatne 2, reszta 3."""
+    return PRIVATE_ATTEMPT_LIMIT if client_type == "prywatna" else CONTACT_ATTEMPT_LIMIT
+
+
+def phone_key(phone):
+    """Ostatnie 9 cyfr numeru — porównanie numerów zapisanych różnie (+48 600-100-200 / 600100200 / 0048…)."""
+    digits = re.sub(r"\D", "", phone or "")
+    return digits[-9:] if len(digits) >= 7 else ""
+
+
 def next_work_day(d, n=1):
     """n-ty dzień roboczy (pn–pt) po dniu d."""
     out = d
@@ -211,7 +228,7 @@ def next_work_day(d, n=1):
 
 
 def working_minutes(start_local, end_local):
-    """Minuty w godzinach pracy (pn–pt 8–18) między dwoma chwilami czasu lokalnego (naive)."""
+    """Minuty w godzinach pracy (pn–pt 9–18) między dwoma chwilami czasu lokalnego (naive)."""
     if not start_local or not end_local or end_local <= start_local:
         return 0
     total = 0.0

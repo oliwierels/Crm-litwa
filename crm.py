@@ -2473,19 +2473,24 @@ def lead_contact_events(lead):
     return ev
 
 
+def lead_attempt_limit(lead):
+    """Limit nieudanych prób dla leada: osoba prywatna (wpisana albo z podpowiedzi) 2, reszta 3."""
+    return sales_rules.attempt_limit(lead.client_type or client_type_hint(lead)[0])
+
+
 def lead_failed_attempts(lead):
     """Nieudane próby kontaktu z rzędu (od ostatniego udanego kontaktu)."""
     return sales_rules.contact_attempts(lead_contact_events(lead)) if lead and lead.id else 0
 
 
 def check_contact_limit(lead, actor_id=None):
-    """Po CONTACT_ATTEMPT_LIMIT nieudanych próbach: zadanie „Zdecyduj” dla opiekuna (bez automatycznej straty
+    """Po limicie nieudanych prób (osoby prywatne 2, reszta 3): zadanie „Zdecyduj” dla opiekuna (bez automatycznej straty
     i bez żadnej wysyłki). Jedno na serię prób. Zwraca zadanie albo None."""
     if not lead or lead.stage not in ACTIVE_STAGES or is_market_copy(lead):
         return None
     ev = lead_contact_events(lead)
     n = sales_rules.contact_attempts(ev)
-    if n < sales_rules.CONTACT_ATTEMPT_LIMIT:
+    if n < lead_attempt_limit(lead):
         return None
     last_fail = max((w for w, k in ev if k == "fail" and w), default=None)
     exists = Activity.query.filter(Activity.lead_id == lead.id, Activity.kind == "decision").filter(
@@ -2555,6 +2560,11 @@ def sales_automation_pass():
         db.session.add(Activity(lead_id=lead.id, kind="email", due_date=today0, assigned_to=owner["id"],
                                 notes=f"{sales_rules.PRIVATE_DRAFT_PREFIX} — szkic gotowy, NIC nie poszło do klienta. "
                                       f"Sprawdź i wyślij: Poczta → „Otwórz szkic”.\nTemat: {subject}\n---\n{body}"))
+        if lead.contact_phone and not Activity.query.filter(Activity.lead_id == lead.id, Activity.kind == "call",
+                                                            Activity.done.isnot(True)).first():
+            db.session.add(Activity(lead_id=lead.id, kind="call", due_date=today0, assigned_to=owner["id"],
+                                    notes=f"📞 Zadzwoń do osoby prywatnej (najwyżej {sales_rules.PRIVATE_ATTEMPT_LIMIT} próby) "
+                                          "— zapytaj o termin, godziny i budżet; szkic maila czeka w Poczcie."))
         made["drafts"] += 1
     db.session.commit()
     # 2) prywatny klient odpisał po naszej pierwszej odpowiedzi → telefon (dopiero teraz)
@@ -3203,13 +3213,70 @@ def _fromjson(raw):
 app.jinja_env.filters["fromjson"] = _fromjson
 app.jinja_env.globals.update(client_type_hint=client_type_hint, lead_country=lead_country,
                              confirm_questions=sales_rules.CONFIRM_QUESTIONS,
-                             attempt_limit=sales_rules.CONTACT_ATTEMPT_LIMIT,
+                             lead_attempt_limit=lead_attempt_limit,
                              response_target=sales_rules.RESPONSE_TARGET_MIN)
+
+
+CALLBACK_COOKIE, CALLBACK_LATER_COOKIE = "cb_asked", "cb_later"
+
+
+def callback_ask_due():
+    """Pytanie „Czy ktoś do Ciebie dziś oddzwaniał?” — raz dziennie na każdym komputerze (ciasteczko przeglądarki,
+    więc trzy komputery w jednym biurze dostają je osobno), w dni robocze od 16:00."""
+    from flask import has_request_context
+    if not has_request_context() or request.path.startswith(("/f/", "/static", "/mcp")) or \
+            (request.endpoint or "") in ("crm_login", "crm_logout", "lead_form", "static"):
+        return False
+    now = to_local(datetime.utcnow())
+    if now.weekday() not in sales_rules.WORK_DAYS or now.hour < sales_rules.CALLBACK_ASK_FROM:
+        return False
+    return request.cookies.get(CALLBACK_COOKIE) != now.date().isoformat() and not request.cookies.get(CALLBACK_LATER_COOKIE)
+
+
+def _callback_leads_query():
+    return all_markets(Lead.query)  # numer może należeć do leada z Litwy albo z Niemiec
+
+
+@app.route("/crm/oddzwonil", methods=["POST"])
+def crm_callback():
+    """Odpowiedź na „czy ktoś oddzwaniał?”: none = nikt (do jutra), later = za godzinę, phone = numer, który oddzwonił —
+    zapis jako udany kontakt przy leadzie (zeruje licznik nieodebranych prób)."""
+    data = request.get_json(silent=True) or request.form
+    action = data.get("action")
+    today = to_local(datetime.utcnow()).date().isoformat()
+    if action in ("none", "later"):
+        resp = jsonify({"ok": True})
+        if action == "none":
+            resp.set_cookie(CALLBACK_COOKIE, today, max_age=24 * 3600, samesite="Lax")
+        else:
+            resp.set_cookie(CALLBACK_LATER_COOKIE, "1", max_age=3600, samesite="Lax")
+        return resp
+    key = sales_rules.phone_key(data.get("phone"))
+    if not key:
+        return jsonify({"ok": False, "error": "Wpisz numer telefonu (co najmniej 7 cyfr)."}), 400
+    found = [l for l in _callback_leads_query().filter(Lead.contact_phone.isnot(None), Lead.contact_phone != "").all()
+             if sales_rules.phone_key(l.contact_phone) == key]
+    if not found:
+        return jsonify({"ok": False, "not_found": True, "phone": data.get("phone"),
+                        "error": "Nie ma leada z tym numerem — możesz dodać go jako nowy lead."})
+    found.sort(key=lambda l: (l.stage in ACTIVE_STAGES, l.created_at or datetime.min), reverse=True)
+    lead, user = found[0], get_current_user(request)
+    note = (data.get("note") or "").strip()[:500]
+    db.session.add(Activity(lead_id=lead.id, kind="call", done=True, done_at=datetime.utcnow(), outcome="odebral",
+                            assigned_to=user["id"],
+                            notes=f"{sales_rules.CALLBACK_PREFIX} ({to_local(datetime.utcnow()):%d.%m %H:%M}) — zapisane z pytania "
+                                  f"„czy ktoś oddzwaniał?”" + (f": {note}" if note else "")))
+    db.session.commit()
+    return jsonify({"ok": True, "lead": {"id": lead.id, "company": lead.company, "stage": lead.stage,
+                                         "url": url_for("crm_lead_detail", lead_id=lead.id)},
+                    "others": [{"id": l.id, "company": l.company, "url": url_for("crm_lead_detail", lead_id=l.id)}
+                               for l in found[1:5]]})
 
 
 @app.context_processor
 def _sales_helpers():
-    return {"lead_failed_attempts": lead_failed_attempts, "lead_response_minutes": lead_response_minutes}
+    return {"lead_failed_attempts": lead_failed_attempts, "lead_response_minutes": lead_response_minutes,
+            "callback_ask": callback_ask_due()}
 
 
 @app.route("/crm/skutecznosc", methods=["GET", "POST"])

@@ -1,0 +1,41 @@
+{# Raz dziennie (od 16:00, na każdym komputerze osobno): czy ktoś oddzwaniał? — numer zapisuje się przy leadzie #}
+{% if callback_ask %}
+<div id="cbCard" style="position:fixed;right:16px;bottom:16px;z-index:9000;width:330px;max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--accent);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;font-size:13px">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <b>📲 Czy ktoś dziś do Ciebie oddzwaniał?</b>
+    <button type="button" title="Zapytaj za godzinę" onclick="cbSend({action:'later'}).then(cbHide)" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">×</button>
+  </div>
+  <div style="color:var(--muted);font-size:11.5px;margin:2px 0 8px">Np. ktoś, kto wcześniej nie odebrał, a potem oddzwonił. Wpisz numer — zapiszę rozmowę przy leadzie.</div>
+  <div style="display:flex;gap:6px">
+    <input id="cbPhone" placeholder="numer, np. 600 100 200" style="flex:1" onkeydown="if(event.key==='Enter')cbPhoneSave()">
+    <button type="button" class="btn btn-primary btn-sm" onclick="cbPhoneSave()">Zapisz</button>
+  </div>
+  <div id="cbMsg" style="font-size:12px;margin-top:6px"></div>
+  <button type="button" id="cbNone" class="btn btn-ghost btn-sm" style="margin-top:6px;width:100%" onclick="cbSend({action:'none'}).then(cbHide)">Nikt nie oddzwaniał</button>
+</div>
+<script>
+async function cbSend(body) {
+  const r = await fetch('{{ url_for('crm_callback') }}', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  return r.json().catch(() => ({ok: false}));
+}
+function cbHide() { const c = document.getElementById('cbCard'); if (c) c.remove(); }
+async function cbPhoneSave() {
+  const inp = document.getElementById('cbPhone'), msg = document.getElementById('cbMsg'), phone = inp.value.trim();
+  if (!phone) { msg.textContent = 'Wpisz numer.'; return; }
+  const d = await cbSend({action: 'phone', phone});
+  if (d.ok) {
+    msg.innerHTML = `✅ Zapisane przy: <a href="${d.lead.url}">${sgEsc(d.lead.company)}</a> (${sgEsc(d.lead.stage)}). Ktoś jeszcze? Wpisz kolejny numer.`;
+    inp.value = '';
+    document.getElementById('cbNone').textContent = 'To wszyscy — zamknij';
+  } else if (d.not_found) {
+    msg.innerHTML = `${sgEsc(d.error)} <a href="#" onclick="cbNewLead(${JSON.stringify(phone).replace(/"/g, '&quot;')});return false">➕ Dodaj lead</a>`;
+  } else { msg.textContent = d.error || 'Nie udało się zapisać.'; }
+}
+function cbNewLead(phone) {
+  if (typeof openQuick !== 'function') return;
+  openQuick();
+  const f = document.querySelector('#quickModal input[name="contact_phone"]');
+  if (f) f.value = phone;
+}
+</script>
+{% endif %}

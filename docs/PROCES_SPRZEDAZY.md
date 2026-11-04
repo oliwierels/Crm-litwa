@@ -36,7 +36,7 @@ CRM stosuje je jednakowo w interfejsie, w API (`/crm/api/...`) i w narzędziach 
 | Kampanie (Blitzkrieg) | ręczny start kampanii | `_campaign_scheduler` |
 | Mail LT z formularzem | **wyłączony** (`LT_AUTO_MAIL=1` go włącza); litewskie leady obsługuje CRM LT | `lt_auto_mail` |
 | Mail DE z linkiem do terminu rozmowy | nie znaleziono w kodzie żadnego CRM (brak linku do kalendarza) — CRM DE nic nie wysyła sam; oferty DE generuje człowiek | CRM LT/DE, `market.py` |
-| **Nowe (P2):** szkic dla osób prywatnych, telefon po odpowiedzi klienta, „Zdecyduj” po 3 próbach, zapis przekroczenia czasu reakcji | co 10 min | `sales_automation_pass`; `SALES_AUTOMATION=0` je wyłącza. Tylko zadania i szkice, **nic nie wysyła**. |
+| **Nowe (P2):** szkic i telefon dla osób prywatnych, telefon po odpowiedzi klienta, „Zdecyduj” po 3 próbach, zapis przekroczenia czasu reakcji | co 10 min | `sales_automation_pass`; `SALES_AUTOMATION=0` je wyłącza. Tylko zadania i szkice, **nic nie wysyła**. |
 
 ## Krok 2 — decyzje
 
@@ -61,13 +61,13 @@ Przyjęte według propozycji z briefu. Zmiana decyzji to zmiana stałej w `sales
    - dla firm, agencji i partnerów oraz każdej oferty od 10 000 zł (EUR po kursie),
    - dzwonimy pn–pt 9:00–17:00,
    - 4 pytania; odpowiedzi zapisują się w leadzie.
-5. **Limit prób:** 3 nieudane z rzędu. Liczą się telefon nieodebrany oraz SMS lub mail bez odpowiedzi. Po limicie powstaje zadanie „⚖️ Zdecyduj” dla opiekuna, bez automatycznej straty.
-6. **Czas reakcji:** cel 30 min w godzinach pracy pn–pt 8:00–18:00. Alert w oknie nowych leadów widzą wszyscy.
+5. **Limit prób:** 3 nieudane z rzędu (osoby prywatne: 2). Liczą się telefon nieodebrany oraz SMS lub mail bez odpowiedzi. Po limicie powstaje zadanie „⚖️ Zdecyduj” dla opiekuna, bez automatycznej straty.
+6. **Czas reakcji:** cel 30 min w godzinach pracy pn–pt 9:00–18:00 (zapytanie po 18:00 liczy się od 9:00 następnego dnia roboczego). Alert w oknie nowych leadów widzą wszyscy.
 7. **Osoby prywatne:**
    - szkic do zatwierdzenia, nie wysyłany sam,
    - pakiet 2 h z ceną z kalkulatora albo „2 h od 2 750 zł netto + dojazd”,
    - pytanie o budżet,
-   - telefon dopiero po odpowiedzi klienta.
+   - telefon od razu (najwyżej 2 próby) i ponownie, gdy klient odpisze.
 8. **Dopłata za pilne zlecenia:** na razie nie, bo to zmiana cennika dla klientów.
 9. **Panel skuteczności:**
    - widzą wszyscy,
@@ -84,7 +84,12 @@ Przyjęte według propozycji z briefu. Zmiana decyzji to zmiana stałej w `sales
 3. **Typ klienta przed ofertą.** Firma, osoba prywatna, agencja albo partner. CRM podpowiada typ, ale bez wybranego typu oferta nie wyjdzie.
 4. **Dzień po ofercie dzwonimy** do firm, agencji i partnerów oraz przy ofertach od 10 000 zł. Zadanie ma 4 pytania: czy dotarła, kiedy decyzja, kto decyduje, z kim nas porównują. Odpowiedzi wpisujemy przy odhaczaniu.
 5. **Każdy telefon, SMS i mail odhaczamy z wynikiem:** odebrał / nie odebrał albo odpisał / bez odpowiedzi. Po 3 nieudanych próbach z rzędu CRM daje zadanie „⚖️ Zdecyduj”: zamykamy jako Stracony (brak kontaktu) albo zmieniamy kanał.
-6. **Nowe zapytanie odpowiadamy w 30 minut pracy.** Okno nowych leadów pokazuje, ile lead czeka. Po przekroczeniu robi się czerwone.
-7. **Osoby prywatne:** CRM sam przygotowuje szkic pierwszej odpowiedzi (krótki pakiet, cena, pytanie o budżet). Sprawdzamy go i wysyłamy z Poczty. Dzwonimy, gdy klient odpisze.
-8. **Daty:** nie da się zapisać daty sprzed 2025 r. Przy zakresie powyżej 14 dni CRM ostrzega.
-9. **Raporty → Skuteczność** pokazuje wynik miesiąca na tle celów z prognozą, skuteczność typów i osób, powody strat, czas reakcji, anulacje i duże leady bez następnego kroku. **Porządki w danych** to lista do poprawy. **Dostarczalność** to stan SPF, DKIM i DMARC.
+6. **Nowe zapytanie odpowiadamy w 30 minut pracy** (pn–pt 9–18; zapytanie z wieczora liczy się od 9:00). Okno nowych leadów pokazuje, ile lead czeka. Po przekroczeniu robi się czerwone.
+7. **Osoby prywatne:** CRM sam przygotowuje szkic pierwszej odpowiedzi (krótki pakiet, cena, pytanie o budżet) i zadanie telefonu. Szkic sprawdzamy i wysyłamy z Poczty, dzwonimy najwyżej 2 razy.
+8. **Codziennie od 16:00 CRM pyta na każdym komputerze: „Czy ktoś do Ciebie oddzwaniał?”** Wpisujemy numer — rozmowa zapisuje się przy leadzie (i zeruje nieodebrane próby) — albo „Nikt nie oddzwaniał”.
+9. **Daty:** nie da się zapisać daty sprzed 2025 r. Przy zakresie powyżej 14 dni CRM ostrzega.
+10. **Raporty → Skuteczność** pokazuje wynik miesiąca na tle celów z prognozą, skuteczność typów i osób, powody strat, czas reakcji, anulacje i duże leady bez następnego kroku. **Porządki w danych** to lista do poprawy. **Dostarczalność** to stan SPF, DKIM i DMARC.
+
+## Pytanie „Czy ktoś oddzwaniał?”
+
+Raz dziennie, w dni robocze od 16:00, na każdym komputerze osobno: CRM rozpoznaje komputer po ciasteczku przeglądarki, nie po adresie IP. Trzy osoby w jednym biurze mają zwykle ten sam adres IP, więc IP by ich nie rozróżniło. Odpowiedzi do wyboru: numer telefonu (zapis jako odebrany telefon przy leadzie), „Nikt nie oddzwaniał” (do jutra) albo × (pytanie wraca za godzinę).

@@ -73,8 +73,15 @@ def test_confirm_call_rule_and_next_work_day():
 
 def test_working_minutes():
     assert sr.working_minutes(datetime(2026, 11, 4, 9, 0), datetime(2026, 11, 4, 9, 45)) == 45
-    assert sr.working_minutes(datetime(2026, 11, 6, 17, 50), datetime(2026, 11, 9, 8, 20)) == 30  # przez weekend
-    assert sr.working_minutes(datetime(2026, 11, 4, 20, 0), datetime(2026, 11, 5, 7, 0)) == 0
+    assert sr.working_minutes(datetime(2026, 11, 6, 17, 50), datetime(2026, 11, 9, 9, 20)) == 30  # przez weekend
+    assert sr.working_minutes(datetime(2026, 11, 4, 20, 0), datetime(2026, 11, 5, 8, 50)) == 0
+    # lead o 19:00 — 30 minut liczy się od 9:00 następnego dnia
+    assert sr.working_minutes(datetime(2026, 11, 4, 19, 0), datetime(2026, 11, 5, 9, 25)) == 25
+
+
+def test_attempt_limit_and_phone_key():
+    assert sr.attempt_limit("prywatna") == 2 and sr.attempt_limit("firma") == 3 and sr.attempt_limit(None) == 3
+    assert sr.phone_key("+48 600-100-200") == sr.phone_key("0048600100200") == sr.phone_key("600 100 200") == "600100200"
 
 
 def test_contact_attempts_reset_on_success():
