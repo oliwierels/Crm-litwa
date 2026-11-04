@@ -1,17 +1,20 @@
-"""Kalkulator wyceny wynajmu robota na Litwie: stawka za czas na miejscu + dojazd od granicy PL–LT.
+"""Kalkulator wyceny wynajmu robota (Litwa i Niemcy): stawka za czas na miejscu + dojazd od granicy.
 
-Zasady (cennik 33bots LT, EUR, netto):
-- 8 h na miejscu = 2100 € (cena startowa), 4 h = 6/8 tej ceny, 2 h = połowa (mnożniki jak w Polsce),
-- dojazd = 0,75 € za km w jedną stronę × 2 (tam i z powrotem), km liczone od granicy (Budzisko–Kalvarija),
+Zasady (EUR, netto), osobno dla każdego rynku (market.py, zmiana w Railway):
+- 8 h na miejscu = cena bazowa rynku (LT 2100 €), 4 h = 6/8 tej ceny, 2 h = połowa (mnożniki jak w Polsce),
+- dojazd = stawka za km w jedną stronę × 2 (tam i z powrotem), km liczone od granicy z Polską,
 - każda godzina po 22:00 (do 6:00 rano) liczy się × 1,5 stawki godzinowej pakietu,
 - nocleg jest zawsze — jeden za każdy dzień wynajmu (ekipa zostaje na miejscu, jeden dojazd),
 - dojazd (razem z noclegami) nie może być więcej niż 30% ceny — jeśli jest, cena idzie
   w górę tak, żeby stanowił dokładnie 30%,
 - kilka dni z rzędu: 2 dni −10%, 3 dni i więcej −15% od całości.
-Stawki można zmienić w Railway → Variables (CALC_BASE_8H, CALC_KM_RATE, CALC_LODGING, CALC_ROUND_TO).
+Stawki w Railway → Variables: CALC_BASE_8H_LT / _DE, CALC_KM_RATE_LT / _DE, CALC_LODGING_LT / _DE
+(dla Litwy działają też stare nazwy bez końcówki: CALC_BASE_8H, CALC_KM_RATE, CALC_LODGING).
 """
 import math
 import os
+
+import market as _market
 
 
 def _env_num(name, default):
@@ -21,23 +24,43 @@ def _env_num(name, default):
         return default
 
 
-# LT CRM: ceny w EUR (zmienisz je w Railway → Variables)
-BASE_8H = int(_env_num("CALC_BASE_8H", 2100))
+def rates(code="lt"):
+    """Cennik rynku: {base, km, lodging, departures {klucz: (etykieta, „od …”, (lat, lon))}, code}."""
+    m = _market.get(code)
+    return {
+        "code": m["code"],
+        "base": int(_market.env_num(m["code"], "CALC_BASE_8H", m["price_base"])),
+        "km": _market.env_num(m["code"], "CALC_KM_RATE", m["price_km"]),
+        "lodging": int(_market.env_num(m["code"], "CALC_LODGING", m["price_lodging"])),
+        "departures": _departures(m),
+    }
+
+
+def _departures(m):
+    """Punkty wyjazdu rynku; dla Litwy współrzędne granicy można zmienić CALC_BORDER_LAT / CALC_BORDER_LON."""
+    deps = dict(m["departures"])
+    if m["code"] == "lt" and "granica_lt" in deps:
+        label, frm, (lat, lon) = deps["granica_lt"]
+        deps["granica_lt"] = (label, frm, (_env_num("CALC_BORDER_LAT", lat), _env_num("CALC_BORDER_LON", lon)))
+    return deps
+
+
+_LT = rates("lt")
+BASE_8H = _LT["base"]  # wartości litewskie — zgodność ze starszym kodem
 HOUR_FACTORS = {8: 8 / 8, 4: 6 / 8, 2: 4 / 8}
-KM_RATE = _env_num("CALC_KM_RATE", 0.75)
+KM_RATE = _LT["km"]
 TRIPS = 2
 TRAVEL_MAX_SHARE = 0.30
-ROUND_TO = int(_env_num("CALC_ROUND_TO", 50))  # cena „do oferty” zaokrąglona w górę
+ROUND_TO = int(_env_num("CALC_ROUND_TO", 50))
 NIGHT_FROM, NIGHT_TO = 22, 6   # godziny nocne: od 22:00 do 6:00
 NIGHT_MULT = 1.5               # godzina nocna = 1,5 × stawka godzinowa pakietu
 LODGING_KM = 0                 # nocleg zawsze (każdy dzień wynajmu)
-LODGING_COST = int(_env_num("CALC_LODGING", 70))  # € za nocleg (liczy się do limitu dojazdu 30%)
+LODGING_COST = _LT["lodging"]
 DAY_DISCOUNTS = {2: 0.10, 3: 0.15}  # rabat od całości; więcej dni = jak za 3
 MAX_DAYS = 7
 
-# skąd wyjeżdża ekipa (klucze z logistics.CITIES)
-DEPARTURES = {"granica": "Granica PL–LT (Budzisko)"}
-DEPARTURES_FROM = {"granica": "od granicy"}
+DEPARTURES = {k: v[0] for k, v in _LT["departures"].items()}
+DEPARTURES_FROM = {k: v[1] for k, v in _LT["departures"].items()}
 
 
 def parse_start(text):
@@ -76,7 +99,7 @@ def day_discount(days):
     return DAY_DISCOUNTS.get(min(days, max(DAY_DISCOUNTS)), 0.0) if days > 1 else 0.0
 
 
-def quote(hours, km_one_way, night=0.0, days=1):
+def quote(hours, km_one_way, night=0.0, days=1, r=None):
     """Wycena dla liczby godzin dziennie (2/4/8), odległości w jedną stronę (km), godzin po 22:00
     dziennie (`night`, np. z night_hours()) i liczby dni. Zwraca dict z rozbiciem
     (base, night_extra — za jeden dzień; onsite, travel, lodging — za całość)."""
@@ -85,15 +108,16 @@ def quote(hours, km_one_way, night=0.0, days=1):
     days = max(1, min(int(days or 1), MAX_DAYS))
     km = int(round(max(0.0, float(km_one_way or 0))))
     night = min(max(0.0, float(night or 0)), float(hours))
-    base = round(BASE_8H * HOUR_FACTORS[hours])
+    r = r or _LT
+    base = round(r["base"] * HOUR_FACTORS[hours])
     hourly = base / hours
     night_extra = round(night * hourly * (NIGHT_MULT - 1))
     onsite = (base + night_extra) * days
     stays = True  # LT: nocleg zawsze — ekipa zostaje na miejscu, jeden dojazd
     round_trips = 1 if stays else days
-    travel = round(km * KM_RATE * TRIPS) * round_trips
+    travel = round(km * r["km"] * TRIPS) * round_trips
     nights = days if stays else 0
-    lodging = LODGING_COST * nights
+    lodging = r["lodging"] * nights
     trip = travel + lodging  # koszty wyjazdu — to one podlegają limitowi 30%
     subtotal = onsite + trip
     raise_by = 0
@@ -109,7 +133,7 @@ def quote(hours, km_one_way, night=0.0, days=1):
         "nights": nights, "lodging": lodging, "raise_by": raise_by, "subtotal": subtotal,
         "discount_pct": pct, "discount": discount, "total": total,
         "travel_share": trip / subtotal if subtotal else 0.0,
-        "rounded": round_price(total),
+        "rounded": round_price(total), "rate": r["km"], "lodging_cost": r["lodging"], "base8": r["base"],
     }
 
 
@@ -137,7 +161,7 @@ def days_label(n):
 def describe(q, departure_label="", place=""):
     """Rozbicie wyceny jednym tekstem (do notatki w leadzie i dla asystenta)."""
     route = f"{departure_label} → {place}, " if departure_label and place else ""
-    rate = f"{KM_RATE:.2f}".replace(".", ",")  # €/km
+    rate = f"{q.get('rate', KM_RATE):.2f}".replace(".", ",")  # €/km
     days = q.get("days", 1)
     per_day = " / dzień" if days > 1 else ""
     lines = [f"Wycena: {q['hours']} h na miejscu = {fmt_zl(q['base'])}{per_day}"]
@@ -152,7 +176,7 @@ def describe(q, departure_label="", place=""):
                  + (f" = {fmt_zl(q['travel'])}" if trips else ""))
     if q.get("lodging"):
         nights = q.get("nights", 1)
-        lines.append(f"Nocleg: {nights} × {fmt_zl(LODGING_COST)} = +{fmt_zl(q['lodging'])}"
+        lines.append(f"Nocleg: {nights} × {fmt_zl(q.get('lodging_cost', LODGING_COST))} = +{fmt_zl(q['lodging'])}"
                      if nights > 1 else f"Nocleg: +{fmt_zl(q['lodging'])}")
     if q["raise_by"]:
         lines.append(f"Dojazd{' z noclegiem' if q.get('lodging') else ''} > {int(TRAVEL_MAX_SHARE * 100)}% ceny "

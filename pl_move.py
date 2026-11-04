@@ -83,6 +83,7 @@ def _copy_lead(conn, meta, db, M, row, actor_id):
     t = meta.tables
     lead = M["Lead"](**_cols(M["Lead"], row))
     lead.pl_id = pl_id
+    lead.market = "lt"  # z polskiego CRM przenosimy tylko litewskie leady
     db.session.add(lead)
     db.session.flush()
 

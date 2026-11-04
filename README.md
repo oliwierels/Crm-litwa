@@ -1,7 +1,15 @@
-# 33bots LT CRM
+# 33bots CRM — Litwa 🇱🇹 i Niemcy 🇩🇪
 
-CRM na Litwę — kopia polskiego CRM (Moja-apka) 1:1, z interfejsem po polsku **i** po litewsku
+Jeden CRM dla dwóch rynków — kopia polskiego CRM (Moja-apka), z interfejsem po polsku **i** po litewsku
 (przełącznik 🇵🇱 PL / 🇱🇹 LT w lewym dolnym rogu, zapamiętany na urządzeniu).
+
+**Przełącznik rynku** (🇱🇹 Litwa / 🇩🇪 Niemcy) jest na górze menu — jeden link, dwa CRM-y. Każdy lead ma swój
+rynek: widok pokazuje tylko leady oglądanego rynku (z ich zadaniami, ofertami, umowami, mailami, kampaniami
+i skrzynką zapytań). Link do leada z drugiego rynku sam przełącza widok. Wszystko, co idzie do klienta, jest
+**w języku rynku leada** — po litewsku albo po niemiecku, nigdy po angielsku: maile, oferta (mail + PDF;
+CRM odrzuca ofertę w innym języku i Claude musi ją przepisać), umowa DOCX, instrukcja bazy wiedzy (PDF),
+formularz dla klienta, wycena, wiadomość WhatsApp/Viber, follow-upy, przypomnienia, faktura, kampanie.
+Teksty i ustawienia rynków są w `market.py`.
 
 Co jest inne niż w polskim CRM:
 - **EUR** domyślnie (wartości leadów, kalkulator, statystyki, umowy, faktury),
@@ -41,6 +49,22 @@ wystarczy dopisać parę do `lt_strings.py`.
 | `CALC_BASE_8H`, `CALC_KM_RATE`, `CALC_LODGING`, `CALC_ROUND_TO` | cennik kalkulatora w EUR (domyślnie 1300 / 0,35 / 70 / 50) |
 
 3. Settings → Networking → Generate Domain.
+
+## Niemcy 🇩🇪 (ten sam serwis, te same zmienne + kilka nowych)
+
+| Zmienna | Wartość |
+|---|---|
+| `MAIL_PASSWORD` | wspólne hasło skrzynek — wystarczy ono dla o.latek@ i kontakt@ w 33bots.lt **i** 33bots.de (Poczta, wysyłka, import zapytań) |
+| `MAILBOXES_DE` | (opcjonalnie) inna lista skrzynek DE po przecinku — domyślnie `o.latek@33bots.de,kontakt@33bots.de` |
+| `INBOX_IMAP_USER_DE`, `INBOX_IMAP_PASS_DE` | (opcjonalnie) inna skrzynka zapytań DE — domyślnie kontakt@33bots.de z `MAIL_PASSWORD` |
+| `CALC_BASE_8H_DE`, `CALC_KM_RATE_DE`, `CALC_LODGING_DE` | cennik DE (domyślnie 2500 € / 0,75 € / 120 €) — km od granicy Frankfurt/Oder albo Görlitz (bliższa) |
+| `LT_AUTO_QUOTE_DE` | `1` włącza automatyczną wycenę mailem dla Niemiec (domyślnie **wyłączona**, dopóki cennik nie jest zatwierdzony) |
+| `WHATSAPP_TEMPLATE_DE` (+ `WHATSAPP_TEMPLATE_LANG_DE`) | zatwierdzony szablon WhatsApp po niemiecku (4 pola: data, godziny, miejsce, cena) |
+| `NOTIFY_EMAILS_DE` | (opcjonalnie) gdzie wysłać powiadomienie o wypełnionym formularzu DE — domyślnie o.latek@33bots.de |
+
+Nadawca maila do klienta: skrzynka opiekuna leada w domenie rynku (o.latek@33bots.de), a gdy osoba jej nie ma —
+kontakt@ rynku podpisana jej imieniem. Umowa DE: osobny wzór (Customer Journey → ustawienia, przy włączonym
+rynku Niemcy), prawo niemieckie, kwota słownie po niemiecku, reverse charge.
 
 ## Przeniesienie litewskich leadów z polskiego CRM
 
@@ -85,7 +109,7 @@ Ar rezervuojame šią datą?
 Przy leadzie: „🚀 Wyślij przez WhatsApp” — pierwsza wiadomość idzie jako szablon; gdy klient odpisze, odpowiedź
 trafia do komentarzy leada (+ zadanie „Odpowiedz…”), a przez 24 h CRM wysyła już zwykły tekst z okienka.
 
-## Automatyczna wycena mailem (nowe litewskie leady)
+## Automatyczna wycena mailem (nowe leady — Litwa; Niemcy po włączeniu `LT_AUTO_QUOTE_DE=1`)
 
 Nowy lead z godzinami i miejscem w zapytaniu (np. „iki 4 valandų”, „Miejsce wydarzenia – Šiaulių arena”) od razu
 dostaje mail z ceną (kalkulator: od granicy, nocleg, zaokrąglenie do setek od 25 €) — ze skrzynki 33bots.lt

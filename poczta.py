@@ -10,7 +10,7 @@ import email.policy
 import html as _html
 import imaplib
 import re
-from datetime import datetime, timezone
+from datetime import timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
 BIG_MESSAGE = 4 * 1024 * 1024   # większe maile: nagłówki + początek treści (bez ciężkich załączników)

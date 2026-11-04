@@ -13,9 +13,18 @@ import threading
 from datetime import date, timedelta
 
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
-KB_INSTRUCTION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "docs",
-                                   "Roboto_ziniu_baze_instrukcija.pdf")
+_DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "docs")
+KB_INSTRUCTION_PATH = os.path.join(_DOCS_DIR, "Roboto_ziniu_baze_instrukcija.pdf")
 KB_INSTRUCTION_NAME = "Roboto_ziniu_baze_instrukcija.pdf"
+# instrukcja bazy wiedzy w języku rynku: (ścieżka, nazwa załącznika)
+KB_INSTRUCTIONS = {
+    "lt": (KB_INSTRUCTION_PATH, KB_INSTRUCTION_NAME),
+    "de": (os.path.join(_DOCS_DIR, "Roboter_Wissensdatenbank_Anleitung.pdf"), "Roboter_Wissensdatenbank_Anleitung.pdf"),
+}
+
+
+def kb_instruction(code="lt"):
+    return KB_INSTRUCTIONS.get(code) or KB_INSTRUCTIONS["lt"]
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 # --- kanban ---
@@ -276,6 +285,64 @@ def lt_amount_words(amount, currency="EUR"):
     return f"{lt_number_words(whole)} {lt_plural(whole, forms)} {cents:02d} ct"
 
 
+_DE_UNITS = ["", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun"]
+_DE_TEENS = ["zehn", "elf", "zwölf", "dreizehn", "vierzehn", "fünfzehn", "sechzehn", "siebzehn", "achtzehn",
+             "neunzehn"]
+_DE_TENS = ["", "", "zwanzig", "dreißig", "vierzig", "fünfzig", "sechzig", "siebzig", "achtzig", "neunzig"]
+DE_CURRENCY_WORDS = {"EUR": "Euro", "PLN": "Złoty", "USD": "US-Dollar", "GBP": "Pfund Sterling"}
+
+
+def _de_below_hundred(n, final=True):
+    if n == 0:
+        return ""
+    if n == 1:
+        return "eins" if final else "ein"
+    if n < 10:
+        return _DE_UNITS[n]
+    if n < 20:
+        return _DE_TEENS[n - 10]
+    t, u = divmod(n, 10)
+    if not u:
+        return _DE_TENS[t]
+    return ("ein" if u == 1 else _DE_UNITS[u]) + "und" + _DE_TENS[t]
+
+
+def _de_below_thousand(n, final=True):
+    h, rest = divmod(n, 100)
+    head = ("einhundert" if h == 1 else _DE_UNITS[h] + "hundert") if h else ""
+    return head + _de_below_hundred(rest, final)
+
+
+def de_number_words(n):
+    """2125 -> 'zweitausendeinhundertfünfundzwanzig', 1000000 -> 'eine Million'."""
+    n = int(n)
+    if n == 0:
+        return "null"
+    parts = []
+    mil, rest = divmod(n, 1_000_000)
+    if mil:
+        parts.append("eine Million" if mil == 1 else f"{_de_below_thousand(mil, final=False)} Millionen")
+    th, rest = divmod(rest, 1000)
+    word = ""
+    if th:
+        word += ("eintausend" if th == 1 else _de_below_thousand(th, final=False) + "tausend")
+    word += _de_below_thousand(rest, final=True)
+    if word:
+        parts.append(word)
+    return " ".join(parts)
+
+
+def de_amount_words(amount, currency="EUR"):
+    """2100 -> 'zweitausendeinhundert Euro 00/100'."""
+    whole, cents = divmod(int(round(float(amount) * 100)), 100)
+    return f"{de_number_words(whole)} {DE_CURRENCY_WORDS.get(currency, currency)} {cents:02d}/100"
+
+
+def amount_words_for(code, amount, currency="EUR"):
+    """Kwota słownie w języku rynku (umowa)."""
+    return de_amount_words(amount, currency) if code == "de" else lt_amount_words(amount, currency)
+
+
 def money(amount):
     """4900 -> '4 900,00'."""
     return f"{float(amount):,.2f}".replace(",", " ").replace(".", ",")
@@ -290,6 +357,13 @@ CLIENT_BLANK = (
     "atstovaujama: ………………………………… (vardas, pavardė, pareigos)"
 )
 
+CLIENT_BLANKS = {
+    "lt": CLIENT_BLANK,
+    "de": ("………………………………………… (Firma / Name der Einrichtung bzw. Vor- und Nachname), Sitz / Anschrift: "
+           "………………………………………………, Handelsregisternummer: ……………………, USt-IdNr.: ……………………, "
+           "vertreten durch: ………………………………… (Vor- und Nachname, Funktion)"),
+}
+
 # pola dostępne we wzorze ({{ nazwa }}) — także we wgranym własnym DOCX
 FIELDS_DOC = [
     ("klient_opis", "Opis Zamawiającego — w wysyłanej umowie miejsce do uzupełnienia przez klienta"),
@@ -303,11 +377,11 @@ FIELDS_DOC = [
     ("rodzaj_przestrzeni", "Gdzie będzie pracował robot"),
     ("robot", "Model robota"),
     ("cena_netto", "Cena netto, np. 6 500,00"),
-    ("cena_netto_slownie", "Cena netto słownie (po litewsku)"),
+    ("cena_netto_slownie", "Cena netto słownie (w języku rynku: litewski / niemiecki)"),
     ("vat_stawka", "Stawka VAT, np. 0% (odwrotne obciążenie)"),
     ("vat_kwota", "Kwota VAT"),
     ("cena_brutto", "Cena brutto"),
-    ("cena_brutto_slownie", "Cena brutto słownie (po litewsku)"),
+    ("cena_brutto_slownie", "Cena brutto słownie (w języku rynku: litewski / niemiecki)"),
     ("waluta", "Waluta, np. EUR"),
     ("numer_umowy", "Numer umowy (nr leada/rok)"),
     ("data_umowy", "Data zawarcia — do uzupełnienia"),
@@ -421,6 +495,88 @@ a) prieigą prie standartinio 230 V elektros lizdo užkulisiuose akumuliatoriams
 """
 
 
+# treść umowy po niemiecku — ten sam układ i te same zasady co wersja litewska (Niemcy: prawo niemieckie)
+DEFAULT_TEMPLATE_DE = """# DIENSTLEISTUNGSVERTRAG ÜBER DIE BEREITSTELLUNG EINES HUMANOIDEN ROBOTERS Nr. {{ numer_umowy }}
+**Geschlossen am {{ data_umowy }} in {{ miasto }} (nachfolgend „Vertrag“) zwischen:**
+**Auftraggeber:** {{ klient_opis }}
+und
+**Auftragnehmer:** Bartosz Wysocki, Einzelunternehmer unter der Firma 33Bots Bartosz Wysocki, Korrespondenzanschrift: Plac Jana Henryka Dąbrowskiego 12, lok. 120, 00-055 Warschau, Polen, eingetragen im Zentralen Register und Informationssystem über die Gewerbetätigkeit der Republik Polen (CEIDG), Steuernummer (NIP): PL5253090645, REGON: 544792095, nachfolgend gemeinsam „Parteien“.
+
+## § 1 Vertragsgegenstand
+1. **Gegenstand des Vertrags ist die entgeltliche Dienstleistung des Auftragnehmers: die vorübergehende Bereitstellung eines humanoiden Roboters ({{ robot }}) einschließlich Bedienung durch einen Operator während der vom Auftraggeber organisierten Veranstaltung („Veranstaltung“):**
+– **Name der Veranstaltung: {{ nazwa_wydarzenia }}**
+– **Datum der Veranstaltung: {{ daty_wydarzenia }}**
+– **Leistungszeiten: {{ godziny }}**
+– **Ort: {{ miejsce_wydarzenia }}**
+– **Art der Veranstaltung: {{ charakter_wydarzenia }}**
+1. Die Dienstleistung umfasst insbesondere: a) die fristgerechte Bereitstellung des humanoiden Roboters; b) den Transport des Roboters zum Veranstaltungsort (gemäß Abs. 1) und seine Vorbereitung vor Ort; c) die umfassende Bedienung und Betreuung des Roboters durch einen zertifizierten Operator des Auftragnehmers während der gesamten Veranstaltung; d) die Anpassung und Programmierung der Aussagen des Roboters entsprechend den Zielen der Veranstaltung; e) das Anbringen von Markenzeichen des Auftraggebers am Roboter während der Veranstaltung; f) die Interaktion mit den Teilnehmern der Veranstaltung.
+1. Der Auftragnehmer ist berechtigt, zur Erfüllung des Vertrags Subunternehmer, einschließlich des Operators, einzusetzen, haftet jedoch in vollem Umfang für deren Handlungen und Unterlassungen.
+1. **Der Auftragnehmer bestätigt, dass ihm bekannt ist, dass die Dienstleistung in folgender Umgebung erbracht wird: {{ rodzaj_przestrzeni }}.**
+
+## § 2 Art und Qualität der Dienstleistung
+1. Der Auftragnehmer verpflichtet sich, die Dienstleistung mit der gebotenen Sorgfalt zu erbringen, und garantiert, dass der bereitgestellte Roboter technisch einwandfrei ist und die Ziele des Szenarios umsetzen kann.
+1. Der Auftragnehmer garantiert, dass der Roboter mindestens 80 % der in § 1 Abs. 1 genannten Leistungszeiten für die Interaktion mit den Teilnehmern der Veranstaltung zur Verfügung steht. Technische Unterbrechungen, die diese Grenze überschreiten, gelten als nicht ordnungsgemäße Vertragserfüllung.
+1. Der Auftragnehmer stellt sicher, dass das KI-System des Roboters entsprechend der vom Auftraggeber bereitgestellten Wissensdatenbank konfiguriert wird.
+
+## § 3 Durchführungs- und Sicherheitsregeln
+1. Der Roboter darf ausschließlich vom Operator des Auftragnehmers gesteuert werden.
+1. Der Operator des Auftragnehmers beaufsichtigt das Gerät und ist für die Sicherheit des Roboters sowie für die Verhinderung von Handlungen Dritter verantwortlich, die die Ausrüstung beschädigen könnten.
+1. Der Operator ist berechtigt, die Interaktion zu unterbrechen, wenn eine tatsächliche Gefahr für die Sicherheit von Personen oder der Ausrüstung besteht; er darf die Umsetzung des Szenarios jedoch nicht ohne technischen oder rechtlichen Grund eigenmächtig verweigern.
+
+## § 4 Technische und organisatorische Bedingungen
+1. Für den ordnungsgemäßen Betrieb des Roboters stellt der Auftraggeber sicher:
+a) einen sicheren Bereich für die Anlieferung des Roboters und einen ebenen Untergrund für seine Bewegung,
+a) Zugang zu einer Standardsteckdose (230 V) hinter der Bühne zum Laden der Akkus.
+1. Der Auftragnehmer erkennt an, dass der Auftraggeber nicht für Schäden am Roboter haftet, die auf vom Auftraggeber nicht zu vertretenden Ursachen beruhen; der Auftraggeber verpflichtet sich jedoch, Bedingungen ohne ungewöhnliche Gefahren für elektronische Geräte zu gewährleisten.
+
+## § 5 Vergütung
+1. Die Vergütung des Auftragnehmers für die vollständige Erbringung der Dienstleistung beträgt {{ cena_netto }} {{ waluta }} netto (in Worten: {{ cena_netto_slownie }}).
+1. {% if vat_kwota and vat_stawka not in ("0%", "0") %}Zu diesem Betrag wird die Umsatzsteuer zum geltenden Satz von {{ vat_stawka }} hinzugerechnet. Der Gesamtwert des Vertrags beträgt {{ cena_brutto }} {{ waluta }} brutto.{% else %}Die Rechnung wird ohne Umsatzsteuer ausgestellt – die Steuer wird vom Auftraggeber im Reverse-Charge-Verfahren (Steuerschuldnerschaft des Leistungsempfängers, Art. 196 der Richtlinie 2006/112/EG) berechnet und abgeführt.{% endif %}
+1. Die Zahlungsfrist beträgt 14 Tage ab Erhalt der Rechnung.
+1. Die Rechnung wird dem Auftraggeber per E-Mail zugesandt. Sie gilt am Tag ihres Versands als zugegangen.
+1. Die Zahlung erfolgt per Überweisung auf das in der Rechnung angegebene Bankkonto des Auftragnehmers. Als Zahlungstag gilt der Tag der Belastung des Bankkontos des Auftraggebers.
+
+## § 6 Haftung für die Ausrüstung
+1. Der Auftraggeber haftet für Schäden am Roboter, die vorsätzlich vom Auftraggeber oder seinen Mitarbeitern verursacht wurden.
+1. Der Auftraggeber haftet nicht für Schäden, die Dritte am Roboter verursacht haben, sofern der Schaden nicht auf grober Fahrlässigkeit des Operators des Auftragnehmers bei der Beaufsichtigung beruht.
+1. Wird der Roboter durch Verschulden Dritter beschädigt, macht der Auftragnehmer Schadensersatzansprüche zunächst gegenüber dem Schädiger geltend.
+
+## § 7 Werbematerialien und Bildrechte
+1. Während der Veranstaltung kann der Roboter mit Werbematerialien des Auftraggebers und des Auftragnehmers ausgestattet werden, einschließlich Kleidung, Werbeartikeln und anderer Elemente mit dem Logo oder den Kennzeichen des Auftraggebers.
+1. Der Auftraggeber ist berechtigt, den Roboter zu fotografieren und zu filmen und dieses Material ohne zusätzliche Vergütung an den Auftragnehmer für Informations- und Werbezwecke zu nutzen.
+1. Der Auftragnehmer ist ohne vorherige schriftliche Zustimmung des Auftraggebers nicht berechtigt, Fotos, Aufnahmen oder Informationen über die Veranstaltung, den Sitz des Auftraggebers oder die Zusammenarbeit der Parteien zu Werbe-, Marketing- oder Referenzzwecken zu veröffentlichen oder zu nutzen.
+
+## § 8 Haftung des Auftragnehmers
+1. Der Auftragnehmer haftet in vollem Umfang für Schäden, die der Roboter oder der Operator des Auftragnehmers Dritten oder dem Eigentum des Auftraggebers zufügt.
+1. Der Auftragnehmer bestätigt, dass er über eine gültige Geräteversicherung und eine angemessene Betriebshaftpflichtversicherung verfügt, die die mit der Bereitstellung humanoider Roboter verbundenen Risiken abdeckt.
+1. Die Haftung des Auftragnehmers ist nicht auf die Höhe der nach diesem Vertrag zu zahlenden Vergütung beschränkt.
+
+## § 9 Rücktritt und Kündigung
+1. Tritt der Auftraggeber weniger als 3 Tage vor der Veranstaltung von der Dienstleistung zurück, zahlt er dem Auftragnehmer 50 % der Vergütung.
+1. Der Auftraggeber ist berechtigt, den Vertrag fristlos zu kündigen, wenn der Auftragnehmer den funktionsfähigen Roboter nicht rechtzeitig bereitstellt oder wenn Ausfälle, Störungen oder Fehlfunktionen des Roboters auftreten, die die Erbringung der Dienstleistung und die Verwirklichung der Ziele der Veranstaltung unmöglich machen.
+1. Im Falle einer Kündigung nach Abs. 2 ist der Auftraggeber nicht zur Zahlung der Vergütung verpflichtet und kann eine Vertragsstrafe in Höhe der in § 5 genannten Vergütung verlangen. Dies schließt die Geltendmachung eines darüber hinausgehenden Schadens nach den allgemeinen Vorschriften nicht aus.
+
+## § 10 Personenbezogene Daten und Vertraulichkeit
+1. Die Parteien verpflichten sich, personenbezogene Daten gemäß der Datenschutz-Grundverordnung (DSGVO) zu verarbeiten.
+1. Der Auftragnehmer verpflichtet sich, sämtliche Textprotokolle und Daten der Wissensdatenbank unmittelbar nach der Veranstaltung unwiderruflich zu löschen.
+1. Die Parteien verpflichten sich, geschäftliche und technische Informationen bis 3 Jahre nach Vertragsende vertraulich zu behandeln.
+
+## § 11 Schlussbestimmungen
+1. Änderungen dieses Vertrags bedürfen zu ihrer Wirksamkeit der Schriftform.
+1. Dieser Vertrag unterliegt dem Recht der Bundesrepublik Deutschland.
+1. Für alle Streitigkeiten aus diesem Vertrag ist das Gericht am Sitz des Auftraggebers zuständig.
+1. Der Vertrag wird in zwei gleichlautenden Ausfertigungen geschlossen, je eine für jede Partei. Der Vertrag kann mit elektronischer Signatur oder durch den Austausch unterzeichneter, eingescannter Exemplare unterzeichnet werden.
+
+**Unterschriften der Parteien:**
+[[podpisy: AUFTRAGGEBER | AUFTRAGNEHMER (33Bots)]]
+"""
+
+DEFAULT_TEMPLATES = {"lt": DEFAULT_TEMPLATE, "de": DEFAULT_TEMPLATE_DE}
+
+
+def default_template(code="lt"):
+    return DEFAULT_TEMPLATES.get(code) or DEFAULT_TEMPLATE
+
 def _sandbox():
     # wzór może przyjść od człowieka (wgrany DOCX) — renderujemy w piaskownicy, bez wykonywania kodu
     from jinja2.sandbox import SandboxedEnvironment
@@ -440,8 +596,9 @@ def parse_amount(value):
     return v if v > 0 else None
 
 
-def contract_context(fields, lead_id, today, email="", phone=""):
-    """Pola do wzoru: to, co znamy z leada / okienka, reszta jako miejsce do uzupełnienia przez klienta."""
+def contract_context(fields, lead_id, today, email="", phone="", code="lt"):
+    """Pola do wzoru: to, co znamy z leada / okienka, reszta jako miejsce do uzupełnienia przez klienta
+    (opis klienta i kwoty słownie w języku rynku)."""
     f = {k: _clean(v) for k, v in (fields or {}).items() if v is not None}
     blank = lambda key: f.get(key) or DOTS  # noqa: E731
     currency = (f.get("waluta") or "EUR").upper()
@@ -452,7 +609,7 @@ def contract_context(fields, lead_id, today, email="", phone=""):
     days = [x.strip() for x in re.split(r"[,;]", days_text) if x.strip()]
     ctx = {k: DOTS for k in KNOWN_FIELDS}
     ctx.update({
-        "klient_opis": CLIENT_BLANK,
+        "klient_opis": CLIENT_BLANKS.get(code, CLIENT_BLANK),
         "nazwa_wydarzenia": blank("nazwa_wydarzenia"),
         "daty_wydarzenia": days_text or DOTS,
         "data_wydarzenia": days[0] if days else DOTS,
@@ -474,16 +631,16 @@ def contract_context(fields, lead_id, today, email="", phone=""):
         vat = round(netto * vat_rate / 100, 2)
         brutto = round(netto + vat, 2)
         ctx.update({
-            "cena_netto": money(netto), "cena_netto_slownie": lt_amount_words(netto, currency),
+            "cena_netto": money(netto), "cena_netto_slownie": amount_words_for(code, netto, currency),
             "vat_kwota": money(vat) if vat else "", "cena_brutto": money(brutto),
-            "cena_brutto_slownie": lt_amount_words(brutto, currency),
+            "cena_brutto_slownie": amount_words_for(code, brutto, currency),
         })
     return ctx
 
 
-def sample_context(today):
+def sample_context(today, code="lt"):
     return contract_context({"nazwa_wydarzenia": "Prezentacja", "daty_wydarzenia": today.strftime("%d.%m.%Y"),
-                             "cena_netto": "1300", "waluta": "EUR", "vat": "0"}, 77, today)
+                             "cena_netto": "1300", "waluta": "EUR", "vat": "0"}, 77, today, code=code)
 
 
 # --- DOCX ---
@@ -574,7 +731,7 @@ def render_docx(template_text, ctx):
         else:
             para(line)
     out = io.BytesIO()
-    doc.core_properties.title = "Umowa — 33Bots"
+    doc.core_properties.title = "33Bots"
     doc.core_properties.author = "33Bots"
     doc.save(out)
     return out.getvalue()
@@ -792,12 +949,20 @@ def signature(owner):
     return "\n".join(x for x in lines if x)
 
 
-def _when(days):
+def _when(days, code="lt"):
     """' jūsų renginiui 2026-11-21', ' jūsų renginiui 2026-11-21–23' (dni po kolei) albo
-    ' jūsų renginiams 2026-11-21 ir 2026-12-05' (osobne terminy)."""
+    ' jūsų renginiams 2026-11-21 ir 2026-12-05' (osobne terminy); po niemiecku
+    ' für Ihre Veranstaltung am 21.11.2026', ' … vom 21.–23.11.2026', ' für Ihre Veranstaltungen am … und …'."""
     days = sorted(set(d for d in days if d))
     if not days:
         return ""
+    if code == "de":
+        if len(days) == 1:
+            return f" für Ihre Veranstaltung am {days[0]:%d.%m.%Y}"
+        if all((b - a).days == 1 for a, b in zip(days, days[1:])):
+            return f" für Ihre Veranstaltung vom {days[0]:%d.%m.}–{days[-1]:%d.%m.%Y}"
+        listed = [f"{d:%d.%m.%Y}" for d in days]
+        return f" für Ihre Veranstaltungen am {', '.join(listed[:-1])} und {listed[-1]}"
     if len(days) == 1:
         return f" jūsų renginiui {days[0]:%Y-%m-%d}"
     if all((b - a).days == 1 for a, b in zip(days, days[1:])):
@@ -807,9 +972,12 @@ def _when(days):
 
 
 def email_draft(kind, company, robot, days, owner, today, kb_deadline_days, sent_on=None,
-                review_link="", prev_subject=""):
-    """(temat, treść) maila danego rodzaju — w LT CRM po litewsku. Bez imienia w powitaniu.
-    Umowa i baza wiedzy idą zwykle osobnymi mailami; „umowa_baza” to oba w jednym mailu."""
+                review_link="", prev_subject="", code="lt"):
+    """(temat, treść) maila danego rodzaju — w języku rynku (Litwa: litewski, Niemcy: niemiecki). Bez imienia
+    w powitaniu. Umowa i baza wiedzy idą zwykle osobnymi mailami; „umowa_baza” to oba w jednym mailu."""
+    if code == "de":
+        return _email_draft_de(kind, company, robot, days, owner, today, kb_deadline_days, sent_on,
+                               review_link, prev_subject)
     when = _when(days)
     robot = robot or "Unitree G1"
     first = min(days) if days else None
@@ -871,6 +1039,75 @@ def email_draft(kind, company, robot, days, owner, today, kb_deadline_days, sent
     return subject, body
 
 
+def _email_draft_de(kind, company, robot, days, owner, today, kb_deadline_days, sent_on=None,
+                    review_link="", prev_subject=""):
+    when = _when(days, "de")
+    robot = robot or "Unitree G1"
+    first = min(days) if days else None
+    deadline = (first - timedelta(days=kb_deadline_days)) if first else None
+    kb_by = (f"spätestens bis zum {max(deadline, today):%d.%m.%Y} (eine Woche vor der Veranstaltung)"
+             if deadline else "spätestens eine Woche vor der Veranstaltung")
+    head = "Guten Tag,\n\n"
+    tail = "\n\nBei Fragen stehe ich Ihnen gerne zur Verfügung.\n\nMit freundlichen Grüßen\n" + signature(owner)
+    label = f"{first:%d.%m.%Y}" if first else company
+    sign = ("1. die Angaben des Auftraggebers im Vertrag (die gepunkteten Felder) sowie fehlende Details zur "
+            "Veranstaltung zu ergänzen,\n"
+            "2. den Vertrag zu unterschreiben und als Antwort auf diese E-Mail zurückzusenden – eingescannt, "
+            "fotografiert oder als PDF mit elektronischer Signatur.\n\n")
+    kb_what = ("Auf Grundlage der Wissensdatenbank unterhält sich der Roboter mit Ihren Gästen: Er erzählt über Ihr "
+               "Unternehmen, beantwortet Fragen und hält sich an den vereinbarten Ton.")
+    if kind == "umowa":
+        subject = f"Vertrag – Robotervermietung {label} | 33Bots"
+        body = (head +
+                f"vielen Dank, dass Sie sich für 33Bots entschieden haben! Anbei erhalten Sie den Vertrag über die "
+                f"Vermietung des humanoiden Roboters {robot}{when}.\n\n"
+                "Wir bitten Sie:\n" + sign +
+                "Falls eine Bestimmung angepasst werden soll, besprechen wir das gerne." + tail)
+    elif kind == "umowa_baza":
+        subject = f"Vertrag und Wissensdatenbank – Robotervermietung {label} | 33Bots"
+        body = (head +
+                f"vielen Dank, dass Sie sich für 33Bots entschieden haben! Anbei erhalten Sie den Vertrag über die "
+                f"Vermietung des humanoiden Roboters {robot}{when} sowie eine PDF-Anleitung zur Vorbereitung der "
+                "Wissensdatenbank des Roboters.\n\n"
+                "Vertrag – wir bitten Sie:\n" + sign +
+                f"Wissensdatenbank – {kb_what} Bitte senden Sie sie uns {kb_by} – als Datei oder einfach als "
+                "Antwort auf diese E-Mail. Gerne helfen wir Ihnen bei der Vorbereitung.\n\n"
+                "Falls eine Vertragsbestimmung angepasst werden soll, besprechen wir das gerne." + tail)
+    elif kind == "umowa_przypomnienie":
+        subject = prev_subject if prev_subject.lower().startswith("re:") else (
+            f"Re: {prev_subject}" if prev_subject else f"Erinnerung: Vertrag – Robotervermietung {label} | 33Bots")
+        sent = f", den wir Ihnen am {sent_on:%d.%m.} geschickt haben" if sent_on else ""
+        body = (head +
+                f"ich möchte Sie kurz an den Vertrag über die Vermietung des Roboters {robot}{when}{sent} erinnern. "
+                "Bitte ergänzen Sie die Angaben, unterschreiben Sie den Vertrag und senden Sie ihn als Antwort auf "
+                "diese E-Mail zurück – den Vertrag füge ich noch einmal bei. Falls eine Bestimmung angepasst werden "
+                "soll, besprechen wir das gerne." + tail)
+    elif kind == "baza":
+        subject = f"Wissensdatenbank des Roboters – {label} | 33Bots"
+        body = (head +
+                f"anbei erhalten Sie eine PDF-Anleitung zur Vorbereitung der Wissensdatenbank des Roboters{when}. "
+                f"{kb_what}\n\n"
+                f"Bitte senden Sie uns die Wissensdatenbank {kb_by} – als Datei oder einfach als Antwort auf diese "
+                "E-Mail. Gerne helfen wir Ihnen bei der Vorbereitung." + tail)
+    elif kind == "baza_przypomnienie":
+        subject = f"Erinnerung: Wissensdatenbank des Roboters – {label} | 33Bots"
+        body = (head +
+                f"ich möchte Sie kurz an die Wissensdatenbank des Roboters{when} erinnern – bitte senden Sie sie uns "
+                f"{kb_by}, damit wir den Roboter rechtzeitig vorbereiten können. Die Anleitung füge ich noch einmal "
+                "bei; es genügt, auf diese E-Mail mit einer Datei oder einem Text zu antworten." + tail)
+    elif kind == "opinia":
+        subject = "Vielen Dank für die gemeinsame Veranstaltung! | 33Bots"
+        link = f"\n\n{review_link}" if review_link else ""
+        ask = ("Wir würden uns sehr über eine kurze Bewertung freuen – das dauert nur eine Minute:" if review_link else
+               "Wir würden uns sehr über ein paar Worte als Antwort auf diese E-Mail freuen.")
+        body = (head +
+                f"vielen Dank, dass Sie den Roboter {robot}{when} eingeladen haben! Wir hoffen, Ihre Gäste waren "
+                f"begeistert.\n\n{ask}{link}\n\nJede Bewertung hilft uns, noch besser zu werden." + tail)
+    else:
+        raise ValueError(kind)
+    return subject, body
+
+
 # --- faktura po wydarzeniu (inFakt) i dane do faktury z NIP ---
 
 OWN_NIP = "5253090645"  # 33Bots — nie bierzemy go za NIP klienta, gdy czytamy umowę
@@ -917,19 +1154,37 @@ def to_grosze(amount):
     return int(round(v * 100)) if v is not None else None
 
 
-def invoice_service_name(robot, days, event_name=""):
-    """Pozycja na fakturze — po angielsku (faktura z polskiej JDG dla klienta z Litwy)."""
+_SERVICE_NAME = {
+    "lt": "Humanoidinio roboto {robot} nuoma su operatoriaus aptarnavimu",
+    "de": "Vermietung des humanoiden Roboters {robot} mit Bedienung durch einen Operator",
+}
+_SERVICE_NAME_PL = "Wynajem robota humanoidalnego {robot} z obsługą operatora"
+
+
+def invoice_service_name(robot, days, event_name="", code="lt"):
+    """Pozycja na fakturze w języku klienta (litewski / niemiecki) z polskim tłumaczeniem po ukośniku —
+    klient czyta swoją część, księgowość w Polsce swoją. Nigdy po angielsku."""
     days = sorted(set(d for d in days if d))
     when = ""
     if days:
         when = (f" — {days[0]:%d.%m.%Y}" if len(days) == 1 else
                 f" — {', '.join(f'{d:%d.%m.%Y}' for d in days)}")
-    what = f" \"{event_name}\"" if event_name else ""
-    return f"Humanoid robot {robot or 'Unitree G1'} rental with operator service{what}{when}"
+    what = f" „{event_name}”" if event_name else ""
+    robot = robot or "Unitree G1"
+    native = (_SERVICE_NAME.get(code) or _SERVICE_NAME["lt"]).format(robot=robot)
+    return f"{native} / {_SERVICE_NAME_PL.format(robot=robot)}{what}{when}"
 
 
-def invoice_email(number, days, payment_date, owner):
-    when = _when(days)
+def invoice_email(number, days, payment_date, owner, code="lt"):
+    when = _when(days, code)
+    if code == "de":
+        subject = f"Rechnung {number} – 33Bots" if number else "Rechnung – 33Bots"
+        body = ("Guten Tag,\n\n"
+                f"anbei erhalten Sie die Rechnung{(' Nr. ' + number) if number else ''} für die Robotervermietung{when}. "
+                f"Zahlungsziel: {payment_date:%d.%m.%Y}.\n\n"
+                "Vielen Dank für die Zusammenarbeit – wir hoffen, Ihre Gäste waren begeistert!\n\n"
+                "Mit freundlichen Grüßen\n" + signature(owner))
+        return subject, body
     subject = f"Sąskaita faktūra {number} – 33Bots" if number else "Sąskaita faktūra – 33Bots"
     body = ("Laba diena,\n\n"
             f"prisegu sąskaitą faktūrą{(' Nr. ' + number) if number else ''} už roboto nuomą{when}. "

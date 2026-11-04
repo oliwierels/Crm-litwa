@@ -1,5 +1,5 @@
 {% extends "crm/base.html" %}
-{% block title %}Skrzynka kontakt@ – 33bots LT CRM{% endblock %}
+{% block title %}Skrzynka kontakt@ – {{ crm_brand }}{% endblock %}
 {% block page_title %}📥 Skrzynka {{ mailbox or 'kontakt@' }}{% endblock %}
 {% block topbar_actions %}
 {% if configured and ai_ready %}

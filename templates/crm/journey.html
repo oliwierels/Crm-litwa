@@ -1,6 +1,6 @@
 {% extends "crm/base.html" %}
 {% import "crm/_journey.html" as jr with context %}
-{% block title %}Customer Journey – 33bots LT CRM{% endblock %}
+{% block title %}Customer Journey – {{ crm_brand }}{% endblock %}
 {% block page_title %}Customer Journey{% endblock %}
 {% block topbar_actions %}
 <a href="{{ url_for('crm_journey') }}{% if not only %}?tylko=akcja{% endif %}" class="btn btn-{{ 'primary' if only else 'secondary' }} btn-sm" title="Pokaż tylko klientów, przy których trzeba teraz coś zrobić">

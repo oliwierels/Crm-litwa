@@ -1,5 +1,5 @@
 {% extends "crm/base.html" %}
-{% block title %}Oferta {{ offer.price }} – 33bots LT CRM{% endblock %}
+{% block title %}Oferta {{ offer.price }} – {{ crm_brand }}{% endblock %}
 {% block page_title %}📄 {% if offer.sent_at %}Oferta wysłana{% else %}Oferta do sprawdzenia{% endif %}{% endblock %}
 {% block topbar_actions %}
 <a href="{{ url_for('crm_offers') }}" class="btn btn-secondary btn-sm">← Wszystkie oferty</a>

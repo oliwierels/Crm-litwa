@@ -1,6 +1,6 @@
 {% extends "crm/base.html" %}
 {% import "crm/_journey.html" as jr with context %}
-{% block title %}{{ lead.company }} – 33bots LT CRM{% endblock %}
+{% block title %}{{ lead.company }} – {{ crm_brand }}{% endblock %}
 {% block page_title %}
 <a href="{{ url_for('crm_leads') }}" style="color:var(--muted);font-weight:400;font-size:13px"><i class="bi bi-arrow-left me-1"></i>Leady</a>
 <span style="color:var(--border);margin:0 8px">/</span>{{ lead.company }}
@@ -144,8 +144,9 @@
     </script>
 
     {% if is_lithuanian(lead) %}
+    {% set lsend = lt_sender(lead.market) %}
     <div class="panel">
-      <div class="panel-header">🇱🇹 Klient z Litwy</div>
+      <div class="panel-header">{{ mkt.flag }} Klient — {{ mkt.name }} <span style="font-weight:400;color:var(--muted);font-size:11.5px">(maile {{ mkt.lang_in_pl }})</span></div>
       <div class="panel-body" style="font-size:12.5px">
         {% if lead.lt_mail_at %}
           <div>✅ Mail z prośbą o dane wysłany {{ to_local(lead.lt_mail_at).strftime('%d.%m %H:%M') }}</div>
@@ -154,21 +155,21 @@
         {% endif %}
         {% if lead.form_filled_at %}<div style="color:var(--green)">📝 Formularz wypełniony {{ to_local(lead.form_filled_at).strftime('%d.%m %H:%M') }} — dane w komentarzach</div>
         {% elif lead.lt_mail_at %}<div style="color:var(--muted)">Formularz jeszcze niewypełniony.</div>{% endif %}
-        {% if lead.emails and lt_mailbox_ready() %}
+        {% if lead.emails and lt_mailbox_ready(lead.market) %}
         <form method="post" action="{{ url_for('crm_lt_mail', lead_id=lead.id) }}" style="margin-top:8px"
-              onsubmit="if (!confirm('{{ 'Mail już poszedł. Wysłać PONOWNIE' if lead.lt_mail_at else 'Wysłać' }} po litewsku prośbę o dane do wyceny na: {{ lead.emails|join(', ') }}?')) return false; this.querySelector('button').disabled = true; return true;">
+              onsubmit="if (!confirm('{{ 'Mail już poszedł. Wysłać PONOWNIE' if lead.lt_mail_at else 'Wysłać' }} {{ mkt.lang_in_pl }} prośbę o dane do wyceny na: {{ lead.emails|join(', ') }}?')) return false; this.querySelector('button').disabled = true; return true;">
           {% if lead.lt_mail_at %}<input type="hidden" name="resend" value="1">{% endif %}
-          <button class="btn btn-secondary btn-sm">📨 {{ 'Wyślij ponownie' if lead.lt_mail_at else 'Wyślij teraz' }} (z o.latek@33bots.lt)</button>
+          <button class="btn btn-secondary btn-sm">📨 {{ 'Wyślij ponownie' if lead.lt_mail_at else 'Wyślij teraz' }} (z {{ lsend.email }})</button>
         </form>
         {% set backlog = lt_backlog() %}
         {% if backlog|length > (0 if lead.lt_mail_at else 1) %}
         <form method="post" action="{{ url_for('crm_lt_mail_backlog') }}" style="margin-top:6px"
-              onsubmit="return confirm('Wysłać mail z prośbą o dane do wszystkich {{ backlog|length }} litewskich leadów na etapie Nowy, które go jeszcze nie dostały?')">
-          <button class="btn btn-secondary btn-sm">📨 Wyślij do wszystkich zaległych litewskich leadów ({{ backlog|length }})</button>
+              onsubmit="return confirm('Wysłać mail z prośbą o dane do wszystkich {{ backlog|length }} leadów ({{ mkt.name }}) na etapie Nowy, które go jeszcze nie dostały?')">
+          <button class="btn btn-secondary btn-sm">📨 Wyślij do wszystkich zaległych leadów — {{ mkt.name }} ({{ backlog|length }})</button>
         </form>
         {% endif %}
         {% elif not lead.emails %}<div style="color:var(--yellow);margin-top:6px">Brak adresu e-mail — mail nie wyjdzie.</div>
-        {% else %}<div style="color:var(--yellow);margin-top:6px">Skrzynka 33bots.lt niepodpięta (SMTP_PASS_LT w Railway).</div>{% endif %}
+        {% else %}<div style="color:var(--yellow);margin-top:6px">Skrzynka {{ mkt.own_email }} niepodpięta (MAIL_PASSWORD w Railway).</div>{% endif %}
       </div>
     </div>
 
@@ -184,7 +185,7 @@
           </div>
           <div style="color:var(--muted);margin:4px 0 8px">
             🕒 {{ lq.time }} ({{ (lq.duration|round(1)|string).replace('.0', '') }} h → pakiet {{ lq.hours }} h){% if lq.when %} · 📅 {{ lq.when }}{% endif %}
-            · 📍 {{ lq.place }} (≈{{ lq.km }} km od granicy){% if lq.days > 1 %} · {{ lq.days }} dni{% endif %}
+            · 📍 {{ lq.place }} (≈{{ lq.km }} km od: {{ lq.departure }}){% if lq.days > 1 %} · {{ lq.days }} dni{% endif %}
           </div>
           {% if lq.assumed %}<div style="color:var(--yellow);margin-bottom:6px">⚠️ W leadzie nie ma godzin — przyjęto {{ lq.hours }} h. Zmień w kalkulatorze, jeśli wiesz więcej.</div>{% endif %}
           {% if lq.over8 %}<div style="color:var(--yellow);margin-bottom:6px">⚠️ Ponad 8 h — policzone jak 8 h, sprawdź w kalkulatorze.</div>{% endif %}

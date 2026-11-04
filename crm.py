@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, make_response, abort, session
+from flask import Flask, render_template, request, redirect, url_for, jsonify, make_response, abort, session, g, \
+    has_request_context
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, date, timedelta, timezone
 from email.mime.text import MIMEText
@@ -8,7 +9,9 @@ import hashlib, hmac, json, os, re, secrets, smtplib, threading, time
 import requests
 import journey
 import logistics
+import market as markets
 import offers
+import poczta
 import pricing
 
 try:
@@ -32,6 +35,47 @@ app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("RAILWAY_ENVIRONMENT")
 # Railway stoi za proxy: prawdziwe IP klienta i https z nagłówków X-Forwarded-*
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 db = SQLAlchemy(app)
+
+# ---------- RYNKI: Litwa i Niemcy w jednym CRM ----------
+# Każdy lead ma rynek (Lead.market: lt / de). Przełącznik w menu wybiera, który rynek oglądamy — widoki pokazują
+# tylko leady (i ich zadania, oferty, umowy, maile) tego rynku. Wszystko do klienta idzie w języku rynku leada.
+DEFAULT_MARKET = os.environ.get("DEFAULT_MARKET", "").strip().lower() if os.environ.get(
+    "DEFAULT_MARKET", "").strip().lower() in markets.MARKETS else "lt"
+MARKET_COOKIE = "crm_market"
+
+
+def current_market():
+    """Rynek oglądany w CRM (przełącznik w menu); poza zapytaniem przeglądarki — domyślny."""
+    if has_request_context():
+        forced = getattr(g, "market_force", None)
+        if forced:
+            return forced
+        code = request.cookies.get(MARKET_COOKIE, "")
+        if code in markets.MARKETS:
+            return code
+    return DEFAULT_MARKET
+
+
+def M(code=None):
+    """Teksty i ustawienia rynku (market.py)."""
+    return markets.get(code or current_market())
+
+
+def lead_market(lead):
+    return (getattr(lead, "market", None) or DEFAULT_MARKET) if lead is not None else current_market()
+
+
+def wrong_language(code, *texts):
+    """Kod języka, gdy tekst do klienta wyraźnie NIE jest w języku rynku `code` (np. 'en', 'pl'), inaczej None."""
+    lang = poczta.detect_lang("\n".join(str(t or "") for t in texts))
+    return lang if lang and lang != markets.get(code)["lang"] else None
+
+
+def _default_market():
+    if has_request_context():
+        return getattr(g, "market_force", None) or current_market()
+    return DEFAULT_MARKET
+
 
 USERS = [
     {"id": 1, "name": "Oliwier", "color": "#6366f1", "avatar": "O", "email": "o.latek@33bots.lt",
@@ -91,6 +135,7 @@ class Lead(db.Model):
     contact_email = db.Column(db.String(200))
     contact_email2 = db.Column(db.String(200))  # drugi adres klienta (np. asystentka, księgowość)
     pl_id = db.Column(db.Integer, nullable=True)  # id leada w polskim CRM, jeśli został stamtąd przeniesiony
+    market = db.Column(db.String(2), nullable=False, default=_default_market, index=True)  # lt | de
     contact_phone = db.Column(db.String(50))
     stage = db.Column(db.String(50), nullable=False, default="Nowy")
     robot_model = db.Column(db.String(100))
@@ -372,6 +417,7 @@ class Campaign(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     started_at = db.Column(db.DateTime)
     last_sent_at = db.Column(db.DateTime)
+    market = db.Column(db.String(2), nullable=False, default=_default_market)  # lt / de — język i nadawca
 
     recipients = db.relationship("CampaignRecipient", backref="campaign", cascade="all, delete-orphan",
                                  order_by="CampaignRecipient.id")
@@ -426,6 +472,8 @@ class InboxMessage(db.Model):
     reason = db.Column(db.String(300))
     lead_id = db.Column(db.Integer, db.ForeignKey("leads.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    mailbox = db.Column(db.String(200))  # skrzynka zapytań (kontakt@33bots.lt / kontakt@33bots.de)
+    market = db.Column(db.String(2), nullable=False, default="lt")
 
     lead = db.relationship("Lead")
 
@@ -437,6 +485,7 @@ class MailMessage(db.Model):
     __table_args__ = (db.UniqueConstraint("mailbox", "folder", "uidvalidity", "uid", name="uq_mail_uid"),)
     id = db.Column(db.Integer, primary_key=True)
     mailbox = db.Column(db.String(200), index=True, nullable=False)
+    market = db.Column(db.String(2), index=True)  # lt | de — z domeny skrzynki
     folder = db.Column(db.String(10), nullable=False)  # in | sent
     uid = db.Column(db.Integer, nullable=True)  # None = wysłany z CRM, czeka na kopię z Wysłanych
     uidvalidity = db.Column(db.String(40), nullable=True)
@@ -478,10 +527,32 @@ class GeoCache(db.Model):
 
 def ensure_schema():
     # brakujące kolumny (działa na SQLite i Postgresie)
+    insp = db.inspect(db.engine)
+    if "mail_messages" in insp.get_table_names():
+        mcols = [col["name"] for col in insp.get_columns("mail_messages")]
+        if "market" not in mcols:
+            with db.engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE mail_messages ADD COLUMN market VARCHAR(2)")
+                conn.exec_driver_sql("UPDATE mail_messages SET market = 'de' WHERE mailbox LIKE '%.de'")
+                conn.exec_driver_sql("UPDATE mail_messages SET market = 'lt' WHERE market IS NULL")
+    if "inbox_messages" in insp.get_table_names():
+        icols = [col["name"] for col in insp.get_columns("inbox_messages")]
+        with db.engine.begin() as conn:
+            if "mailbox" not in icols:
+                conn.exec_driver_sql("ALTER TABLE inbox_messages ADD COLUMN mailbox VARCHAR(200)")
+            if "market" not in icols:
+                conn.exec_driver_sql("ALTER TABLE inbox_messages ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT 'lt'")
+    if "campaigns" in insp.get_table_names():
+        if "market" not in [col["name"] for col in insp.get_columns("campaigns")]:
+            with db.engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE campaigns ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT 'lt'")
     cols = [c["name"] for c in db.inspect(db.engine).get_columns("leads")]
     with db.engine.begin() as conn:
         if "contact_email2" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN contact_email2 VARCHAR(200)")
+        if "market" not in cols:
+            conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT 'lt'")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_leads_market ON leads (market)")
         if "pl_id" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN pl_id INTEGER")
         if "lt_mail_at" not in cols:
@@ -580,6 +651,85 @@ def get_current_user(req):
         return USERS_BY_ID.get(uid, USERS[0])
     except Exception:
         return USERS[0]
+
+
+# ---------- FILTR RYNKU (Litwa / Niemcy) ----------
+# W zapytaniach z przeglądarki CRM pokazuje tylko leady oglądanego rynku — także ich zadania, oferty, umowy,
+# dokumenty i maile (filtr dokładany automatycznie do każdego zapytania ORM). Wątki w tle widzą wszystko.
+from sqlalchemy import event as _sa_event, select as _sa_select  # noqa: E402
+from sqlalchemy.orm import Session as _OrmSession, with_loader_criteria  # noqa: E402
+
+_MARKET_FREE_ENDPOINTS = {"static", "lead_form", "mcp_endpoint", "whatsapp_webhook", "set_ui_lang", "set_market",
+                          "crm_login", "crm_logout", "index"}
+
+
+def _lead_children():
+    return (Activity, LeadEventDate, StageHistory, Crew, Journey, JourneyMail, JourneyDocument, SentOffer,
+            ContractRequest, CampaignRecipient)
+
+
+@_sa_event.listens_for(_OrmSession, "do_orm_execute")
+def _market_criteria(state):
+    if not state.is_select or state.execution_options.get("all_markets") or not has_request_context():
+        return
+    code = getattr(g, "market_filter", None)
+    if not code:
+        return
+    opts = [with_loader_criteria(Lead, lambda cls: cls.market == code, include_aliases=True),
+            with_loader_criteria(MailMessage, lambda cls: cls.market == code, include_aliases=True),
+            with_loader_criteria(Campaign, lambda cls: cls.market == code, include_aliases=True),
+            with_loader_criteria(InboxMessage, lambda cls: cls.market == code, include_aliases=True)]
+    for model in _lead_children():
+        opts.append(with_loader_criteria(
+            model, lambda cls: db.or_(cls.lead_id.is_(None),
+                                      cls.lead_id.in_(_sa_select(Lead.id).where(Lead.market == code))),
+            include_aliases=True))
+    state.statement = state.statement.options(*opts)
+
+
+def all_markets(query):
+    """Zapytanie bez filtra rynku (np. szukanie duplikatów, link do leada z drugiego rynku)."""
+    return query.execution_options(all_markets=True)
+
+
+@app.before_request
+def _set_market_filter():
+    for key in ("market_force", "market_switched", "market_filter"):  # nic nie przechodzi z poprzedniego zapytania
+        g.pop(key, None)
+    if request.endpoint in _MARKET_FREE_ENDPOINTS or request.endpoint is None or request.path.startswith("/f/"):
+        return None
+    code = current_market()
+    lead_id = (request.view_args or {}).get("lead_id")
+    if lead_id:  # link do leada z drugiego rynku — przełącz się na jego rynek
+        other = all_markets(db.session.query(Lead.market).filter(Lead.id == lead_id)).scalar()
+        if other and other != code:
+            g.market_force = other
+            g.market_switched = other
+            code = other
+    g.market_filter = code
+    return None
+
+
+@app.after_request
+def _remember_switched_market(resp):
+    switched = getattr(g, "market_switched", None) if has_request_context() else None
+    if switched:
+        resp.set_cookie(MARKET_COOKIE, switched, max_age=3600 * 24 * 365, samesite="Lax")
+    return resp
+
+
+@app.route("/crm/rynek/<code>")
+def set_market(code):
+    resp = redirect(url_for("crm_dashboard") if "/leads/" in (request.referrer or "") else (request.referrer or "/crm/"))
+    if code in markets.MARKETS:
+        resp.set_cookie(MARKET_COOKIE, code, max_age=3600 * 24 * 365, samesite="Lax")
+    return resp
+
+
+@app.context_processor
+def _inject_market():
+    code = current_market()
+    return {"mkt": M(code), "mkt_code": code, "all_mkts": markets.MARKETS, "crm_brand": M(code)["brand"]}
 
 
 # ---------- JĘZYK INTERFEJSU (PL / LT) ----------
@@ -1382,6 +1532,7 @@ def sync_clickup_leads():
             clickup_pending=True,  # ląduje w zakładce "Z ClickUp", nie od razu w CRM
             assigned_to=fields.get("assigned_to", 1), source=fields.get("source", "ClickUp"),
             notes=fields.get("notes", ""), currency=fields.get("currency", "EUR"),
+            market=markets.detect(fields.get("contact_phone"), [fields.get("contact_email")]) or DEFAULT_MARKET,
         )
         for f in _CLICKUP_REFRESH_FIELDS:
             if f in fields:
@@ -2021,39 +2172,13 @@ def followup_lead(act):
     return None
 
 
-FOLLOWUP_LANGS = {"pl": "polski", "en": "angielski", "de": "niemiecki", "lt": "litewski"}
-LT_SENDER_ID = -1  # w okienku follow-upu: skrzynka 33bots.lt zamiast skrzynki osoby
-
-_DE_TLDS = (".de", ".at", ".ch")
-_PHONE_LANG = (("370", "lt"), ("49", "de"), ("43", "de"), ("41", "de"))
+FOLLOWUP_LANGS = {"lt": "litewski", "de": "niemiecki"}  # tylko języki rynków — nigdy po angielsku ani po polsku
 
 
 def lead_language(lead):
-    """Język klienta do maili: litewski (jak przy auto-mailu LT), niemiecki (DE/AT/CH),
-    angielski dla innych zagranicznych, a polski dla reszty."""
-    if is_lithuanian(lead):
-        return "lt"
-    country = (lead.billing_country or "").upper()
-    if country in ("DE", "AT", "CH"):
-        return "de"
-    emails = [e.lower() for e in lead.emails]
-    if any(e.endswith(_DE_TLDS) for e in emails):
-        return "de"
-    raw = re.sub(r"[^\d+]", "", lead.contact_phone or "")
-    digits = raw.lstrip("+")
-    if digits.startswith("00"):
-        digits = digits[2:]
-    elif not raw.startswith("+"):
-        digits = ""  # numer bez kierunkowego = polski
-    if digits and not digits.startswith("48") and len(digits) >= 10:
-        return next((lang for code, lang in _PHONE_LANG if digits.startswith(code)), "en")
-    if country and country != "PL":
-        return "en"
-    if any(e.endswith(".pl") for e in emails):
-        return "pl"
-    if emails and all(re.search(r"\.(lv|ee|cz|sk|uk|fr|it|es|nl|be|dk|se|no|fi|ua|hu|ro)$", e) for e in emails):
-        return "en"
-    return "pl"
+    """Język klienta = język rynku leada (Litwa → litewski, Niemcy → niemiecki). Wszystko, co idzie do klienta
+    (maile, oferta, umowa, formularz), jest w tym języku — nigdy po angielsku ani po polsku."""
+    return markets.get(lead_market(lead))["lang"]
 
 
 _FU_TEXT = {
@@ -2107,12 +2232,13 @@ def followup_draft(lead, sender, lang=None):
              .order_by(SentOffer.sent_at.desc()).first())
     today = to_local(datetime.utcnow()).date()
     event = sane_event_date(lead.event_date)
-    when = t["when"].format(date=f"{event:%d.%m.%Y}") if event and event.date() >= today else ""
+    dfmt = "%Y-%m-%d" if lang == "lt" else "%d.%m.%Y"  # Litwa: 2026-12-12, Niemcy: 12.12.2026
+    when = t["when"].format(date=f"{event:{dfmt}}") if event and event.date() >= today else ""
     if offer:
         subject = offer.subject or t["offer_subject"].format(company=lead.company)
         if not subject.lower().startswith("re:"):
             subject = "Re: " + subject
-        first = t["first_offer"].format(when=when, sent=f"{to_local(offer.sent_at):%d.%m.%Y}")
+        first = t["first_offer"].format(when=when, sent=f"{to_local(offer.sent_at):{dfmt}}")
     else:
         subject = t["subject"].format(company=lead.company)
         first = t["first"].format(when=when)
@@ -2130,16 +2256,13 @@ def api_activity_followup(aid):
     if not lead:
         return jsonify({"error": "To zadanie nie jest otwartym mailem do leada z adresem e-mail."}), 400
     user = get_current_user(request)
-    senders = [u for u in USERS if user_can_send_offers(u)]
-    if lt_mailbox_ready():  # litewskim klientom piszemy ze skrzynki 33bots.lt
-        senders.append(dict(lt_sender(), id=LT_SENDER_ID))
+    senders = [market_sender(u, lead_market(lead)) for u in USERS if user_can_send_offers(u)]
     if not senders:
         return jsonify({"error": "Nikt nie ma e-maila i telefonu w Profilu — nie ma z czego wysłać."}), 400
     args = request.form if request.method == "POST" else request.args
     lang = args.get("lang") if args.get("lang") in FOLLOWUP_LANGS else lead_language(lead)
     wanted = args.get("sender", type=int)
     sender = (next((u for u in senders if u["id"] == wanted), None)
-              or (next((u for u in senders if u["id"] == LT_SENDER_ID), None) if lang == "lt" else None)
               or next((u for u in senders if u["id"] == act.assigned_to), None)
               or next((u for u in senders if u["id"] == user["id"]), None) or senders[0])
     to_addr = ", ".join(lead.emails)
@@ -2147,8 +2270,7 @@ def api_activity_followup(aid):
         subject, body = followup_draft(lead, sender, lang)
         return jsonify({"to": to_addr, "recipients": lead.emails, "company": lead.company, "subject": subject, "body": body,
                         "lang": lang, "langs": FOLLOWUP_LANGS, "sender_id": sender["id"],
-                        "senders": [{"id": u["id"], "name": f"{u['full_name']} ({u['email']})" if u["id"] == LT_SENDER_ID
-                                     else u["full_name"]} for u in senders]})
+                        "senders": [{"id": u["id"], "name": f"{u['full_name']} ({u['email']})"} for u in senders]})
     if request.form.get("to") is not None:  # adresaci wybrani w okienku (domyślnie wszystkie adresy leada)
         recipients, bad = check_recipients(request.form.get("to"))
         if bad:
@@ -3072,22 +3194,30 @@ def _logistics_range():
 
 # ---------- KALKULATOR WYCENY (czas na miejscu + dojazd od granicy PL–LT) ----------
 
-def price_quotes(destination, hours, km=None, departures=None, remote_budget=2, night=0.0, days=1):
-    """Wycena dla miejsca (albo podanych km) z każdego punktu wyjazdu.
-    Zwraca dict: place (nazwa), unknown (nie znaleziono miejsca), options {klucz: {label, km, quote}}."""
-    departures = departures or list(pricing.DEPARTURES)
+def price_quotes(destination, hours, km=None, departures=None, remote_budget=2, night=0.0, days=1, code=None):
+    """Wycena dla miejsca (albo podanych km) z każdego punktu wyjazdu rynku (Litwa: granica w Budzisku,
+    Niemcy: Frankfurt/Oder i Görlitz) po cenniku rynku. Zwraca dict: place (nazwa), unknown (nie znaleziono
+    miejsca), options {klucz: {label, km, quote}} — od najbliższego punktu, best (klucz najbliższego)."""
+    r = pricing.rates(code or current_market())
+    deps = [k for k in (departures or list(r["departures"])) if k in r["departures"]] or list(r["departures"])
     point, label = (None, "")
     if km is None:
         point, label = _Locator(remote_budget)(destination)
-    out = {"place": label or (destination or "").strip(), "unknown": km is None and point is None, "options": {}}
-    for key in departures:
+    out = {"place": label or (destination or "").strip(), "unknown": km is None and point is None, "options": {},
+           "best": None, "code": r["code"]}
+    rows = []
+    for key in deps:
         if km is not None:
             dist = km
         elif point is not None:
-            dist = logistics.road_km(logistics.CITIES[key], point)
+            dist = logistics.road_km(r["departures"][key][2], point)
         else:
             continue
-        out["options"][key] = {"label": pricing.DEPARTURES[key], "km": dist, "quote": pricing.quote(hours, dist, night, days)}
+        rows.append((dist, key))
+    for dist, key in sorted(rows):
+        out["options"][key] = {"label": r["departures"][key][0], "km": dist,
+                               "quote": pricing.quote(hours, dist, night, days, r)}
+    out["best"] = next(iter(out["options"]), None)
     return out
 
 
@@ -3098,11 +3228,12 @@ def _lead_place(lead):
     return next((d.location for d in days if d.location), None) or lead.location or ""
 
 
-def _calc_params(src):
+def _calc_params(src, code=None):
+    r = pricing.rates(code or current_market())
     hours = src.get("h", type=int) or 8
     if hours not in pricing.HOUR_FACTORS:
         hours = 8
-    dep = src.get("z") if src.get("z") in pricing.DEPARTURES else next(iter(pricing.DEPARTURES))
+    dep = src.get("z") if src.get("z") in r["departures"] else ""  # "" = najbliższy punkt wyjazdu
     km_raw = (src.get("km") or "").replace(",", ".").strip()
     try:
         km = max(0.0, min(float(km_raw), 5000.0)) if km_raw else None
@@ -3113,10 +3244,20 @@ def _calc_params(src):
     return hours, dep, km, start, days
 
 
+def _calc_lead(lead_id):
+    """Lead do kalkulatora (także z drugiego rynku — wtedy kalkulator przełącza się na jego rynek)."""
+    lead = all_markets(Lead.query.filter(Lead.id == (lead_id or 0))).first() if lead_id else None
+    if lead is not None and has_request_context():
+        g.market_force = lead_market(lead)
+    return lead
+
+
 @app.route("/crm/kalkulator")
 def crm_calculator():
-    lead = db.session.get(Lead, request.args.get("lead", type=int) or 0)
-    hours, dep, km, start, days = _calc_params(request.args)
+    lead = _calc_lead(request.args.get("lead", type=int))
+    code = lead_market(lead) if lead else current_market()
+    m, r = markets.get(code), pricing.rates(code)
+    hours, dep, km, start, days = _calc_params(request.args, code)
     night = pricing.night_hours(start, hours)
     dest = (request.args.get("cel") or "").strip()[:200]
     if lead and not dest and "cel" not in request.args:
@@ -3130,28 +3271,32 @@ def crm_calculator():
         night = pricing.night_hours(start, hours)
     if lead and "dni" not in request.args and lead.event_days:
         days = max(1, min(len(lead.event_days), pricing.MAX_DAYS))
-    result = price_quotes(dest, hours, km, night=night, days=days) if (dest or km is not None) else None
+    result = price_quotes(dest, hours, km, night=night, days=days, code=code) if (dest or km is not None) else None
+    if not dep:  # bez wyboru: najbliższy punkt wyjazdu (Niemcy: Frankfurt/Oder albo Görlitz)
+        dep = (result or {}).get("best") or next(iter(r["departures"]))
     message = ""
     opt = (result or {}).get("options", {}).get(dep) if result else None
     if opt:
         price_txt = f"{opt['quote']['rounded']:,}".replace(",", " ")
         time_txt = (f"{pricing.fmt_hour(start)}–{pricing.fmt_hour(start + hours)}" if start is not None
-                    else f"{pricing.fmt_num(hours)} val.")
-        message = lt_offer_message(lead, _lt_dates_text(lead) if lead else "", time_txt, dest or result["place"], price_txt)
+                    else f"{pricing.fmt_num(hours)} {m['hours_unit']}")
+        message = lt_offer_message(lead, _lt_dates_text(lead) if lead else "", time_txt, dest or result["place"],
+                                   price_txt, code=code)
     return render_template(
         "crm/calculator.html", lead=lead, dest=dest, hours=hours, dep=dep, km=km, result=result,
         message=message, hours_note=hours_note,
-        wa_digits=lt_phone_digits(lead.contact_phone) if lead else "",
+        wa_digits=lt_phone_digits(lead.contact_phone, code) if lead else "",
         start=start, start_text=pricing.fmt_hour(start) if start is not None else "",
         end_text=pricing.fmt_hour(start + hours) if start is not None else "", night=night,
         days=days, day_options=[(d, pricing.days_label(d), pricing.day_discount(d))
                                 for d in range(1, pricing.MAX_DAYS + 1)],
-        departures=pricing.DEPARTURES, departures_from=pricing.DEPARTURES_FROM,
-        hour_options=sorted(pricing.HOUR_FACTORS, reverse=True),
-        cfg={"base": pricing.BASE_8H, "rate": pricing.KM_RATE, "share": int(pricing.TRAVEL_MAX_SHARE * 100),
+        departures={k: v[0] for k, v in r["departures"].items()},
+        departures_from={k: v[1] for k, v in r["departures"].items()},
+        hour_options=sorted(pricing.HOUR_FACTORS, reverse=True), calc_market=m,
+        cfg={"base": r["base"], "rate": r["km"], "share": int(pricing.TRAVEL_MAX_SHARE * 100),
              "round": pricing.ROUND_TO, "night_from": pricing.NIGHT_FROM, "night_to": pricing.NIGHT_TO,
              "night_mult": pricing.fmt_num(pricing.NIGHT_MULT), "lodging_km": pricing.LODGING_KM,
-             "lodging": pricing.LODGING_COST,
+             "lodging": r["lodging"], "calc_from": m["calc_from"],
              "disc": {d: int(p * 100) for d, p in pricing.DAY_DISCOUNTS.items()}},
         fmt_num=pricing.fmt_num,
         fmt_zl=pricing.fmt_zl,
@@ -3161,16 +3306,17 @@ def crm_calculator():
 @app.route("/crm/kalkulator/zapisz", methods=["POST"])
 def crm_calculator_save():
     """Ustawia wartość leada na wyliczoną cenę i zapisuje rozbicie wyceny w komentarzu."""
-    lead = db.session.get(Lead, request.form.get("lead", type=int) or 0)
+    lead = _calc_lead(request.form.get("lead", type=int))
     if not lead:
         abort(404)
-    hours, dep, km, start, days = _calc_params(request.form)
+    code = lead_market(lead)
+    hours, dep, km, start, days = _calc_params(request.form, code)
     dest = (request.form.get("cel") or "").strip()[:200]
-    res = price_quotes(dest, hours, km, departures=[dep], remote_budget=1, night=pricing.night_hours(start, hours),
-                       days=days)
-    opt = res["options"].get(dep)
+    res = price_quotes(dest, hours, km, departures=[dep] if dep else None, remote_budget=1,
+                       night=pricing.night_hours(start, hours), days=days, code=code)
+    opt = res["options"].get(dep or res["best"] or "")
     if not opt:
-        return redirect(url_for("crm_calculator", lead=lead.id, cel=dest, h=hours, z=dep))
+        return redirect(url_for("crm_calculator", lead=lead.id, cel=dest, h=hours, z=dep or None))
     q = opt["quote"]
     value = q["rounded"] if request.form.get("which") == "rounded" else q["total"]
     user = get_current_user(request)
@@ -3495,8 +3641,15 @@ def crm_operator_jobs(oid):
 
 SETTING_DEFAULTS = {
     "umowa_wzor": journey.DEFAULT_TEMPLATE,  # tekst umowy (z dawnego generatora — mógł być zmieniony)
+    "umowa_wzor_de": journey.DEFAULT_TEMPLATE_DE,  # umowa po niemiecku (rynek Niemcy)
     "umowa_vat": "0",  # LT: odwrotne obciążenie
 }
+
+
+def mkey(base, code=None):
+    """Klucz ustawienia osobny dla rynku: Litwa — dawna nazwa (np. jr_template_docx), Niemcy — z końcówką _de."""
+    code = code or current_market()
+    return base if code == "lt" else f"{base}_{code}"
 
 
 def get_setting(key):
@@ -3625,7 +3778,7 @@ FREE_MAIL_DOMAINS = {
 }
 _JOURNEY_LOCK = threading.Lock()
 _JOURNEY_SCAN = {"at": None, "info": "", "errors": [], "boxes": []}
-_JOURNEY_BADGE = {"t": 0.0, "n": 0}
+_JOURNEY_BADGE = {}  # rynek -> (czas, liczba)
 _MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
@@ -3648,9 +3801,34 @@ def journey_owner():
     return USERS_BY_ID.get(uid) or USERS_BY_ID.get(3) or USERS[0]
 
 
+def market_sender(user, code):
+    """Nadawca maili do klienta z rynku `code` — zawsze skrzynka w domenie rynku (33bots.lt / 33bots.de):
+    1) skrzynka tej osoby z listy rynku (o.latek@33bots.de …), 2) jej osobna skrzynka z Railway (SMTP_USER_<IMIĘ>)
+    w domenie rynku, 3) wspólna kontakt@ rynku podpisana imieniem osoby, 4) inna skrzynka rynku — wtedy nadawcą
+    jest jej właściciel (nigdy cudze imię z cudzym adresem). Bez skrzynek rynku — dawne ustawienia osoby."""
+    user = user or USERS[0]
+    base = {k: v for k, v in user.items() if k not in ("login", "pwd", "market")}
+    dom = markets.get(code)["domain"]
+    boxes = [b for b in mail_boxes(code) if b["pwd"]]
+    own = next((b for b in boxes if b.get("user_id") == base.get("id")), None)
+    if own:
+        return dict(base, login=own["login"], pwd=own["pwd"], email=own["login"], market=own["market"])
+    login, pwd = _mailbox_for(base)
+    if login and pwd and login.lower().endswith("@" + dom):
+        return dict(base, login=login, pwd=pwd, email=login, market=code)
+    shared = next((b for b in boxes if b["login"].split("@")[0] in ("kontakt", "info", "hi")), None)
+    if shared:
+        return dict(base, login=shared["login"], pwd=shared["pwd"], email=shared["login"], market=shared["market"])
+    if boxes:
+        b = boxes[0]
+        owner = USERS_BY_ID.get(b.get("user_id")) or base
+        return dict(owner, login=b["login"], pwd=b["pwd"], email=b["login"], market=b["market"])
+    return user
+
+
 def journey_sender(lead):
-    """Od kogo idą umowa, baza wiedzy i przypomnienia: opiekun leada (z jego skrzynki), bez opiekuna — osoba z ⚙️."""
-    return USERS_BY_ID.get(lead.assigned_to) or journey_owner()
+    """Od kogo idą umowa, baza wiedzy i przypomnienia: opiekun leada (ze skrzynki jego rynku), bez opiekuna — osoba z ⚙️."""
+    return market_sender(USERS_BY_ID.get(lead.assigned_to) or journey_owner(), lead_market(lead))
 
 
 def _jjson(text):
@@ -3723,18 +3901,20 @@ def journey_brief(j, lead):
 
 
 def _journey_badge_reset():
-    _JOURNEY_BADGE["t"] = 0.0
+    _JOURNEY_BADGE.clear()
 
 
 def journey_badge():
-    """Ilu klientów czeka na akcję człowieka (licznik w menu) — liczone najwyżej raz na minutę."""
-    if time.time() - _JOURNEY_BADGE["t"] < 60:
-        return _JOURNEY_BADGE["n"]
+    """Ilu klientów oglądanego rynku czeka na akcję człowieka (licznik w menu) — liczone najwyżej raz na minutę."""
+    code = getattr(g, "market_filter", None) or current_market() if has_request_context() else DEFAULT_MARKET
+    t, n = _JOURNEY_BADGE.get(code, (0.0, 0))
+    if time.time() - t < 60:
+        return n
     try:
         n = sum(1 for v in journey_board_views() if v["attention"])
     except Exception:
         n = 0
-    _JOURNEY_BADGE.update(t=time.time(), n=n)
+    _JOURNEY_BADGE[code] = (time.time(), n)
     return n
 
 
@@ -3919,20 +4099,28 @@ def journey_contract_fields(j, lead):
 
 
 def journey_contract_docx(lead, fields):
-    ctx = journey.contract_context(fields, lead.id, _local_today(), lead.contact_email or "", lead.contact_phone or "")
-    custom = get_setting("jr_template_docx")
+    code = lead_market(lead)
+    ctx = journey.contract_context(fields, lead.id, _local_today(), lead.contact_email or "", lead.contact_phone or "",
+                                   code=code)
+    custom = get_setting(mkey("jr_template_docx", code))
     if custom:
         import base64
         return journey.fill_docx(base64.b64decode(custom), ctx)
-    return journey.render_docx(get_setting("umowa_wzor") or journey.DEFAULT_TEMPLATE, ctx)
+    return journey.render_docx(contract_template(code), ctx)
+
+
+def contract_template(code):
+    """Tekst umowy rynku (Litwa — po litewsku, Niemcy — po niemiecku)."""
+    return get_setting(mkey("umowa_wzor", code)) or journey.default_template(code)
 
 
 def journey_contract_filename(lead):
-    return f"Umowa_33Bots_{journey.slug(lead.company)}.docx"
+    word = {"lt": "Sutartis", "de": "Vertrag"}.get(lead_market(lead), "Sutartis")
+    return f"{word}_33Bots_{journey.slug(lead.company)}.docx"
 
 
-def _journey_kb_instruction():
-    with open(journey.KB_INSTRUCTION_PATH, "rb") as fh:
+def _journey_kb_instruction(code="lt"):
+    with open(journey.kb_instruction(code)[0], "rb") as fh:
         return fh.read()
 
 
@@ -3944,12 +4132,13 @@ def journey_draft(j, lead, kind):
         kind, lead.company, lead.robot_model, journey_days(lead), owner, _local_today(), cfg["kb_deadline"],
         sent_on=_local_date(j.contract_sent_at),
         review_link=(get_setting("jr_review_link") or "").strip(), prev_subject=j.contract_subject or "",
+        code=lead_market(lead),
     )
     attachments = []
     if kind in ("umowa", "umowa_przypomnienie", "umowa_baza"):
         attachments.append(journey_contract_filename(lead) + " (do uzupełnienia i podpisu)")
     if kind in ("baza", "baza_przypomnienie", "umowa_baza"):
-        attachments.append(journey.KB_INSTRUCTION_NAME)
+        attachments.append(journey.kb_instruction(lead_market(lead))[1])
     login, _ = _mailbox_for(owner)
     warnings = []
     if not lead.emails:
@@ -3991,7 +4180,8 @@ def journey_send(j, lead, kind, to_addr, subject, body, fields, user):
             attachments.append((journey_contract_filename(lead),
                                 journey_contract_docx(lead, journey_contract_fields(j, lead)), journey.DOCX_MIME))
     if kind in ("baza", "baza_przypomnienie", "umowa_baza"):
-        attachments.append((journey.KB_INSTRUCTION_NAME, _journey_kb_instruction(), "application/pdf"))
+        kb_path, kb_name = journey.kb_instruction(lead_market(lead))
+        attachments.append((kb_name, _journey_kb_instruction(lead_market(lead)), "application/pdf"))
     err = _smtp_send(to_addr, subject, body, owner["name"], attachments=attachments or None, sender=owner)
     if err:
         return err
@@ -4113,10 +4303,8 @@ def journey_mailboxes():
     """(host, [(login, hasło)]) — kontakt@ (INBOX_IMAP_*) i osobiste skrzynki z hasłem
     IMAP_PASS_<IMIĘ> albo SMTP_PASS_<IMIĘ> (te same skrzynki na tym samym serwerze)."""
     host = os.environ.get("IMAP_HOST", "").strip() or os.environ.get("SMTP_HOST", "").strip()
-    boxes = []
-    _, login, pwd = _inbox_config()
-    if login:
-        boxes.append((login, pwd))
+    boxes = [(b["login"], b["pwd"]) for b in _inbox_boxes()]  # kontakt@ obu rynków
+    boxes += [(b["login"], b["pwd"]) for b in mail_boxes("all") if b["pwd"]]  # o.latek@33bots.lt / .de …
     for u in USERS:
         key = re.sub(r"[^A-Z0-9]", "_", u["name"].upper())
         pwd = (os.environ.get(f"IMAP_PASS_{key}", "") or os.environ.get(f"SMTP_PASS_{key}", "")).strip()
@@ -4995,19 +5183,19 @@ def crm_journey_settings():
                 err, unknown = journey.check_docx_template(data)
                 if not err:
                     import base64
-                    set_setting("jr_template_docx", base64.b64encode(data).decode())
-                    set_setting("jr_template_name", journey.safe_filename(up.filename)[:60])
+                    set_setting(mkey("jr_template_docx"), base64.b64encode(data).decode())
+                    set_setting(mkey("jr_template_name"), journey.safe_filename(up.filename)[:60])
                     db.session.commit()
                     msg = "Wgrano własny wzór umowy."
         elif action == "domyslny":
-            set_setting("jr_template_docx", "")
-            set_setting("jr_template_name", "")
+            set_setting(mkey("jr_template_docx"), "")
+            set_setting(mkey("jr_template_name"), "")
             db.session.commit()
             msg = "Wrócono do wzoru z CRM."
     return render_template(
         "crm/journey_settings.html", cfg=journey_cfg(), owner=journey_owner(), msg=msg, err=err, unknown=unknown,
         review_link=get_setting("jr_review_link") or "", vat=get_setting("umowa_vat") or "0",
-        template_name=get_setting("jr_template_name") or "", fields=journey.FIELDS_DOC,
+        template_name=get_setting(mkey("jr_template_name")) or "", fields=journey.FIELDS_DOC,
         boxes=journey_mailboxes()[1], scan=_JOURNEY_SCAN, soffice=bool(journey.soffice_path()),
         bank_account=get_setting("jr_bank_account") or "", bank_name=get_setting("jr_bank_name") or "",
         payment_days=get_setting("jr_payment_days") or "14", ksef=get_setting("jr_ksef") != "0",
@@ -5018,16 +5206,16 @@ def crm_journey_settings():
 @app.route("/crm/journey/ustawienia/wzor.docx")
 def crm_journey_template_docx():
     """Obecny wzór jako DOCX: wgrany albo nasz tekst z polami {{ … }} — do poprawienia w Wordzie i wgrania."""
-    custom = get_setting("jr_template_docx")
+    custom = get_setting(mkey("jr_template_docx"))
     if custom:
         import base64
         data = base64.b64decode(custom)
     else:
         ctx = {k: "{{ " + k + " }}" for k in journey.KNOWN_FIELDS}
-        data = journey.render_docx(get_setting("umowa_wzor") or journey.DEFAULT_TEMPLATE, ctx)
+        data = journey.render_docx(contract_template(current_market()), ctx)
     resp = make_response(data)
     resp.headers["Content-Type"] = journey.DOCX_MIME
-    resp.headers["Content-Disposition"] = 'attachment; filename="Wzor_umowy_33Bots.docx"'
+    resp.headers["Content-Disposition"] = f'attachment; filename="Wzor_umowy_33Bots_{current_market().upper()}.docx"'
     return resp
 
 
@@ -5124,7 +5312,7 @@ def _lead_billing_from(lead, f):
 
 def journey_invoice_draft(j, lead):
     """Okienko „Wystaw fakturę”: dane nabywcy (z leada, NIP z odesłanej umowy, Biała lista), pozycja, daty, mail."""
-    owner = journey_owner()
+    owner = market_sender(journey_owner(), lead_market(lead))
     today = _local_today()
     days = journey_days(lead)
     hints, warnings = [], []
@@ -5157,7 +5345,8 @@ def journey_invoice_draft(j, lead):
     foreign = fields["country"] != "PL"
     vat = "np" if foreign else str(get_setting("umowa_vat") or "23").split(".")[0]
     fields.update({
-        "service": journey.invoice_service_name(lead.robot_model, days, _jjson(j.contract_fields).get("nazwa_wydarzenia", "")),
+        "service": journey.invoice_service_name(lead.robot_model, days, _jjson(j.contract_fields).get("nazwa_wydarzenia", ""),
+                                                code=lead_market(lead)),
         "net": f"{lead.value_pln:g}" if lead.value_pln else "",
         "currency": lead.currency or "EUR",
         "vat": vat if vat in INVOICE_TAX_SYMBOLS else "23",
@@ -5167,7 +5356,7 @@ def journey_invoice_draft(j, lead):
         "ksef": "1" if get_setting("jr_ksef") != "0" else "",
         "send": "1",
     })
-    subject, body = journey.invoice_email("{numer}", days, today + timedelta(days=pay_days), owner)
+    subject, body = journey.invoice_email("{numer}", days, today + timedelta(days=pay_days), owner, code=lead_market(lead))
     if not infakt_key():
         warnings.append("Brak INFAKT_API_KEY w Railway — faktura nie wyjdzie, dopóki nie dodasz klucza API z inFakt.")
     if j.invoice_uuid and not j.invoice_uuid.startswith("task:"):
@@ -5274,7 +5463,7 @@ def journey_issue_invoice(lead_id, f, user_id):
     doc = journey_add_document(lead, "faktura", fname, pdf, "application/pdf", f"inFakt ({number or uuid})", user_id=user_id)
     doc.pdf = pdf
     if f.get("send"):
-        owner = journey_owner()
+        owner = market_sender(journey_owner(), lead_market(lead))
         to_addr = f["email"].strip()
         subject = (f.get("subject") or "Faktura {numer} — 33Bots").replace("{numer}", number)[:300]
         body = (f.get("body") or "").replace("{numer}", number)[:20000]
@@ -5360,6 +5549,9 @@ ASSISTANT_TOOLS = [
             "type": "object",
             "properties": {
                 "allow_duplicate": {"type": "boolean", "description": "true = to osobne zlecenie tego samego klienta"},
+                "market": {"type": "string", "enum": ["lt", "de"],
+                           "description": "Rynek leada: lt = Litwa, de = Niemcy (bez podania: z telefonu/maila, "
+                                          "inaczej rynek oglądany w CRM)"},
                 "company": {"type": "string"},
                 "contact_name": {"type": "string"},
                 "contact_phone": {"type": "string"},
@@ -5462,7 +5654,8 @@ ASSISTANT_TOOLS = [
             "properties": {
                 "to": {"type": "string", "description": "Adres e-mail odbiorcy"},
                 "subject": {"type": "string", "description": "Temat maila"},
-                "body": {"type": "string", "description": "Treść maila (zwykły tekst, po polsku, z podpisem)"},
+                "body": {"type": "string", "description": "Treść maila (zwykły tekst, z podpisem). Do klienta ZAWSZE w języku rynku CRM "
+                                                           "(LT CRM — po litewsku, DE CRM — po niemiecku); po polsku tylko do zespołu 33bots"},
                 "lead_id": {"type": "integer", "description": "Opcjonalnie: lead, którego dotyczy mail"},
             },
             "required": ["to", "subject", "body"],
@@ -5514,7 +5707,7 @@ ASSISTANT_TOOLS = [
                         "included": {"type": "string", "maxLength": 300, "description": "Opcjonalnie: zdanie 'W cenie: ...' (max 300 znaków)"},
                         "note": {"type": "string", "maxLength": 160, "description": "Opcjonalnie: tekst w ramce kontaktu (max 160 znaków)"},
                         "section_title": {"type": "string", "maxLength": 40, "description": "max 40 znaków"},
-                        "language": {"type": "string", "description": "lt (domyślnie — klienci z Litwy), en albo pl"},
+                        "language": {"type": "string", "description": "Język oferty — zawsze język rynku CRM (ustawia się sam)"},
                     },
                     "required": ["client", "intro", "cards", "price_title", "price", "cover"],
                 },
@@ -5834,7 +6027,8 @@ def deliver_offer(offer, actor):
     Zwraca (błąd albo None, ostrzeżenie albo None, lista zmian w leadzie)."""
     if offer.sent_at:
         return "ta oferta została już wysłana", None, []
-    sender = USERS_BY_ID.get(offer.sender_id) or actor
+    sender = market_sender(USERS_BY_ID.get(offer.sender_id) or actor,
+                           lead_market(db.session.get(Lead, offer.lead_id) if offer.lead_id else None))
     err = _smtp_send(offer.to_addr, offer.subject, offer.body, sender["name"],
                      attachments=[(offer.filename, offer.pdf, "application/pdf")], sender=sender)
     if err:
@@ -6022,7 +6216,12 @@ def _assistant_execute(name, inp, user):
                              "osobne zlecenie, wywołaj create_lead z allow_duplicate=true",
                     "existing": _assistant_lead_brief(same),
                 }, ensure_ascii=False), None
-        lead = Lead(company=company, stage="Nowy", assigned_to=user["id"], currency="EUR", quality="Średni")
+        mcode = str(inp.get("market") or "").lower()
+        if mcode not in markets.MARKETS:  # rynek: podany → z telefonu / maila / kraju → oglądany w CRM
+            mcode = markets.detect(inp.get("contact_phone"), [inp.get("contact_email")],
+                                   inp.get("billing_country"), inp.get("location")) or current_market()
+        lead = Lead(company=company, stage="Nowy", assigned_to=user["id"], currency="EUR", quality="Średni",
+                    market=mcode)
         _assistant_apply_lead_fields(lead, inp, user)
         db.session.add(lead)
         db.session.flush()
@@ -6113,8 +6312,17 @@ def _assistant_execute(name, inp, user):
         if bad:
             return _json.dumps({"error": bad}, ensure_ascii=False), None
         to_addr = ", ".join(recipients)
+        external = [a for a in recipients if a.split("@")[-1].lower() not in OWN_DOMAINS]
         lead = db.session.get(Lead, int(inp["lead_id"])) if inp.get("lead_id") else None
-        err = _smtp_send(to_addr, subject, body, user["name"], sender=user)
+        if lead is None and external:
+            lead = next((x for x in (_find_lead_by_contact(a) for a in external) if x), None)
+        mcode = lead_market(lead)
+        bad_lang = wrong_language(mcode, subject, body) if external else None
+        if bad_lang:
+            return _json.dumps({"error": f"Mail do klienta musi być {markets.get(mcode)['lang_in_pl']} (wykryto: {bad_lang}). "
+                                         f"Napisz temat i treść jeszcze raz {markets.get(mcode)['lang_in_pl']} i wyślij ponownie."},
+                               ensure_ascii=False), None
+        err = _smtp_send(to_addr, subject, body, user["name"], sender=market_sender(user, mcode) if external else user)
         if err:
             return _json.dumps({"error": err}), None
         if lead:
@@ -6141,14 +6349,28 @@ def _assistant_execute(name, inp, user):
             lead = db.session.get(Lead, int(inp["lead_id"]))
             if not lead:
                 return _json.dumps({"error": "nie ma leada o tym id"}), None
-        sender = USERS_BY_ID.get(_assistant_resolve_user(inp.get("sender"), user["id"]), user)
+        sender = market_sender(USERS_BY_ID.get(_assistant_resolve_user(inp.get("sender"), user["id"]), user),
+                               lead_market(lead))
         if not user_can_send_offers(sender):
             others = ", ".join(u["name"] for u in USERS if user_can_send_offers(u))
             return _json.dumps({"error": f"{sender['name']} nie ma w CRM firmowego e-maila/telefonu — uzupełnij je "
                                          f"w Profilu (menu na dole → profil) albo wybierz nadawcę: {others}"},
                                ensure_ascii=False), None
+        offer_in = dict(inp.get("offer") or {})
+        mcode = lead_market(lead)
+        lang_in = markets.get(mcode)["lang_in_pl"]
+        offer_in["language"] = markets.get(mcode)["lang"]  # oferta zawsze w języku rynku leada — nigdy po angielsku
+        pdf_text = " ".join(str(offer_in.get(k) or "") for k in ("subtitle", "intro", "price_title", "included", "note")) + " " + \
+            " ".join(" ".join([str(cd.get("title") or "")] + [str(x) for x in (cd.get("items") or [])])
+                     for cd in (offer_in.get("cards") or []) if isinstance(cd, dict))
+        bad_lang = wrong_language(mcode, subject, body) or wrong_language(mcode, pdf_text)
+        if bad_lang:
+            return _json.dumps({"error": f"oferta: mail i PDF muszą być w całości {lang_in} "
+                                         f"(wykryto: {bad_lang}). Przepisz temat, treść maila i wszystkie pola PDF "
+                                         f"{lang_in}."}, ensure_ascii=False), None
+        inp = dict(inp, offer=offer_in)
         try:
-            data = offers.normalize(inp.get("offer") or {})
+            data = offers.normalize(offer_in)
             pdf = offers.render_offer_pdf(data, (sender["full_name"], sender["email"], sender["phone"]))
         except offers.OfferError as e:
             return _json.dumps({"error": f"oferta: {e}"}, ensure_ascii=False), None
@@ -6463,8 +6685,11 @@ def _assistant_system_prompt(user):
     users_txt = ", ".join(f"{u['name']} (id {u['id']})" for u in USERS)
     return (
         "Jesteś asystentem CRM firmy 33bots (wynajem robotów Unitree). "
-        "To jest CRM na Litwę: klienci są z Litwy, kwoty w EUR. Maile do klientów pisz PO LITEWSKU "
-        "('Laba diena,' … 'Pagarbiai,'), chyba że klient pisze po angielsku. Z użytkownikiem rozmawiaj w jego języku (polski albo litewski). "
+        "To jest CRM na Litwę i Niemcy: każdy lead ma rynek (lt albo de), kwoty w EUR. Maile do klienta pisz ZAWSZE "
+        "w języku jego rynku — Litwa: po litewsku ('Laba diena,' … 'Pagarbiai,'), Niemcy: po niemiecku ('Guten Tag,' … "
+        "'Mit freundlichen Grüßen', forma 'Sie') — nigdy po angielsku ani po polsku. "
+        f"Użytkownik ogląda teraz rynek: {M()['name']} — nowe leady trafiają na ten rynek. "
+        "Z użytkownikiem rozmawiaj w jego języku (polski, litewski albo niemiecki). "
         f"Dziś jest {date.today().isoformat()}. Rozmawiasz z użytkownikiem: {user['name']}. "
         f"Użytkownicy CRM: {users_txt}; Jerzy to pracownik do zadań. "
         f"Etapy leada: {', '.join(STAGES)} (Zrealizowany = wygrany po ostatnim dniu realizacji — CRM przenosi "
@@ -6561,7 +6786,8 @@ def crm_assistant_chat():
 
 INBOX_AI_MODEL = os.environ.get("INBOX_AI_MODEL", "claude-haiku-4-5-20251001")
 OFFER_AI_MODEL = os.environ.get("OFFER_AI_MODEL", "claude-sonnet-5-5")
-OWN_DOMAINS = {d.strip().lower() for d in os.environ.get("OWN_DOMAINS", "33bots.pl,33bots.com,33bots.lt").split(",") if d.strip()}
+OWN_DOMAINS = {d.strip().lower() for d in os.environ.get("OWN_DOMAINS", "33bots.pl,33bots.com,33bots.lt,33bots.de").split(",")
+               if d.strip()}
 
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
@@ -6668,7 +6894,8 @@ INBOX_TOOL = {
 
 def _inbox_system_prompt():
     return (
-        "Analizujesz maile, które przyszły na kontakt@33bots.lt — firma 33bots wynajmuje roboty humanoidalne "
+        "Analizujesz maile, które przyszły na firmową skrzynkę kontakt@ (Litwa: 33bots.lt, Niemcy: 33bots.de) — firma "
+        "33bots wynajmuje roboty humanoidalne "
         "Unitree G1 i roboty-psy na eventy oraz sprzedaje roboty. Zapytanie (is_inquiry=true) to każdy mail od "
         "potencjalnego klienta: formularz ze strony (Formspree: 'New form submission'), prośba o ofertę, wycenę, "
         "dostępność, zakup, współpracę eventową. NIE są zapytaniami: newslettery, reklamy, faktury, powiadomienia "
@@ -6678,11 +6905,30 @@ def _inbox_system_prompt():
     )
 
 
-def _inbox_config():
-    login = os.environ.get("INBOX_IMAP_USER", "").strip()
-    pwd = os.environ.get("INBOX_IMAP_PASS", "").strip()
+def _inbox_boxes():
+    """Skrzynki zapytań: [{market, host, login, pwd}] — Litwa: INBOX_IMAP_USER/PASS albo kontakt@33bots.lt,
+    Niemcy: INBOX_IMAP_USER_DE/PASS_DE albo kontakt@33bots.de (hasło MAIL_PASSWORD / zmiennej skrzynki)."""
     host = os.environ.get("IMAP_HOST", "").strip() or os.environ.get("SMTP_HOST", "").strip()
-    return (host, login, pwd) if host and login and pwd else (None, None, None)
+    out = []
+    for code in markets.MARKETS:
+        sfx = "" if code == "lt" else f"_{code.upper()}"
+        login = os.environ.get(f"INBOX_IMAP_USER{sfx}", "").strip()
+        pwd = os.environ.get(f"INBOX_IMAP_PASS{sfx}", "").strip()
+        bhost = host
+        if not (login and pwd):
+            box = mail_box(markets.get(code)["inquiry_box"])
+            if box and box["pwd"]:
+                login, pwd, bhost = box["login"], box["pwd"], box["host"] or host
+        if bhost and login and pwd:
+            out.append({"market": code, "host": bhost, "login": login.lower(), "pwd": pwd})
+    return out
+
+
+def _inbox_config(code=None):
+    """(host, login, hasło) skrzynki zapytań rynku (domyślnie oglądanego) albo (None, None, None)."""
+    code = code or current_market()
+    box = next((b for b in _inbox_boxes() if b["market"] == code), None)
+    return (box["host"], box["login"], box["pwd"]) if box else (None, None, None)
 
 
 def _mail_text(msg):
@@ -6748,7 +6994,7 @@ def find_recent_duplicate(email=None, phone=None, days=DUP_WINDOW_DAYS, exclude_
     pk, ek = _phone_key(phone), _email_key(email)
     if not pk and not ek:
         return None
-    for lead in Lead.query.filter(Lead.created_at >= since).order_by(Lead.created_at, Lead.id).all():
+    for lead in all_markets(Lead.query.filter(Lead.created_at >= since).order_by(Lead.created_at, Lead.id)).all():
         if lead.id != exclude_id and ((pk and _phone_key(lead.contact_phone) == pk)
                                       or (ek and ek in (_email_key(lead.contact_email), _email_key(lead.contact_email2)))):
             return lead
@@ -6788,7 +7034,8 @@ def _keeper_order(lead):
             len(lead.activities), -lead.id)
 
 
-IMPORT_SOURCES = ("ClickUp", "Mail kontakt@", "Formularz 33bots.lt")
+IMPORT_SOURCES = ("ClickUp", "Mail kontakt@", "Formularz 33bots.lt", "Mail kontakt@33bots.lt", "Mail kontakt@33bots.de",
+                  "Formularz 33bots.de")
 
 
 def is_untouched(lead):
@@ -6952,8 +7199,8 @@ def process_inbox_message(rec, force=False):
         "contact_name": res.get("contact_name") or None, "contact_email": contact_email or None,
         "contact_phone": res.get("contact_phone") or None, "location": res.get("location") or None,
         "notes": res.get("summary") or None, "quality": res.get("quality"), "stage": "Nowy",
-        "source": "Formularz 33bots.lt" if is_form else "Mail kontakt@",
-        "event_dates": res.get("event_dates") or None,
+        "source": f"Formularz {markets.get(rec.market)['domain']}" if is_form else f"Mail kontakt@{markets.get(rec.market)['domain']}",
+        "event_dates": res.get("event_dates") or None, "market": rec.market or DEFAULT_MARKET,
     }
     if res.get("robot_model") in ROBOT_MODELS:
         fields["robot_model"] = res["robot_model"]
@@ -6968,27 +7215,45 @@ def process_inbox_message(rec, force=False):
 
 
 def sync_inbox(max_messages=60):
-    """Czyta nowe maile z kontakt@ (IMAP, bez oznaczania jako przeczytane) i przetwarza je.
-    Zwraca dict z podsumowaniem."""
-    import email as _email
-    import email.policy
-    import imaplib
-    from email.utils import parseaddr, parsedate_to_datetime
-    host, login, pwd = _inbox_config()
-    if not host:
-        return {"error": "skrzynka nieskonfigurowana — ustaw INBOX_IMAP_USER i INBOX_IMAP_PASS w Railway"}
+    """Czyta nowe maile ze skrzynek zapytań (kontakt@33bots.lt i kontakt@33bots.de; IMAP, bez oznaczania jako
+    przeczytane) i przetwarza je — nowy lead dostaje rynek skrzynki. Zwraca dict z podsumowaniem."""
+    boxes = _inbox_boxes()
+    if not boxes:
+        return {"error": "skrzynka nieskonfigurowana — ustaw MAIL_PASSWORD (albo INBOX_IMAP_USER i INBOX_IMAP_PASS) w Railway"}
     if _ai_client() is None:
         return {"error": "brak ANTHROPIC_API_KEY w Railway — bez niego CRM nie rozpozna zapytań"}
     if not _INBOX_LOCK.acquire(blocking=False):
         return {"info": "sprawdzanie skrzynki już trwa"}
     counts = {"lead": 0, "dopisany": 0, "pominiety": 0, "blad": 0}
+    errors = []
     try:
-        last = db.session.query(db.func.max(InboxMessage.received_at)).scalar()
+        for box in boxes:
+            err = _sync_inbox_box(box, counts, max_messages)
+            if err:
+                errors.append(f"{box['login']}: {err}")
+    finally:
+        _INBOX_LOCK.release()
+    info = (f"nowe leady: {counts['lead']}, dopisane do istniejących: {counts['dopisany']}, "
+            f"pominięte: {counts['pominiety']}, błędy: {counts['blad']}")
+    if errors and len(errors) == len(boxes):
+        return {"error": "połączenie ze skrzynką nie powiodło się — " + "; ".join(errors)[:300], "counts": counts}
+    return {"info": info + (" · " + "; ".join(errors) if errors else ""), "counts": counts}
+
+
+def _sync_inbox_box(box, counts, max_messages):
+    import email as _email
+    import email.policy
+    import imaplib
+    from email.utils import parseaddr, parsedate_to_datetime
+    try:
+        last = db.session.query(db.func.max(InboxMessage.received_at)).filter(
+            db.or_(InboxMessage.mailbox == box["login"],
+                   db.and_(InboxMessage.mailbox.is_(None), InboxMessage.market == box["market"]))).scalar()
         since = (last - timedelta(days=1)) if last else \
             datetime.utcnow() - timedelta(days=int(os.environ.get("INBOX_BACKFILL_DAYS", 3)))
-        im = imaplib.IMAP4_SSL(host, int(os.environ.get("IMAP_PORT", 993)), timeout=30)
+        im = imaplib.IMAP4_SSL(box["host"], int(os.environ.get("IMAP_PORT", 993)), timeout=30)
         try:
-            im.login(login, pwd)
+            im.login(box["login"], box["pwd"])
             im.select("INBOX", readonly=True)
             typ, data = im.uid("search", None, "SINCE", since.strftime("%d-%b-%Y"))
             uids = (data[0] or b"").split()[-max_messages:]
@@ -7000,15 +7265,16 @@ def sync_inbox(max_messages=60):
                 msg = _email.message_from_bytes(raw, policy=_email.policy.default)
                 key = (str(msg.get("Message-ID") or "").strip()
                        or "sha1:" + hashlib.sha1(raw[:20000]).hexdigest())[:320]
-                if InboxMessage.query.filter_by(message_key=key).first():
-                    continue
+                if all_markets(InboxMessage.query.filter_by(message_key=key)).first():
+                    continue  # ten sam mail (np. wysłany na obie skrzynki) — tylko raz
                 from_addr = parseaddr(str(msg.get("From") or ""))[1].lower()
                 try:
                     received = parsedate_to_datetime(str(msg.get("Date"))).astimezone(timezone.utc).replace(tzinfo=None)
                 except Exception:
                     received = datetime.utcnow()
                 rec = InboxMessage(message_key=key, from_addr=from_addr[:200], subject=str(msg.get("Subject") or "")[:300],
-                                   received_at=received, body=_mail_text(msg)[:20000])
+                                   received_at=received, body=_mail_text(msg)[:20000], mailbox=box["login"],
+                                   market=box["market"])
                 db.session.add(rec)
                 auto = str(msg.get("Auto-Submitted") or "no").lower() != "no" or \
                     str(msg.get("Precedence") or "").lower() in ("bulk", "list", "junk") or \
@@ -7032,11 +7298,8 @@ def sync_inbox(max_messages=60):
                 pass
     except (imaplib.IMAP4.error, OSError) as e:
         db.session.rollback()
-        return {"error": f"połączenie ze skrzynką nie powiodło się: {type(e).__name__}: {e}"[:300]}
-    finally:
-        _INBOX_LOCK.release()
-    return {"info": f"nowe leady: {counts['lead']}, dopisane do istniejących: {counts['dopisany']}, "
-                    f"pominięte: {counts['pominiety']}, błędy: {counts['blad']}", "counts": counts}
+        return f"{type(e).__name__}: {e}"[:200]
+    return None
 
 
 def _inbox_scheduler():
@@ -7052,7 +7315,7 @@ def _inbox_scheduler():
         time.sleep(interval)
 
 
-if os.environ.get("INBOX_IMAP_USER") and os.environ.get("INBOX_IMAP_PASS"):
+if any(os.environ.get(k, "").strip() for k in ("INBOX_IMAP_USER", "INBOX_IMAP_USER_DE", "MAIL_PASSWORD")):
     threading.Thread(target=_inbox_scheduler, daemon=True).start()
 
 
@@ -7097,13 +7360,10 @@ OFFER_PHOTOS_URL = os.environ.get("OFFER_PHOTOS_URL", "").strip() or \
     "https://drive.google.com/drive/folders/1fOaECfc5eNKigB8xzW0z9rlq4jqr5CmK"
 
 
-def _offer_ai_system_prompt():
+def _offer_ai_system_prompt(code=None):
+    m = M(code)
     return (
-        "PISZESZ DO KLIENTÓW Z LITWY: mail i PDF PO LITEWSKU (offer.language='lt'), ceny w EUR, chyba że klient pisze "
-        "po angielsku (wtedy 'en'). Przykłady poniżej są po polsku — użyj litewskich odpowiedników: 'Laba diena,' "
-        "(bez imienia), 'Pagarbiai,', included: 'Į kainą įskaičiuota: atvykimas, asmeninis operatorius, roboto asmenybės "
-        "ir žinių pritaikymas bei techninė pagalba vietoje. Jokių paslėptų mokesčių.', cover np. PARENGTA / DATA / KAINA, "
-        "karty np. ROBOTO VAIDMUO / PASIRUOŠIMAS, temat: 'Pasiūlymas – humanoidinis robotas …'.\n"
+        m["ai_offer"] + "\n"
         "Jesteś handlowcem firmy 33bots (wynajem i sprzedaż robotów humanoidalnych Unitree G1 oraz robotów-psów). "
         f"Dziś jest {date.today().isoformat()}. Przygotowujesz ofertę PDF i mail do klienta narzędziem prepare_offer.\n"
         "ZASADY OFERTY (pola offer):\n"
@@ -7133,7 +7393,7 @@ def _offer_ai_system_prompt():
         "- podpis: 'Z pozdrowieniami,' imię i nazwisko nadawcy, '33Bots', jego e-mail i telefon.\n"
         "NIGDY nie pisz 'Edward Warchocki' — tylko 'Unitree G1'. Pisz 'personalizacja osobowości i wiedzy robota'. "
         "Nie wspominaj o ofertach konkurencji. Nie wymyślaj ceny — weź ją z polecenia; gdy jej brak, użyj wartości leada. "
-        "KLIENCI SĄ Z LITWY: mail i oferta domyślnie PO LITEWSKU (offer.language='lt'), ceny w EUR ('1 300 €'); angielski (offer.language='en') tylko, gdy klient pisze po angielsku. "
+        + m["ai_rule"] + " "
     )
 
 
@@ -7145,7 +7405,7 @@ def generate_offer_with_ai(lead_id, instruction, sender_id, actor_id, previous_i
     lead = db.session.get(Lead, lead_id)
     if not lead:
         return {"error": "nie ma takiego leada"}
-    sender = USERS_BY_ID.get(sender_id, USERS[0])
+    sender = market_sender(USERS_BY_ID.get(sender_id, USERS[0]), lead_market(lead))
     actor = USERS_BY_ID.get(actor_id, USERS[0])
     notes = Activity.query.filter_by(lead_id=lead.id, kind="note").order_by(Activity.created_at.desc()).limit(6).all()
     days = ", ".join(d.event_date.isoformat() for d in lead.event_days) or "brak"
@@ -7172,7 +7432,7 @@ def generate_offer_with_ai(lead_id, instruction, sender_id, actor_id, previous_i
     prompt, res = base_prompt, {}
     for attempt in range(OFFER_AI_ATTEMPTS):
         try:
-            args = _ai_forced_tool(OFFER_AI_MODEL, _offer_ai_system_prompt(), prompt, _offer_tool(), max_tokens=6000)
+            args = _ai_forced_tool(OFFER_AI_MODEL, _offer_ai_system_prompt(lead.market), prompt, _offer_tool(), max_tokens=6000)
         except Exception as e:
             return {"error": f"Claude nie przygotował oferty: {type(e).__name__}: {e}"[:300]}
         args["lead_id"] = lead.id
@@ -7236,13 +7496,14 @@ def crm_job(jid):
 # (np. 5/h = co 12 min) i tylko w ustawionych godzinach — żeby nie trafić domeną do spamu.
 
 CAMPAIGN_MAX_RATE = 20
-CAMPAIGN_DEFAULT_BODY = (
-    "Laba diena,\n\n"
-    "\n\n"
-    "Pagarbiai,\n"
-)
-CAMPAIGN_FOOTER = ("\n\n—\nJei nenorite gauti tokių mūsų žinučių, "
-                   "tiesiog atsakykite „NE“.")
+def campaign_default_body(code=None):
+    return M(code)["campaign_body"]
+
+
+def campaign_footer(code=None):
+    return M(code)["campaign_footer"]
+
+
 _CAMPAIGN_LOCK = threading.Lock()
 
 
@@ -7273,10 +7534,12 @@ def campaign_stats(c):
 
 
 def _campaign_send_one(c, rec):
-    sender = USERS_BY_ID.get(c.sender_id, USERS[0])
+    mc = c.market or (lead_market(rec.lead) if rec.lead_id else DEFAULT_MARKET)
+    sender = market_sender(USERS_BY_ID.get(c.sender_id, USERS[0]), mc)
     body = render_campaign_text(c.body, rec)
+    unsub = {"lt": "NE", "de": "NEIN"}.get(mc, "NIE")
     err = _smtp_send(rec.email, render_campaign_text(c.subject, rec), body, sender["name"], sender=sender,
-                     headers={"List-Unsubscribe": "<mailto:{login}?subject=NIE>"})
+                     headers={"List-Unsubscribe": "<mailto:{login}?subject=" + unsub + ">"})
     rec.sent_at = datetime.utcnow()
     c.last_sent_at = rec.sent_at
     if err:
@@ -7345,14 +7608,14 @@ CAMPAIGN_AI_TOOL = {
 
 
 def _campaign_ai_draft(instruction, sender):
+    sender = market_sender(sender, current_market())
     system = (
-        "PISZESZ PO LITEWSKU (klienci z Litwy). Zacznij od 'Laba diena,' (bez imienia — litewski wołacz łatwo pomylić), "
-        "zakończ 'Pagarbiai,' + podpis. Poniższe zasady stosuj, ale tekst ma być po litewsku.\n"
+        M()["ai_campaign"] + " Poniższe zasady stosuj, ale tekst ma być w tym języku.\n"
         "Piszesz krótką wiadomość e-mail firmy 33bots (wynajem i sprzedaż robotów humanoidalnych Unitree G1) "
         "wysyłaną do wielu klientów naraz — każdy dostaje ją osobno. Ton profesjonalny i ciepły, krótkie akapity, "
         "bez linii-separatorów, bez nagłówków WIELKIMI LITERAMI, bez kolokwializmów, bez nachalnej sprzedaży. "
         "Możesz użyć {firma} (nazwa firmy podstawi się sama). "
-        f"Zakończ: 'Pagarbiai,' / {sender['full_name']} / 33Bots / {sender['email']} / {sender['phone']}. "
+        f"Zakończ: '{M()['bye']}' / {sender['full_name']} / 33Bots / {sender['email']} / {sender['phone']}. "
         "Nigdy nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
     )
     return _ai_forced_tool(INBOX_AI_MODEL, system, instruction, CAMPAIGN_AI_TOOL, max_tokens=2000)
@@ -7391,10 +7654,12 @@ def _campaign_lead_line(lead):
     return " | ".join(p for p in parts if p)
 
 
-def pick_campaign_leads(audience):
+def pick_campaign_leads(audience, code=None):
     """Claude wybiera z leadów z adresem e-mail tych, którzy pasują do opisu grupy (np. „agencje eventowe
-    ze zrealizowanych”). Zadanie w tle (_start_job) — zwraca lead_ids i krótkie uzasadnienie."""
-    leads = [l for l in _campaign_form_leads() if EMAIL_RE.match((l.contact_email or "").strip())]
+    ze zrealizowanych”). Zadanie w tle (_start_job) — zwraca lead_ids i krótkie uzasadnienie.
+    Tylko leady rynku kampanii (`code`), bo w tle nie ma filtra rynku."""
+    leads = [l for l in _campaign_form_leads() if EMAIL_RE.match((l.contact_email or "").strip())
+             and (code is None or lead_market(l) == code)]
     if not leads:
         return {"error": "w CRM nie ma leadów z adresem e-mail"}
     system = (
@@ -7425,7 +7690,7 @@ def crm_campaign_pick():
     audience = request.form.get("audience", "").strip()[:500]
     if not audience:
         return jsonify({"error": "Napisz Claude'owi, do kogo ma trafić kampania."}), 400
-    jid = _start_job("Claude wybiera odbiorców", pick_campaign_leads, audience)
+    jid = _start_job("Claude wybiera odbiorców", pick_campaign_leads, audience, current_market())
     return jsonify({"jid": jid, "poll": url_for("crm_job", jid=jid, format="json")})
 
 
@@ -7441,7 +7706,7 @@ def crm_campaign_new():
     f = request.form
     form = {
         "name": f.get("name", ""), "subject": f.get("subject", ""),
-        "body": f.get("body", CAMPAIGN_DEFAULT_BODY).replace("\r\n", "\n"),
+        "body": f.get("body", campaign_default_body()).replace("\r\n", "\n"),
         "sender": f.get("sender", user["name"]), "rate": f.get("rate", "5"),
         "hour_from": f.get("hour_from", "8"), "hour_to": f.get("hour_to", "20"),
         "stages": f.getlist("stages"), "lead_ids": {int(x) for x in f.getlist("lead_ids") if x.isdigit()},
@@ -7480,8 +7745,8 @@ def crm_campaign_new():
                 error = "Nie wybrano żadnego leada z adresem e-mail."
             else:
                 body = form["body"].strip()
-                if form["footer"] and CAMPAIGN_FOOTER.strip() not in body:
-                    body += CAMPAIGN_FOOTER
+                if form["footer"] and campaign_footer().strip() not in body:
+                    body += campaign_footer()
                 c = Campaign(name=form["name"].strip()[:200], subject=form["subject"].strip()[:300], body=body,
                              sender_id=sender["id"], rate_per_hour=rate, hour_from=h_from, hour_to=h_to,
                              created_by=user["id"])
@@ -7529,9 +7794,9 @@ def crm_campaign(cid):
                 first = next((r for r in c.recipients), None)
                 fake = CampaignRecipient(email=me["email"], name=(first.name if first else me["full_name"]),
                                          company=(first.company if first else "33bots"))
+                tsender = market_sender(USERS_BY_ID.get(c.sender_id, me), c.market)
                 err = _smtp_send(me["email"], "[TEST] " + render_campaign_text(c.subject, fake),
-                                 render_campaign_text(c.body, fake), USERS_BY_ID.get(c.sender_id, me)["name"],
-                                 sender=USERS_BY_ID.get(c.sender_id, me))
+                                 render_campaign_text(c.body, fake), tsender["name"], sender=tsender)
                 msg = ("err", f"Test nie wyszedł: {err}") if err else ("ok", f"Test wysłany na {me['email']}.")
         db.session.commit()
         if msg is None:
@@ -7629,31 +7894,29 @@ LT_SINCE_KEY = "lt_mail_since"
 LT_POLL_SECONDS = 60  # nowy litewski lead dostaje maila najpóźniej minutę po wpadnięciu do CRM
 
 
-def lt_sender():
-    """Nadawca maili do Litwy: skrzynka 33bots.lt (klucz „LT” → SMTP_PASS_LT, SMTP_USER_LT itd.)."""
+def lt_sender(code=None):
+    """Nadawca automatycznych maili do klientów rynku: skrzynka o.latek@33bots.lt / .de (wspólne hasło MAIL_PASSWORD
+    albo SMTP_USER_LT / SMTP_PASS_LT itd.)."""
+    code = code or current_market()
     owner = USERS_BY_ID.get(1) or USERS[0]
-    return {"id": owner["id"], "name": "LT", "full_name": owner.get("full_name") or owner["name"],
-            "email": os.environ.get("SMTP_USER_LT", "").strip() or "o.latek@33bots.lt",
-            "phone": owner.get("phone") or ""}
+    box = mail_box(markets.get(code)["own_email"])
+    s = {"id": owner["id"], "name": owner["name"], "full_name": owner.get("full_name") or owner["name"],
+         "email": markets.get(code)["own_email"], "phone": owner.get("phone") or "", "market": code}
+    if box and box["pwd"]:
+        s.update(login=box["login"], pwd=box["pwd"], email=box["login"])
+    elif code == "lt" and os.environ.get("SMTP_PASS_LT", "").strip():  # dawne ustawienie (klucz „LT”)
+        s.update(name="LT", email=os.environ.get("SMTP_USER_LT", "").strip() or s["email"])
+    return s
 
 
-def lt_mailbox_ready():
-    return bool(os.environ.get("SMTP_PASS_LT", "").strip())
+def lt_mailbox_ready(code=None):
+    s = lt_sender(code)
+    return bool(s.get("pwd") or (s["name"] == "LT" and os.environ.get("SMTP_PASS_LT", "").strip()))
 
 
 def is_lithuanian(lead):
-    return True  # LT CRM: wszyscy klienci są z Litwy
-    digits = re.sub(r"\D", "", lead.contact_phone or "")
-    if digits.startswith("00370"):
-        digits = digits[2:]
-    if digits.startswith("370") and len(digits) >= 11:
-        return True
-    if any(e.lower().endswith(".lt") for e in lead.emails):
-        return True
-    if (lead.billing_country or "").upper() == "LT":
-        return True
-    place = " ".join([lead.location or ""] + [d.location or "" for d in lead.event_days]).lower()
-    return any(re.search(r"(?<![a-ząčęėįšųūž])" + re.escape(c), place) for c in LT_CITIES)
+    """Zostawione dla zgodności szablonów: każdy lead ma swój rynek (Litwa / Niemcy) i dostaje maile w jego języku."""
+    return lead is not None
 
 
 _PUBLIC_BASE = {"url": ""}
@@ -7677,23 +7940,14 @@ def lead_form_url(lead):
 
 
 def lt_mail_draft(lead):
-    sender = lt_sender()
+    code = lead_market(lead)
+    m = markets.get(code)
+    sender = lt_sender(code)
     link = lead_form_url(lead)
-    subject = "33Bots – humanoidinio roboto nuoma: kelios detalės pasiūlymui"
-    form = (f"Kad galėtume paruošti tikslų pasiūlymą, prašome užpildyti trumpą formą (užtruks 30 sekundžių):\n"
-            f"{link}\n\nArba tiesiog atsakykite į šį laišką ir nurodykite:\n") if link else \
-        "Kad galėtume paruošti tikslų pasiūlymą, prašome atsakyti į šį laišką ir nurodyti:\n"
-    body = ("Laba diena,\n\n"
-            "dėkojame už užklausą dėl humanoidinio roboto Unitree G1 nuomos!\n\n"
-            + form +
-            "– renginio datą (-as),\n"
-            "– miestą,\n"
-            "– renginio laiką (nuo–iki),\n"
-            "– renginio pobūdį ir numatomą svečių skaičių.\n\n"
-            "Pasiūlymą atsiųsime kuo greičiau.\n\n"
-            "Pagarbiai\n"
+    form = m["ask_form"].format(link=link) if link else m["ask_noform"]
+    body = (m["ask_hello"] + form + m["ask_list"] + m["ask_bye"] + "\n"
             f"{sender['full_name']}\n33Bots\n{sender['email']}" + (f"\n{sender['phone']}" if sender["phone"] else ""))
-    return sender, subject, body
+    return sender, m["ask_subject"], body
 
 
 LT_ALREADY_SENT = "już wysłany"
@@ -7713,8 +7967,9 @@ def send_lt_mail(lead, actor_id=None, resend=False):
     Bez resend=True wysyła tylko, jeśli mail jeszcze nie poszedł (zwraca LT_ALREADY_SENT)."""
     if not lead.emails:
         return "lead nie ma adresu e-mail"
-    if not lt_mailbox_ready():
-        return "skrzynka 33bots.lt nie jest podpięta — ustaw SMTP_PASS_LT w Railway"
+    if not lt_mailbox_ready(lead_market(lead)):
+        return (f"skrzynka {markets.get(lead_market(lead))['own_email']} nie jest podpięta — ustaw MAIL_PASSWORD "
+                "(albo SMTP_USER_/SMTP_PASS_ tej skrzynki) w Railway")
     lead_id = lead.id
     if not resend and not _claim_lt_mail(lead_id):
         return LT_ALREADY_SENT
@@ -7741,72 +7996,65 @@ LT_NO_QUOTE = "brak danych do wyceny"
 LT_QUOTE_SENT_KEY = "lt_quote_sent:{}"
 
 
-def lt_auto_quote_enabled():
-    return os.environ.get("LT_AUTO_QUOTE", "1") != "0"
+def lt_auto_quote_enabled(code="lt"):
+    """Automatyczna wycena mailem: LT_AUTO_QUOTE (Litwa, domyślnie włączona), LT_AUTO_QUOTE_DE / AUTO_QUOTE_DE
+    (Niemcy — domyślnie wyłączona, dopóki cennik nie jest zatwierdzony)."""
+    if code == "lt":
+        raw = os.environ.get("LT_AUTO_QUOTE", "").strip()
+    else:
+        raw = (os.environ.get(f"LT_AUTO_QUOTE_{code.upper()}", "").strip()
+               or os.environ.get(f"AUTO_QUOTE_{code.upper()}", "").strip())
+    return (raw or markets.get(code)["auto_quote_default"]) != "0"
 
 
 def lt_quote_sender(lead):
-    """Nadawca wyceny: skrzynka 33bots.lt opiekuna leada (Oliwier / Bartosz), LT_QUOTE_SENDER wymusza osobę,
-    a bez skrzynki .lt — o.latek@33bots.lt (SMTP_PASS_LT)."""
+    """Nadawca wyceny: skrzynka opiekuna leada w domenie rynku (o.latek@33bots.lt / .de, b.wysocki@…),
+    LT_QUOTE_SENDER wymusza osobę, bez skrzynki osoby — kontakt@ rynku."""
+    code = lead_market(lead)
     forced = os.environ.get("LT_QUOTE_SENDER", "").strip().lower()
-    order = []
-    if forced:
-        order += [u for u in USERS if u["name"].lower() == forced]
-    order += [u for u in USERS if u["id"] == lead.assigned_to]
-    order += [u for u in USERS if u["name"].lower() in ("oliwier", "bartek")]
-    for u in order:
-        login, _pwd = _mailbox_for(u)
-        if login and login.lower().endswith(".lt"):
-            return dict(u, email=login)
-    return lt_sender() if lt_mailbox_ready() else None
+    user = (next((u for u in USERS if u["name"].lower() == forced), None) if forced else None) or \
+        USERS_BY_ID.get(lead.assigned_to) or USERS[0]
+    s = market_sender(user, code)
+    if s.get("login"):
+        return s
+    return lt_sender(code) if lt_mailbox_ready(code) else None
+
+
+def _when_phrase(when, code):
+    """Data do zdania z ceną: LT ' 2026-12-12', DE ' am 12.12.2026' / ' vom 12.–14.12.2026' (kilka dni z rzędu)."""
+    if not when:
+        return ""
+    if code == "lt":
+        return " " + when
+    return f" vom {when}" if "–" in when and "," not in when else f" am {when}"
 
 
 def lt_quote_mail_draft(lead, q, sender):
+    m = markets.get(lead_market(lead))
     when = q.get("when") or ""
     link = lead_form_url(lead) if public_base_url() else ""
     price_txt = f"{q['price']:,}".replace(",", " ")
-    subject = "33Bots – humanoidinio roboto nuomos pasiūlymas" + (f" {when}" if when else "")
-    lines = [
-        "Laba diena,",
-        "",
-        "dėkojame už užklausą dėl humanoidinio roboto Unitree G1 nuomos!",
-        "",
-        f"Jūsų renginiui{(' ' + when) if when else ''} ({q['time']}, {q['place']}) roboto nuomos kaina – "
-        f"{price_txt} € be PVM.",
-        "",
-        "Į kainą įskaičiuota:",
-        "– atvykimas ir roboto paruošimas vietoje,",
-        "– asmeninis operatorius visą renginio laiką,",
-        "– roboto asmenybės ir žinių pritaikymas jūsų renginiui,",
-        "– techninė pagalba vietoje.",
-        "",
-        "Robotas pasitiks svečius, bendraus remdamasis paruošta žinių baze, šoks ir pozuos nuotraukoms.",
-        "",
-        "Nuotraukos iš mūsų renginių:",
-        OFFER_PHOTOS_URL,
-        "",
-    ]
+    when_txt = _when_phrase(when, m["code"])
+    subject = m["quote_subject"] + (f" {when}" if when else "")
+    lines = [m["quote_hello"], "", m["quote_thanks"], "",
+             m["quote_price"].format(when=when_txt, time=q["time"], place=q["place"], price=price_txt), "",
+             m["quote_included"], "", m["quote_robot"], "", m["quote_photos"], OFFER_PHOTOS_URL, ""]
     if link:
-        lines += ["Jei renginio detalės kitokios (data, laikas, vieta), patikslinkite jas čia – kainą atnaujinsime:",
-                  link, ""]
-    lines += [
-        "Ar rezervuojame šią datą? Užtenka atsakyti į šį laišką.",
-        "Pasiūlymas galioja 14 dienų.",
-        "",
-        "Pagarbiai,",
-        "\n".join(x for x in (sender.get("full_name") or sender.get("name"), "33Bots", sender.get("email"),
-                              sender.get("phone")) if x),
-    ]
+        lines += [m["quote_fix"], link, ""]
+    lines += [m["quote_reserve"], "", m["bye"],
+              "\n".join(x for x in (sender.get("full_name") or sender.get("name"), "33Bots", sender.get("email"),
+                                    sender.get("phone")) if x)]
     return subject, "\n".join(lines)
 
 
-def lt_quote_auto_ok(q):
-    """Czy wycenę można wysłać bez człowieka: znane godziny (nie założone), miejsce na Litwie, ≤ 8 h."""
-    return bool(q.get("price")) and not q.get("assumed") and not q.get("over8") and 0 <= q.get("km", 9999) <= 500
+def lt_quote_auto_ok(q, code="lt"):
+    """Czy wycenę można wysłać bez człowieka: znane godziny (nie założone), ≤ 8 h, rozsądna odległość od granicy."""
+    return bool(q.get("price")) and not q.get("assumed") and not q.get("over8") and \
+        0 <= q.get("km", 99999) <= markets.get(code)["max_km_auto"]
 
 
 def send_lt_quote_mail(lead, actor_id=None, force=False):
-    """Automatyczna wycena mailem ze skrzynki 33bots.lt. Zwraca None (wysłano), LT_NO_QUOTE (brak danych —
+    """Automatyczna wycena mailem ze skrzynki rynku leada (33bots.lt / .de). Zwraca None (wysłano), LT_NO_QUOTE (brak danych —
     użyj formularza), LT_ALREADY_SENT albo opis błędu."""
     if not lead.emails:
         return "lead nie ma adresu e-mail"
@@ -7814,13 +8062,13 @@ def send_lt_quote_mail(lead, actor_id=None, force=False):
         return LT_ALREADY_SENT
     with app.test_request_context(base_url=public_base_url() or "http://localhost"):
         q = lt_quote(lead, remote_budget=2)
-    if not lt_quote_auto_ok(q) and not force:
+    if not lt_quote_auto_ok(q, lead_market(lead)) and not force:
         return LT_NO_QUOTE
     if not q.get("price"):
         return LT_NO_QUOTE
     sender = lt_quote_sender(lead)
     if not sender:
-        return "brak skrzynki 33bots.lt (SMTP_PASS_OLIWIER / SMTP_PASS_BARTEK z adresem .lt albo SMTP_PASS_LT)"
+        return f"brak skrzynki {markets.get(lead_market(lead))['domain']} (MAIL_PASSWORD albo SMTP_USER_/SMTP_PASS_ w Railway)"
     lead_id = lead.id
     if lead.lt_mail_at is None and not _claim_lt_mail(lead_id):
         return LT_ALREADY_SENT
@@ -7894,7 +8142,7 @@ def crm_lt_quote_mail(lead_id):
 def lt_auto_mail():
     """Nowe litewskie leady (od włączenia funkcji) bez wysłanego maila — wyślij: od razu wycenę, gdy znamy
     godziny i miejsce, inaczej prośbę o dane (formularz). Zwraca liczbę wysłanych."""
-    if not lt_mailbox_ready() or os.environ.get("LT_AUTO_MAIL", "1") == "0":
+    if os.environ.get("LT_AUTO_MAIL", "1") == "0" or not any(lt_mailbox_ready(mc) for mc in markets.MARKETS):
         return 0
     apply_user_profiles()  # w wątku w tle nie ma before_request — dane nadawców z Profilu
     since = get_setting(LT_SINCE_KEY)
@@ -7908,13 +8156,16 @@ def lt_auto_mail():
     sent = 0
     for lead in Lead.query.filter(Lead.created_at >= since_dt, Lead.lt_mail_at.is_(None),
                                   Lead.stage == "Nowy").order_by(Lead.created_at).limit(50).all():
-        if not lead.emails or not is_lithuanian(lead):
+        mc = lead_market(lead)
+        if not lead.emails or not lt_mailbox_ready(mc):
             continue
+        if not lt_auto_quote_enabled(mc) and mc != "lt":
+            continue  # Niemcy bez zatwierdzonego cennika: bez automatu — ofertę wysyła człowiek
         tries_key = f"lt_tries:{lead.id}"
         tries = int(get_setting(tries_key) or 0)
         if tries >= 3:
             continue
-        err = send_lt_quote_mail(lead) if lt_auto_quote_enabled() else LT_NO_QUOTE
+        err = send_lt_quote_mail(lead) if lt_auto_quote_enabled(mc) else LT_NO_QUOTE
         if err == LT_NO_QUOTE:  # brak godzin / miejsca — jak dotąd: mail z prośbą o dane (formularz)
             err = send_lt_mail(lead)
         if err == LT_ALREADY_SENT:
@@ -7924,17 +8175,19 @@ def lt_auto_mail():
             set_setting(tries_key, str(tries + 1))
             db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(),
                                     assigned_to=lead.assigned_to or USERS[0]["id"],
-                                    notes=f"⚠️ Automatyczny mail LT nie wyszedł (próba {tries + 1}/3): {err}"))
+                                    notes=f"⚠️ Automatyczny mail ({markets.get(mc)['name']}) nie wyszedł (próba {tries + 1}/3): {err}"))
             db.session.commit()
         else:
             sent += 1
     return sent
 
 
-def lt_backlog():
-    """Starsze litewskie leady (etap Nowy, z e-mailem), które nie dostały jeszcze maila LT."""
-    return [l for l in Lead.query.filter(Lead.stage == "Nowy", Lead.lt_mail_at.is_(None))
-            .order_by(Lead.created_at).all() if l.emails and is_lithuanian(l)]
+def lt_backlog(code=None):
+    """Starsze leady rynku (domyślnie oglądanego; etap Nowy, z e-mailem), które nie dostały jeszcze maila
+    z prośbą o dane. Rynek podany wprost — działa też w wątku w tle (bez filtra zapytania)."""
+    code = code or current_market()
+    return [l for l in Lead.query.filter(Lead.stage == "Nowy", Lead.lt_mail_at.is_(None), Lead.market == code)
+            .order_by(Lead.created_at).all() if l.emails]
 
 
 def _lt_scheduler():
@@ -7949,11 +8202,12 @@ def _lt_scheduler():
         time.sleep(LT_POLL_SECONDS)
 
 
-if os.environ.get("SMTP_PASS_LT"):
+if os.environ.get("LT_AUTO_MAIL", "1") != "0":
     threading.Thread(target=_lt_scheduler, daemon=True).start()
 
 
-app.jinja_env.globals.update(is_lithuanian=is_lithuanian, lt_mailbox_ready=lt_mailbox_ready, lt_backlog=lt_backlog)
+app.jinja_env.globals.update(is_lithuanian=is_lithuanian, lt_mailbox_ready=lt_mailbox_ready, lt_backlog=lt_backlog,
+                             lt_sender=lt_sender, lt_auto_quote_enabled=lt_auto_quote_enabled)
 
 
 # ---------- CENA Z FORMULARZA + GOTOWA WIADOMOŚĆ NA WHATSAPP / VIBER ----------
@@ -7961,13 +8215,18 @@ app.jinja_env.globals.update(is_lithuanian=is_lithuanian, lt_mailbox_ready=lt_ma
 # (pakiet 2 / 4 / 8 h, km od granicy, nocleg), zaokrągloną do pełnych setek (od 25 € w górę), a CRM składa
 # gotową wiadomość po litewsku do skopiowania albo otwarcia w WhatsApp / Viber.
 _LT_FORM_HOURS = re.compile(r"Godziny:\s*(\d{1,2}(?:[:.]\d{2})?)\s*[–-]\s*(\d{1,2}(?:[:.]\d{2})?)")
-_LT_RANGE_COLON = re.compile(r"(?<![\d:])(\d{1,2}:\d{2})\s*(?:-|–|—|do|iki|to)\s*(\d{1,2}:\d{2})(?![\d:])")
-_LT_RANGE_WORDS = re.compile(r"\b(?:od|nuo|from)\s*(\d{1,2}(?:[:.]\d{2})?)\s*(?:do|iki|to|-|–)\s*(\d{1,2}(?:[:.]\d{2})?)\b", re.I)
-_LT_RANGE_UNIT = re.compile(r"(?<![\d.:])(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(?:val|h\b|godz)", re.I)
-_LT_MORE_THAN = re.compile(r"(?:daugiau\s+nei|ponad|wi[eę]cej\s+ni[zż]|more\s+than)\s*(\d{1,2})\s*(?:val|h\b|godz|hour)", re.I)
-_LT_DURATION = re.compile(r"(?<![\d:.])(\d{1,2}(?:[.,]5)?)\s*(?:val\w*|h\b|godz\w*|hours?\b)", re.I)
-_LT_FULL_DAY = re.compile(r"ca[lł]y\s+dzie[nń]|vis[aą]\s+dien[aą]|all\s+day|full\s+day", re.I)
-_LT_PLACE = re.compile(r"(?:Miejsce(?:\s+wydarzenia)?|Vieta|Renginio\s+vieta)\s*[:\-–]\s*([^\n;]+)", re.I)
+# godziny i długość z treści zapytania — po polsku, litewsku, niemiecku i angielsku
+_LT_RANGE_COLON = re.compile(r"(?<![\d:])(\d{1,2}:\d{2})\s*(?:Uhr\s*)?(?:-|–|—|do|iki|to|bis)\s*(\d{1,2}:\d{2})(?![\d:])", re.I)
+_LT_RANGE_WORDS = re.compile(r"\b(?:od|nuo|from|von|ab)\s*(\d{1,2}(?:[:.]\d{2})?)\s*(?:Uhr\s*)?(?:do|iki|to|bis|-|–)\s*"
+                             r"(\d{1,2}(?:[:.]\d{2})?)\b", re.I)
+_LT_RANGE_UNIT = re.compile(r"(?<![\d.:])(\d{1,2})\s*(?:Uhr\s*)?(?:[-–]|bis)\s*(\d{1,2})\s*(?:val|h\b|godz|Uhr)", re.I)
+_LT_MORE_THAN = re.compile(r"(?:daugiau\s+nei|ponad|wi[eę]cej\s+ni[zż]|more\s+than|mehr\s+als|über)\s*(\d{1,2})\s*"
+                           r"(?:val|h\b|godz|hour|Std|Stunde)", re.I)
+_LT_DURATION = re.compile(r"(?<![\d:.])(\d{1,2}(?:[.,]5)?)\s*(?:val\w*|h\b|godz\w*|hours?\b|Std\b\.?|Stunden?\b|-?stündig\w*)", re.I)
+_LT_FULL_DAY = re.compile(r"ca[lł]y\s+dzie[nń]|vis[aą]\s+dien[aą]|all\s+day|full\s+day|ganzt[aä]gig|ganzen\s+tag|ganzer\s+tag",
+                          re.I)
+_LT_PLACE = re.compile(r"(?<![^\W\d_])(?:Miejsce(?:\s+wydarzenia)?|Vieta|Renginio\s+vieta|Veranstaltungsort|Ort|Location)\s*[:\-–]\s*"
+                       r"([^\n;]+)", re.I)
 LT_DEFAULT_HOURS = float(os.environ.get("LT_DEFAULT_HOURS", "4") or 4)
 
 
@@ -8010,20 +8269,31 @@ def lt_extract_hours(lead):
     return None, None, LT_DEFAULT_HOURS, "założone"
 
 
+def client_place(text, code):
+    """Miejsce do tekstu dla klienta w jego języku: 'Wilno' → 'Vilnius', 'Monachium' → 'München'.
+    Dłuższy opis (adres, hala) zostaje bez zmian."""
+    norm = logistics.normalize(text)
+    key = logistics.CITY_ALIASES.get(norm, norm)
+    return markets.CITY_NATIVE.get(code, {}).get(key) or (text or "").strip()
+
+
 def lt_extract_place(lead):
+    """Miejsce wydarzenia (formularz, lokalizacja leada, „Miejsce:/Vieta:/Ort:” w treści albo znane miasto
+    w treści) — nazwą w języku klienta."""
+    code = lead_market(lead)
     place = _lead_place(lead)
     if place:
-        return place
+        return client_place(place, code)
     for text in _lt_texts(lead):
         m = _LT_PLACE.search(text)
         if m:
             val = re.sub(r"[\s.,]*\d{4}[\s./-]\d{1,2}[\s./-]\d{1,2}.*$", "", m.group(1)).strip(" .,-–")
             if val:
-                return val[:200]
+                return client_place(val[:200], code)
     for text in _lt_texts(lead):
         hit = logistics.match_city(text)
         if hit:
-            return logistics.city_label(hit[0])
+            return markets.CITY_NATIVE.get(code, {}).get(hit[0]) or logistics.city_label(hit[0])
     return ""
 
 
@@ -8032,33 +8302,29 @@ def lt_form_hours(lead):  # zgodność wsteczna
     return (s, e, dur) if s is not None else None
 
 
-def lt_offer_message(lead, when, time_txt, place, price_txt):
-    owner = USERS_BY_ID.get(lead.assigned_to) or USERS[0] if lead else USERS[0]
-    lines = [
-        "Laba diena!",
-        "",
-        "Dėkojame už užklausą. Humanoidinio roboto Unitree G1 nuoma jūsų renginiui"
-        + (f" {when}" if when else "") + f" ({time_txt}, {place}) kainuotų {price_txt} € be PVM.",
-        "",
-        "Į kainą įskaičiuota: atvykimas, asmeninis operatorius, roboto pritaikymas jūsų renginiui "
-        "ir techninė pagalba vietoje.",
-        "",
-        "Ar rezervuojame šią datą? Mielai atsakysiu į klausimus.",
-        "",
-        f"{owner.get('full_name') or owner['name']}, 33bots",
-    ]
+def lt_offer_message(lead, when, time_txt, place, price_txt, code=None):
+    m = markets.get(code or lead_market(lead))
+    owner = (USERS_BY_ID.get(lead.assigned_to) or USERS[0]) if lead else USERS[0]
+    when_txt = _when_phrase(when, m["code"])
+    lines = [m["msg_hello"], "", m["msg_price"].format(when=when_txt, time=time_txt, place=place, price=price_txt), "",
+             m["msg_included"], "", m["msg_reserve"], "", f"{owner.get('full_name') or owner['name']}, 33bots"]
     return "\n".join(lines)
 
 
-def lt_phone_digits(phone):
-    """'+370 612 34567' / '861234567' / '61234567' -> '37061234567' (do linków wa.me / viber)."""
+def lt_phone_digits(phone, code="lt"):
+    """Numer do linków wa.me / viber: '+370 612 34567' / '861234567' → '37061234567', '0151 2345678' → '491512345678'."""
+    m = markets.get(code)
     d = re.sub(r"\D", "", phone or "")
     if d.startswith("00"):
         d = d[2:]
-    if d.startswith("86") and len(d) == 9:  # numer komórkowy w zapisie krajowym (8 6xx xxxxx)
+    elif any(d.startswith(p) for p in m["phone_codes"]) and len(d) >= 10:
+        pass
+    elif code == "lt" and d.startswith("86") and len(d) == 9:  # 8 6xx xxxxx
         d = "370" + d[1:]
-    elif d.startswith("6") and len(d) == 8:
+    elif code == "lt" and d.startswith("6") and len(d) == 8:
         d = "370" + d
+    elif code != "lt" and d.startswith("0") and len(d) >= 9:  # 0151 2345678
+        d = m["phone_codes"][0] + d[1:]
     return d if len(d) >= 10 else ""
 
 
@@ -8066,6 +8332,12 @@ def _lt_dates_text(lead):
     days = sorted(d.event_date for d in lead.event_days)
     if not days:
         return ""
+    if markets.get(lead_market(lead))["date_style"] == "dots":  # Niemcy: 12.12.2026, 12.–14.12.2026
+        if len(days) == 1:
+            return f"{days[0]:%d.%m.%Y}"
+        if all((b - a).days == 1 for a, b in zip(days, days[1:])):
+            return f"{days[0]:%d.%m.}–{days[-1]:%d.%m.%Y}"
+        return ", ".join(f"{d:%d.%m.%Y}" for d in days)
     if len(days) == 1:
         return f"{days[0]:%Y-%m-%d}"
     if all((b - a).days == 1 for a, b in zip(days, days[1:])):
@@ -8074,8 +8346,10 @@ def _lt_dates_text(lead):
 
 
 def lt_quote(lead, remote_budget=1):
-    """Automatyczna cena dla leada: godziny i miejsce z formularza albo z treści zapytania (brak godzin = 4 h).
-    Zwraca dict z ceną, rozbiciem i gotową wiadomością albo {'missing': [...]}."""
+    """Automatyczna cena dla leada (cennik i granica rynku leada): godziny i miejsce z formularza albo z treści
+    zapytania (brak godzin = 4 h). Zwraca dict z ceną, rozbiciem i gotową wiadomością albo {'missing': [...]}."""
+    code = lead_market(lead)
+    m = markets.get(code)
     place = lt_extract_place(lead)
     if not place:
         return {"missing": ["miejsca"]}
@@ -8083,8 +8357,8 @@ def lt_quote(lead, remote_budget=1):
     tier = next((h for h in sorted(pricing.HOUR_FACTORS) if dur <= h), max(pricing.HOUR_FACTORS))
     days = max(1, min(len(lead.event_days) or 1, pricing.MAX_DAYS))
     night = pricing.night_hours(start, tier) if start is not None else 0.0
-    res = price_quotes(place, tier, None, remote_budget=remote_budget, night=night, days=days)
-    opt = next(iter(res["options"].values()), None)
+    res = price_quotes(place, tier, None, remote_budget=remote_budget, night=night, days=days, code=code)
+    opt = res["options"].get(res["best"] or "")
     if not opt:
         return {"missing": [f"km do „{place}” (wpisz w kalkulatorze)"], "place": place}
     q = opt["quote"]
@@ -8092,17 +8366,17 @@ def lt_quote(lead, remote_budget=1):
     if start is not None:
         time_txt = f"{pricing.fmt_hour(start)}–{pricing.fmt_hour(end)}"
     else:
-        time_txt = f"{pricing.fmt_num(tier)} val."
+        time_txt = f"{pricing.fmt_num(tier)} {m['hours_unit']}"
     price_txt = f"{price:,}".replace(",", " ")
     when = _lt_dates_text(lead)
-    message = lt_offer_message(lead, when, time_txt, place, price_txt)
-    digits = lt_phone_digits(lead.contact_phone)
+    message = lt_offer_message(lead, when, time_txt, place, price_txt, code=code)
+    digits = lt_phone_digits(lead.contact_phone, code)
     from urllib.parse import quote as _q
-    template_params = [when or "artimiausiu metu", time_txt, place[:200], price_txt]
+    template_params = [when or m["soon"], time_txt, place[:200], price_txt]
     return {
-        "template_params": template_params, "phone_digits": digits,
+        "template_params": template_params, "phone_digits": digits, "market": code,
         "price": price, "exact": q["total"], "hours": tier, "duration": dur, "time": time_txt, "place": place,
-        "hours_src": hours_src, "assumed": hours_src == "założone",
+        "hours_src": hours_src, "assumed": hours_src == "założone", "departure": opt["label"],
         "km": int(round(opt["km"])), "days": days, "when": when, "over8": dur > max(pricing.HOUR_FACTORS),
         "breakdown": pricing.describe(q, opt["label"], res["place"] or place), "message": message,
         "whatsapp": f"https://wa.me/{digits}?text={_q(message)}" if digits else "",
@@ -8148,6 +8422,7 @@ app.jinja_env.globals.update(lt_quote=lt_quote)
 # Railway → Variables: WHATSAPP_TOKEN (stały token System User), WHATSAPP_PHONE_ID (Phone number ID),
 # WHATSAPP_TEMPLATE (nazwa zatwierdzonego szablonu z ceną, 4 pola: data, godziny, miejsce, cena),
 # opcjonalnie WHATSAPP_TEMPLATE_LANG (domyślnie lt), WHATSAPP_API_VERSION (domyślnie v22.0),
+# Niemcy: WHATSAPP_TEMPLATE_DE (+ WHATSAPP_TEMPLATE_LANG_DE, domyślnie de) — szablon po niemiecku,
 # WHATSAPP_VERIFY_TOKEN (dowolne hasło do podpięcia webhooka), WHATSAPP_APP_SECRET (sprawdzanie podpisu webhooka).
 # Pierwsza wiadomość do klienta = szablon (wymóg Meta). Gdy klient odpisze, przez 24 h idzie zwykły tekst z okienka.
 WA_LAST_IN_KEY = "wa_in:{}"
@@ -8185,21 +8460,26 @@ def wa_window_open(lead):
 def wa_send_quote(lead, text, actor_id):
     """Wysyła cenę na WhatsApp: w oknie 24 h zwykły tekst, poza nim zatwierdzony szablon. Zwraca błąd albo None."""
     q = lt_quote(lead, remote_budget=2)
-    digits = lt_phone_digits(lead.contact_phone)
+    code = lead_market(lead)
+    digits = lt_phone_digits(lead.contact_phone, code)
     if not digits:
         return "lead nie ma poprawnego numeru telefonu"
     if wa_window_open(lead) and text:
         payload = {"messaging_product": "whatsapp", "to": digits, "type": "text", "text": {"body": text[:4096]}}
         how = "zwykła wiadomość (klient pisał w ostatnich 24 h)"
     else:
-        name = os.environ.get("WHATSAPP_TEMPLATE", "").strip()
+        # szablon w języku rynku: Litwa — WHATSAPP_TEMPLATE (lt), Niemcy — WHATSAPP_TEMPLATE_DE (de)
+        tvar = "WHATSAPP_TEMPLATE" if code == "lt" else f"WHATSAPP_TEMPLATE_{code.upper()}"
+        name = os.environ.get(tvar, "").strip()
         if not name:
-            return "brak WHATSAPP_TEMPLATE w Railway (nazwa zatwierdzonego szablonu)"
+            return f"brak {tvar} w Railway (nazwa zatwierdzonego szablonu {markets.get(code)['lang_in_pl']})"
         if not q.get("template_params"):
             return "brak ceny — uzupełnij godziny i miejsce"
         params = [{"type": "text", "text": re.sub(r"\s+", " ", str(p)).strip()[:300] or "—"} for p in q["template_params"]]
         payload = {"messaging_product": "whatsapp", "to": digits, "type": "template",
-                   "template": {"name": name, "language": {"code": os.environ.get("WHATSAPP_TEMPLATE_LANG", "").strip() or "lt"},
+                   "template": {"name": name, "language": {"code": (os.environ.get(
+                       "WHATSAPP_TEMPLATE_LANG" if code == "lt" else f"WHATSAPP_TEMPLATE_LANG_{code.upper()}", "").strip()
+                       or markets.get(code)["whatsapp_lang"])},
                                 "components": [{"type": "body", "parameters": params}]}}
         how = f"szablon „{name}”"
         text = q.get("message") or text
@@ -8233,7 +8513,7 @@ def _wa_lead_for(digits):
     if not tail:
         return None
     for lead in Lead.query.filter(Lead.contact_phone.isnot(None)).order_by(Lead.created_at.desc()).all():
-        d = lt_phone_digits(lead.contact_phone) or re.sub(r"\D", "", lead.contact_phone or "")
+        d = lt_phone_digits(lead.contact_phone, lead_market(lead)) or re.sub(r"\D", "", lead.contact_phone or "")
         if d.endswith(tail):
             return lead
     return None
@@ -8419,10 +8699,11 @@ app.jinja_env.globals.update(pl_move_configured=pl_move_configured, pl_pending_c
 def crm_lt_mail_backlog():
     """Jednym kliknięciem: mail LT do wszystkich starszych litewskich leadów bez maila (w tle)."""
     user_id = get_current_user(request)["id"]
+    code = current_market()  # zadanie w tle nie ma filtra rynku — bierze rynek, który człowiek oglądał
 
     def job():
         ok, failed = 0, []
-        for lead in lt_backlog():
+        for lead in lt_backlog(code):
             err = send_lt_mail(lead, actor_id=user_id)
             if err == LT_ALREADY_SENT:
                 continue
@@ -8431,9 +8712,9 @@ def crm_lt_mail_backlog():
                 failed.append(f"#{lead.id} {lead.company}: {err}")
             else:
                 ok += 1
-        info = f"Wysłano {ok} maili do litewskich leadów" + (f"; nie wyszło {len(failed)}: " + "; ".join(failed[:5]) if failed else "")
+        info = f"Wysłano {ok} maili z prośbą o dane" + (f"; nie wyszło {len(failed)}: " + "; ".join(failed[:5]) if failed else "")
         return {"info": info[:500], "url": "/crm/leads?view=list"}
-    return redirect(url_for("crm_job", jid=_start_job("Maile do starszych litewskich leadów", job)))
+    return redirect(url_for("crm_job", jid=_start_job("Maile do starszych leadów", job)))
 
 
 @app.route("/crm/leads/<int:lead_id>/lt-mail", methods=["POST"])
@@ -8457,7 +8738,7 @@ def lead_form(token):
     if not lead:
         abort(404)
     if request.method == "GET":
-        return render_template("crm/lead_form.html", lead=lead, done=False)
+        return _render_lead_form(lead, done=False)
     f = request.form
     clean = {k: (f.get(k) or "").strip()[:500] for k in
              ("date", "date_to", "place", "time_from", "time_to", "kind", "guests", "phone", "comment")}
@@ -8480,25 +8761,43 @@ def lead_form(token):
               ("Komentarz", clean["comment"])]
     summary = "\n".join(f"{k}: {v}" for k, v in labels if v)
     if summary:
-        lead.notes = ((lead.notes or "").rstrip() + "\n\n[formularz LT] " + summary.replace("\n", "; ")).strip()
+        lead.notes = ((lead.notes or "").rstrip() + f"\n\n[formularz {lead_market(lead).upper()}] "
+                      + summary.replace("\n", "; ")).strip()
     lead.form_filled_at = datetime.utcnow()
     owner = lead.assigned_to or USERS[0]["id"]
     db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(), assigned_to=owner,
                             notes=f"📝 Klient wypełnił formularz z danymi do wyceny\n{summary or '(bez danych)'}"))
     today = datetime.combine(to_local(datetime.utcnow()).date(), datetime.min.time())
     db.session.add(Activity(lead_id=lead.id, kind="email", due_date=today, assigned_to=owner,
-                            notes="Przygotuj i wyślij ofertę — klient z Litwy wypełnił formularz (dane w komentarzu)."))
+                            notes=f"Przygotuj i wyślij ofertę — klient ({markets.get(lead_market(lead))['name']}) "
+                                  "wypełnił formularz (dane w komentarzu)."))
     db.session.commit()
     _notify_form_filled(lead.id, summary)
-    if lt_auto_quote_enabled():
+    if lt_auto_quote_enabled(lead_market(lead)):
         _send_quote_in_background(lead.id)
-    return render_template("crm/lead_form.html", lead=lead, done=True)
+    return _render_lead_form(lead, done=True)
+
+
+def _render_lead_form(lead, done):
+    """Formularz dla klienta w języku rynku leada (Litwa: litewski, Niemcy: niemiecki)."""
+    code = lead_market(lead)
+    m = markets.get(code)
+    return render_template("crm/lead_form.html", lead=lead, done=done, fm=m["form"], fm_lang=m["html_lang"],
+                           fm_place=client_place(lead.location or "", code) if lead.location else "",
+                           fm_contact=lt_sender(code)["email"])
 
 
 def _notify_form_filled(lead_id, summary):
-    """Powiadomienie mailem (domyślnie na o.latek@33bots.lt, LT_NOTIFY_EMAILS), że klient wypełnił formularz."""
-    to = [e.strip() for e in os.environ.get("LT_NOTIFY_EMAILS", "o.latek@33bots.lt").split(",") if e.strip()]
-    if not to or not lt_mailbox_ready():
+    """Powiadomienie mailem, że klient wypełnił formularz — na skrzynkę rynku leada (o.latek@33bots.lt / .de);
+    inne adresy: LT_NOTIFY_EMAILS (Litwa), NOTIFY_EMAILS_DE (Niemcy)."""
+    lead = all_markets(Lead.query.filter(Lead.id == lead_id)).first()
+    if lead is None:
+        return
+    code = lead_market(lead)
+    m = markets.get(code)
+    env = "LT_NOTIFY_EMAILS" if code == "lt" else f"NOTIFY_EMAILS_{code.upper()}"
+    to = [e.strip() for e in os.environ.get(env, m["own_email"]).split(",") if e.strip()]
+    if not to or not lt_mailbox_ready(code):
         return
 
     def run():
@@ -8506,13 +8805,14 @@ def _notify_form_filled(lead_id, summary):
             try:
                 lead = db.session.get(Lead, lead_id)
                 link = f"{public_base_url()}/crm/leads/{lead_id}" if public_base_url() else ""
-                body = (f"Klient z Litwy wypełnił formularz z danymi do wyceny.\n\n"
+                body = (f"Klient ({m['name']}) wypełnił formularz z danymi do wyceny.\n\n"
                         f"Lead: {lead.company}\nKontakt: {lead.contact_name or '—'} · {', '.join(lead.emails) or '—'}"
                         f" · {lead.contact_phone or '—'}\n\n{summary or '(bez danych)'}\n\n"
                         + (f"Otwórz w CRM: {link}\n" if link else "")
                         + "\nW CRM czeka zadanie „Przygotuj i wyślij ofertę”.")
-                sender = lt_sender()
-                err = _smtp_send(", ".join(to), f"📝 Formularz wypełniony: {lead.company}", body, sender["name"], sender=sender)
+                sender = lt_sender(code)
+                err = _smtp_send(", ".join(to), f"📝 Formularz wypełniony {m['flag']}: {lead.company}", body,
+                                 sender["name"], sender=sender)
                 if err:
                     db.session.add(Activity(lead_id=lead_id, kind="note", done=True, done_at=datetime.utcnow(),
                                             assigned_to=lead.assigned_to or USERS[0]["id"],
@@ -8525,18 +8825,13 @@ def _notify_form_filled(lead_id, summary):
     threading.Thread(target=run, daemon=True).start()
 
 
-
 # ---------- POCZTA: skrzynki firmowe w CRM + tłumaczenie na żywo ----------
 # Zakładka „Poczta”: Odebrane i Wysłane wszystkich skrzynek rynku (domyślnie o.latek@ i kontakt@33bots.lt),
 # razem z archiwum. CRM synchronizuje je w tle do tabeli mail_messages (tylko odczyt IMAP), każdy mail
 # pokazuje obok oryginału po polsku (Claude, tłumaczenie zapisane w bazie) i pozwala pisać maile po polsku
 # z tłumaczeniem na język klienta — wysyłka z wybranej skrzynki, z kopią w Wysłanych.
-import poczta  # noqa: E402
-
-MAIL_TARGET_LANG = os.environ.get("MARKET_LANG", "lt").strip().lower() or "lt"
 MAIL_LANG_NAMES = {"pl": "polski", "lt": "litewski", "de": "niemiecki", "en": "angielski"}
 MAIL_LANG_FLAGS = {"pl": "🇵🇱", "lt": "🇱🇹", "de": "🇩🇪", "en": "🇬🇧"}
-MAIL_DEFAULT_BOXES = {"lt": "o.latek@33bots.lt,kontakt@33bots.lt", "de": "o.latek@33bots.de,kontakt@33bots.de"}
 MAIL_SYNC_SECONDS = int(os.environ.get("MAIL_SYNC_SECONDS", "120") or 120)
 MAIL_BATCH = int(os.environ.get("MAIL_SYNC_BATCH", "300") or 300)
 MAIL_TRANSLATE_MODEL = os.environ.get("TRANSLATE_AI_MODEL", "").strip() or INBOX_AI_MODEL
@@ -8560,11 +8855,16 @@ def _env_pairs():
     return pairs
 
 
-def mail_boxes():
-    """Skrzynki zakładki Poczta: [{login, pwd, host, port, smtp_host, smtp_port, label, key}].
-    Lista: MAILBOXES (po przecinku) albo domyślna rynku; hasło z pasującej zmiennej (SMTP_/IMAP_/MAIL_USER_X +
-    _PASS_X, INBOX_IMAP_*), a gdy brak — MAIL_PASSWORD (wspólne hasło)."""
-    raw = os.environ.get("MAILBOXES", "").strip() or MAIL_DEFAULT_BOXES.get(MAIL_TARGET_LANG, "")
+def mail_boxes(code="all"):
+    """Skrzynki zakładki Poczta: [{login, pwd, host, port, label, key, market, user_id}].
+    Lista rynku: MAILBOXES_LT / MAILBOXES_DE (po przecinku) albo domyślna (o.latek@ i kontakt@33bots.lt/.de);
+    code="all" — wszystkie rynki. Hasło z pasującej zmiennej (SMTP_/IMAP_/MAIL_USER_X + _PASS_X, INBOX_IMAP_*),
+    a gdy brak — MAIL_PASSWORD (wspólne hasło skrzynek)."""
+    if code == "all":
+        return [b for mc in markets.MARKETS for b in mail_boxes(mc)]
+    m = markets.get(code)
+    raw = os.environ.get(f"MAILBOXES_{m['code'].upper()}", "").strip() or (
+        os.environ.get("MAILBOXES", "").strip() if m["code"] == "lt" else "") or m["mailboxes"]
     pairs = dict(reversed(_env_pairs()))
     common = os.environ.get("MAIL_PASSWORD", "").strip()
     host = os.environ.get("IMAP_HOST", "").strip() or os.environ.get("SMTP_HOST", "").strip()
@@ -8572,11 +8872,11 @@ def mail_boxes():
     for login in [x.strip().lower() for x in raw.split(",") if x.strip()]:
         pwd = pairs.get(login) or common
         key = re.sub(r"[^A-Z0-9]", "_", login.split("@")[0].upper() + "_" + login.split("@")[-1].split(".")[-1].upper())
-        owner = next((u for u in USERS if (u.get("email") or "").lower() == login), None)
+        owner = next((u for u in USERS if (u.get("email") or "").split("@")[0].lower() == login.split("@")[0]), None)
         local = login.split("@")[0]
         label = (owner.get("full_name") if owner else None) or (
             "Oliwier Latek" if local.startswith("o.latek") else "33Bots" if local in ("kontakt", "info", "hi") else login)
-        out.append({"login": login, "pwd": pwd, "key": key, "label": label,
+        out.append({"login": login, "pwd": pwd, "key": key, "label": label, "market": m["code"],
                     "host": os.environ.get(f"IMAP_HOST_{key}", "").strip() or host,
                     "port": int(os.environ.get(f"IMAP_PORT_{key}", "").strip() or os.environ.get("IMAP_PORT", 993)),
                     "user_id": owner["id"] if owner else None})
@@ -8615,7 +8915,7 @@ def _mail_store(box, kind, uidvalidity, uid, data, archive=False):
     if MailMessage.query.filter_by(mailbox=box["login"], folder=kind, uidvalidity=uidvalidity, uid=uid).first():
         return None
     old_mail = archive and data["date"] and data["date"] < datetime.utcnow() - timedelta(days=2)
-    row = MailMessage(mailbox=box["login"], folder=kind, uid=uid, uidvalidity=uidvalidity,
+    row = MailMessage(mailbox=box["login"], market=box["market"], folder=kind, uid=uid, uidvalidity=uidvalidity,
                       seen=bool(kind == "sent" or old_mail),  # archiwum nie świeci się jako nowe
                       **{k: v for k, v in data.items() if k not in ("attachments", "truncated")})
     row.attachments = json.dumps(data["attachments"], ensure_ascii=False)
@@ -8845,8 +9145,7 @@ def mail_signature(box, user=None):
     owner = owner or user
     name = (owner or {}).get("full_name") or box["label"]
     phone = (owner or {}).get("phone") or ""
-    bye = {"lt": "Pagarbiai,", "de": "Mit freundlichen Grüßen", "en": "Best regards,", "pl": "Pozdrawiam,"}
-    return "\n".join(x for x in (bye.get(MAIL_TARGET_LANG, "Pozdrawiam,"), name, "33Bots", box["login"], phone) if x)
+    return "\n".join(x for x in (markets.get(box.get("market"))["bye"], name, "33Bots", box["login"], phone) if x)
 
 
 # --- trasy ---
@@ -8886,7 +9185,7 @@ def crm_mail():
         sel_lead = mail_lead_for(sel)
         atts = _mail_json(sel)
     status = []
-    for b in mail_boxes():
+    for b in mail_boxes(current_market()):
         sti, sts = _mail_state(b["login"], "in"), _mail_state(b["login"], "sent")
         status.append({"login": b["login"], "label": b["label"], "ready": bool(b["pwd"] and b["host"]),
                        "count": MailMessage.query.filter_by(mailbox=b["login"]).count(),
@@ -8896,7 +9195,7 @@ def crm_mail():
     return render_template(
         "crm/poczta.html", rows=rows, sel=sel, thread=thread, sel_lead=sel_lead, atts=atts, fresh=fresh, quoted=quoted,
         box=box, folder=folder, q=q, page=page, total=total, pages=max(1, (total + 49) // 50), lead=lead,
-        status=status, lang_names=MAIL_LANG_NAMES, lang_flags=MAIL_LANG_FLAGS, target_lang=MAIL_TARGET_LANG,
+        status=status, lang_names=MAIL_LANG_NAMES, lang_flags=MAIL_LANG_FLAGS, target_lang=M()["lang"],
         ai_ok=bool(_ai_client()), syncing=_mail_sync_lock.locked(),
     )
 
@@ -8981,6 +9280,7 @@ def crm_mail_new_lead(mid):
     user = get_current_user(request)
     lead = Lead(company=company[:200], contact_name=(row.from_name or "")[:200] if row.folder == "in" else "",
                 contact_email=addr, stage="Nowy", assigned_to=user["id"], currency="EUR", source="Mail",
+                market=row.market or current_market(),
                 notes=f"Z maila „{row.subject or ''}” ({row.date:%Y-%m-%d} )".replace(" )", ")") if row.date else "")
     db.session.add(lead)
     db.session.flush()
@@ -8995,9 +9295,9 @@ def crm_mail_new_lead(mid):
 @app.route("/crm/poczta/przetlumacz", methods=["POST"])
 def crm_mail_translate_draft():
     """Tłumaczenie szkicu w okienku pisania: polski → język klienta (albo odwrotnie: to=pl)."""
-    target = request.form.get("to", MAIL_TARGET_LANG)
+    target = request.form.get("to", M()["lang"])
     if target not in MAIL_LANG_NAMES:
-        target = MAIL_TARGET_LANG
+        target = M()["lang"]
     subject = (request.form.get("subject") or "")[:500]
     body = (request.form.get("body") or "")[:12000]
     if not (subject.strip() or body.strip()):
@@ -9011,18 +9311,18 @@ def crm_mail_translate_draft():
     return jsonify({"ok": True, "subject": subj, "body": text})
 
 
-def _quote_for_reply(row):
+def _quote_for_reply(row, lang):
     when = f"{to_local(row.date):%Y-%m-%d %H:%M}" if row.date else ""
     who = f"{row.from_name} <{row.from_addr}>" if row.from_name else row.from_addr
     intro = {"lt": f"{when}, {who} rašė:", "de": f"Am {when} schrieb {who}:", "en": f"On {when}, {who} wrote:",
-             "pl": f"{when}, {who} napisał(a):"}.get(MAIL_TARGET_LANG, f"{when}, {who}:")
+             "pl": f"{when}, {who} napisał(a):"}.get(lang, f"{when}, {who}:")
     body = "\n".join("> " + line for line in (row.body_text or "").split("\n")[:200])
     return f"\n\n{intro}\n{body}"
 
 
 @app.route("/crm/poczta/nowa", methods=["GET", "POST"])
 def crm_mail_compose():
-    boxes = [b for b in mail_boxes() if b["pwd"]]
+    boxes = [b for b in mail_boxes(current_market()) if b["pwd"]]
     user = get_current_user(request)
     if request.method == "POST":
         return _mail_send_from_form(boxes, user)
@@ -9045,14 +9345,14 @@ def crm_mail_compose():
         subject = s if re.match(r"(?i)^(re|aw|ats)\s*:", s) else f"Re: {s}"
         sp = reply.subject_pl or s
         subject_pl = sp if re.match(r"(?i)^(re|aw|ats)\s*:", sp) else f"Re: {sp}"
-        quoted = _quote_for_reply(reply)
+        quoted = _quote_for_reply(reply, M()["lang"])
         lead = lead or mail_lead_for(reply)
     elif fwd:
         from_box = fwd.mailbox
         s = fwd.subject or ""
         subject = s if re.match(r"(?i)^(fwd?|wg|pers)\s*:", s) else f"Fwd: {s}"
         subject_pl = f"Fwd: {fwd.subject_pl or s}"
-        quoted = _quote_for_reply(fwd)
+        quoted = _quote_for_reply(fwd, M()["lang"])
     elif lead:
         to = to or ", ".join(lead.emails)
     if not from_box:
@@ -9061,7 +9361,7 @@ def crm_mail_compose():
     return render_template(
         "crm/poczta_nowa.html", boxes=boxes, from_box=from_box, to=to, cc=cc, subject=subject, subject_pl=subject_pl,
         quoted=quoted,
-        reply=reply, fwd=fwd, lead=lead, target_lang=MAIL_TARGET_LANG, lang_names=MAIL_LANG_NAMES,
+        reply=reply, fwd=fwd, lead=lead, target_lang=M()["lang"], lang_names=MAIL_LANG_NAMES,
         lang_flags=MAIL_LANG_FLAGS, signatures={b["login"]: mail_signature(b, user) for b in boxes}, ai_ok=bool(_ai_client()),
     )
 
@@ -9111,14 +9411,14 @@ def _mail_send_from_form(boxes, user):
     now = datetime.utcnow()
     msg_id = _smtp_send.last_msgid or ""
     body_pl = (f.get("body") or "").strip()
-    row = MailMessage(mailbox=box["login"], folder="sent", uid=None, message_id=msg_id[:400],
+    row = MailMessage(mailbox=box["login"], market=box["market"], folder="sent", uid=None, message_id=msg_id[:400],
                       in_reply_to=headers.get("In-Reply-To"), refs=headers.get("References"),
                       thread_key=(reply.thread_key if reply else msg_id)[:400], from_addr=box["login"],
                       from_name=sender["full_name"], to_addrs=", ".join(recipients), to_names=", ".join(recipients),
                       cc_addrs=", ".join(cc), addrs=" " + " ".join(sorted(set([box["login"]] + recipients + cc))) + " ",
                       subject=subject, date=now, body_text=body[:poczta.BODY_LIMIT], snippet=re.sub(r"\s+", " ", body)[:300],
                       attachments=json.dumps([{"n": i, "name": n, "type": m, "size": len(d)} for i, (n, d, m) in enumerate(files)]),
-                      lang=MAIL_TARGET_LANG, subject_pl=(f.get("subject") or subject)[:600],
+                      lang=markets.get(box["market"])["lang"], subject_pl=(f.get("subject") or subject)[:600],
                       body_pl=body_pl or None, translated_at=now, seen=True)
     db.session.add(row)
     db.session.flush()
@@ -9163,15 +9463,33 @@ def _wants_json():
             or "application/json" in request.headers.get("Accept", ""))
 
 
+def _customer_market():
+    token = request.path.split("/")[2] if request.path.count("/") >= 2 else ""
+    try:
+        lead = Lead.query.filter_by(form_token=token).first() if len(token) >= 16 else None
+        if lead is not None:
+            return lead_market(lead)
+    except Exception:
+        db.session.rollback()
+    best = request.accept_languages.best_match(["de", "lt"]) if request.accept_languages else None
+    return best or DEFAULT_MARKET
+
+
 def _error_page(code):
     if _wants_json():
         return jsonify({"error": {404: "nie znaleziono", 500: "błąd serwera"}.get(code, "błąd")}), code
     customer = request.path.startswith("/f/")
-    texts = _ERR_TEXT["lt" if customer else "pl"]
+    if customer:  # strona dla klienta: język rynku leada albo przeglądarki (de / lt)
+        mc = _customer_market()
+        m = markets.get(mc)
+        icon, title, message = m["errors"].get(code) or m["errors"][500]
+        return render_template("crm/error.html", lang=m["html_lang"], icon=icon, title=title, message=message,
+                               contact=lt_sender(mc)["email"], back_url=None, back_label="", code=""), code
+    texts = _ERR_TEXT["pl"]
     icon, title, message = texts.get(code) or texts.get("other") or texts[500]
     return render_template(
-        "crm/error.html", lang="lt" if customer else "pl", icon=icon, title=title, message=message,
-        contact=(os.environ.get("SMTP_USER_LT", "").strip() or "o.latek@33bots.lt") if customer else "",
+        "crm/error.html", lang="pl", icon=icon, title=title, message=message,
+        contact="",
         back_url=None if customer else url_for("crm_dashboard"), back_label="Wróć do CRM",
         code="" if customer else f"Błąd {code}"), code
 

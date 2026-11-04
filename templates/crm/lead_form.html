@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="lt">
+<html lang="{{ fm_lang }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>33Bots – renginio informacija</title>
+<title>{{ fm.title }}</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <style>
 :root { --bg: #f5f6fa; --card: #fff; --text: #1d2130; --muted: #6b7080; --line: #e2e5ee; --accent: #5b5ef4; --green: #16a34a; }
@@ -41,37 +41,37 @@ details summary { cursor: pointer; color: var(--accent); font-size: 14px; }
   {% if done %}
     <div class="ok">
       <div class="tick">✓</div>
-      <h1>Ačiū! Informaciją gavome.</h1>
-      <p class="sub" style="margin:0">Paruošime pasiūlymą ir atsiųsime jį el. paštu kuo greičiau.</p>
+      <h1>{{ fm.done_h1 }}</h1>
+      <p class="sub" style="margin:0">{{ fm.done_sub }}</p>
     </div>
   {% else %}
-    <h1>Renginio informacija</h1>
-    <p class="sub">Trys trumpi atsakymai — ir paruošime pasiūlymą humanoidinio roboto Unitree G1 nuomai.</p>
+    <h1>{{ fm.h1 }}</h1>
+    <p class="sub">{{ fm.sub }}</p>
     <form method="post">
-      <label for="date">Renginio data</label>
+      <label for="date">{{ fm.date }}</label>
       <input type="date" id="date" name="date" required>
-      <label class="check"><input type="checkbox" id="multi" onchange="document.getElementById('to-wrap').hidden = !this.checked"> Renginys trunka kelias dienas</label>
-      <div id="to-wrap" hidden><label for="date_to">Paskutinė diena</label><input type="date" id="date_to" name="date_to"></div>
-      <label for="place">Miestas</label>
-      <input type="text" id="place" name="place" value="{{ lead.location or '' }}" placeholder="pvz. Vilnius" required maxlength="200">
+      <label class="check"><input type="checkbox" id="multi" onchange="document.getElementById('to-wrap').hidden = !this.checked"> {{ fm.multi }}</label>
+      <div id="to-wrap" hidden><label for="date_to">{{ fm.date_to }}</label><input type="date" id="date_to" name="date_to"></div>
+      <label for="place">{{ fm.place }}</label>
+      <input type="text" id="place" name="place" value="{{ fm_place }}" placeholder="{{ fm.place_ph }}" required maxlength="200">
       <div class="two">
-        <div><label for="time_from">Nuo</label><input type="time" id="time_from" name="time_from"></div>
-        <div><label for="time_to">Iki</label><input type="time" id="time_to" name="time_to"></div>
+        <div><label for="time_from">{{ fm.from }}</label><input type="time" id="time_from" name="time_from"></div>
+        <div><label for="time_to">{{ fm.to }}</label><input type="time" id="time_to" name="time_to"></div>
       </div>
       <details>
-        <summary>Daugiau informacijos (nebūtina)</summary>
-        <label for="kind">Renginio pobūdis</label>
-        <input type="text" id="kind" name="kind" placeholder="pvz. paroda, konferencija, įmonės vakarėlis" maxlength="200">
-        <label for="guests">Numatomas svečių skaičius</label>
+        <summary>{{ fm.more }}</summary>
+        <label for="kind">{{ fm.kind }}</label>
+        <input type="text" id="kind" name="kind" placeholder="{{ fm.kind_ph }}" maxlength="200">
+        <label for="guests">{{ fm.guests }}</label>
         <input type="text" id="guests" name="guests" inputmode="numeric" maxlength="50">
-        <label for="comment">Pageidavimai</label>
+        <label for="comment">{{ fm.comment }}</label>
         <textarea id="comment" name="comment" rows="3" maxlength="500"></textarea>
       </details>
-      <button type="submit">Siųsti</button>
+      <button type="submit">{{ fm.send }}</button>
     </form>
   {% endif %}
   </div>
-  <div class="foot">33Bots · {{ 'o.latek@33bots.lt' }}</div>
+  <div class="foot">33Bots · {{ fm_contact }}</div>
 </div>
 </body>
 </html>

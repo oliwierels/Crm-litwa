@@ -1,5 +1,5 @@
 {% extends "crm/base.html" %}
-{% block title %}Leady – 33bots LT CRM{% endblock %}
+{% block title %}Leady – {{ crm_brand }}{% endblock %}
 {% block page_title %}{% if view == 'kanban' %}Kanban{% else %}Leady{% endif %}{% endblock %}
 
 {% block topbar_actions %}
@@ -61,7 +61,7 @@
         </div>
         {% if lead.contact_name %}<div class="k-meta">{{ lead.contact_name }}</div>{% endif %}
         {% if lead.form_filled_at %}<div class="k-meta" style="color:var(--green);font-weight:600" title="Klient wypełnił formularz z danymi do wyceny">📝 Formularz wypełniony {{ to_local(lead.form_filled_at).strftime('%d.%m') }}</div>
-        {% elif lead.lt_mail_at %}<div class="k-meta" title="Wysłano mail z linkiem do formularza, klient jeszcze go nie wypełnił">🇱🇹 Mail wysłany · czeka na formularz</div>{% endif %}
+        {% elif lead.lt_mail_at %}<div class="k-meta" title="Wysłano mail z linkiem do formularza, klient jeszcze go nie wypełnił">{{ mkt.flag }} Mail wysłany · czeka na formularz</div>{% endif %}
         {% if lead.robot_model %}<div class="k-meta">{{ lead.robot_model }}</div>{% endif %}
         {% if lead.value_pln %}<div class="k-val">{{ lead.value_pln|pln }} {{ lead.currency or 'EUR' }}</div>{% endif %}
         {% if lead.event_date %}<div class="k-meta" style="color:var(--purple)">📅 {{ lead.event_date.strftime('%d.%m') }}{% if lead.event_end_date and lead.event_end_date != lead.event_date %}–{{ lead.event_end_date.strftime('%d.%m') }}{% endif %}.{{ lead.event_date.strftime('%Y') }}</div>{% endif %}
@@ -118,7 +118,7 @@
             <span class="dot {{ dot_cls[ic] }}"></span>
             <span style="font-weight:600">{{ lead.company }}</span>
             {% if lead.form_filled_at %}<span class="qual-badge" style="background:#22c55e22;color:var(--green)" title="Klient wypełnił formularz {{ to_local(lead.form_filled_at).strftime('%d.%m %H:%M') }}">📝 formularz</span>
-            {% elif lead.lt_mail_at %}<span class="qual-badge" style="background:#eab3081a;color:var(--yellow)" title="Mail z formularzem wysłany, czeka na odpowiedź">🇱🇹 czeka</span>{% endif %}
+            {% elif lead.lt_mail_at %}<span class="qual-badge" style="background:#eab3081a;color:var(--yellow)" title="Mail z formularzem wysłany, czeka na odpowiedź">{{ mkt.flag }} czeka</span>{% endif %}
           </div>
         </td>
         <td data-sort="{{ (lead.contact_name or 'żżż')|lower }}">{{ lead.contact_name or '—' }}</td>

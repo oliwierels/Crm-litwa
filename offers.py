@@ -15,7 +15,7 @@ data (dict) — to, co przychodzi z narzędzia send_offer:
   included       zdanie "W cenie: ..."
   note           tekst w ramce kontaktu (opcjonalnie)
   section_title  nagłówek strony 2 (opcjonalnie)
-  language       "lt" (domyślnie w LT CRM), "en" albo "pl"
+  language       język rynku leada: "lt" (Litwa) albo "de" (Niemcy); "pl"/"en" tylko dla zgodności
 contact: (imię i nazwisko, e-mail, telefon)
 """
 import io
@@ -70,11 +70,14 @@ DEFAULT_INCLUDED = {
           "techninė pagalba vietoje. Jokių paslėptų mokesčių.",
     "en": "Included: travel, a dedicated operator, personalisation of the robot's personality and "
           "knowledge, and on-site technical support. No hidden fees.",
+    "de": "Im Preis enthalten: Anreise, ein eigener Operator, Anpassung der Persönlichkeit und des Wissens des "
+          "Roboters sowie technischer Support vor Ort. Keine versteckten Kosten.",
 }
 DEFAULT_NOTE = {
     "pl": "Chętnie odpowiem na pytania i ustalę szczegóły scenariusza. Oferta ważna 14 dni.",
     "en": "I am happy to answer any questions and agree on the scenario. This offer is valid for 14 days.",
     "lt": "Mielai atsakysiu į klausimus ir suderinsiu scenarijaus detales. Pasiūlymas galioja 14 dienų.",
+    "de": "Gerne beantworte ich Ihre Fragen und stimme das Szenario mit Ihnen ab. Das Angebot ist 14 Tage gültig.",
 }
 LABELS = {
     "pl": {"offer": "Oferta", "label": "OFERTA HANDLOWA", "scope": "ZAKRES I WYCENA", "price": "WYCENA",
@@ -83,7 +86,11 @@ LABELS = {
            "contact": "KONTAKTAI", "net": "suma be PVM", "section": "Robotas jūsų renginyje"},
     "en": {"offer": "Offer", "label": "COMMERCIAL OFFER", "scope": "SCOPE & PRICING", "price": "PRICE",
            "contact": "CONTACT", "net": "net, excl. VAT", "section": "The robot at your event"},
+    "de": {"offer": "Angebot", "label": "ANGEBOT", "scope": "LEISTUNGSUMFANG UND PREIS", "price": "PREIS",
+           "contact": "KONTAKT", "net": "netto, zzgl. USt.", "section": "Der Roboter auf Ihrer Veranstaltung"},
 }
+HEADLINE = {"en": "Humanoid robot", "lt": "Humanoidinis robotas", "de": "Humanoider Roboter", "pl": "Robot humanoidalny"}
+SITE = {"lt": "33bots.lt", "de": "33bots.de", "pl": "33bots.pl", "en": "33bots.lt"}
 
 
 class OfferError(ValueError):
@@ -177,8 +184,8 @@ def normalize(data):
     """Sprawdza i uzupełnia dane oferty. Rzuca OfferError z opisem po polsku."""
     if not isinstance(data, dict):
         raise OfferError("offer musi być obiektem")
-    raw_lang = str(data.get("language") or "lt").lower()
-    lang = "en" if raw_lang.startswith("en") else "pl" if raw_lang.startswith("pl") else "lt"
+    raw_lang = str(data.get("language") or "lt").lower()[:2]
+    lang = raw_lang if raw_lang in LABELS else "lt"
     d = {"language": lang}
     for f, maxlen in (("client", 80), ("headline", 40), ("subtitle", 220), ("intro", 600),
                       ("price_title", 60), ("price_sub", 90), ("price", 20), ("included", 300),
@@ -187,7 +194,7 @@ def normalize(data):
     for f in ("client", "price", "price_title", "intro"):
         if not d[f]:
             raise OfferError(f"brak wymaganego pola offer.{f}")
-    d["headline"] = d["headline"] or {"en": "Humanoid robot", "lt": "Humanoidinis robotas"}.get(lang, "Robot humanoidalny")
+    d["headline"] = d["headline"] or HEADLINE[lang]
     d["included"] = d["included"] or DEFAULT_INCLUDED[lang]
     d["note"] = d["note"] or DEFAULT_NOTE[lang]
     d["section_title"] = d["section_title"] or LABELS[lang]["section"]
@@ -206,6 +213,12 @@ def normalize(data):
             raise OfferError("każda karta potrzebuje od 1 do 4 punktów (items)")
         d["cards"].append((_s(k.get("label"), "cards.label", 24).upper(), _s(k.get("title"), "cards.title", 32), items))
     return d
+
+
+def _site(d, email):
+    """Strona w stopce: domena skrzynki nadawcy (33bots.lt / 33bots.de), inaczej domena rynku."""
+    dom = (email or "").rsplit("@", 1)[-1].lower()
+    return dom if dom.startswith("33bots.") else SITE.get(d["language"], "33bots.lt")
 
 
 def render_offer_pdf(data, contact):
@@ -256,7 +269,7 @@ def render_offer_pdf(data, contact):
             c.setLineWidth(0.8)
             c.line(x + w - 12, _y(bt + 20), x + w - 12, _y(bt + 70))
         x += w
-    _text(c, ML + 20, _y(bt + 87), f"{email}  ·  {phone}  ·  33bots.lt", "Poppins-Light", 7.5, MUT)
+    _text(c, ML + 20, _y(bt + 87), f"{email}  ·  {phone}  ·  {_site(d, email)}", "Poppins-Light", 7.5, MUT)
     _text(c, ML, _y(772), "33Bots Bartosz Wysocki  ·  NIP 5253090645", "Poppins-Light", 7, MUT2)
     c.showPage()
 
@@ -320,7 +333,7 @@ def render_offer_pdf(data, contact):
         raise OfferError("treść nie mieści się na stronie 2 — skróć intro albo punkty kart")
     c.setStrokeColor(LINE)
     c.line(ML, _y(791), MR, _y(791))
-    _text(c, ML, _y(805), "33bots.lt", "Poppins-Light", 7.5, MUT)
+    _text(c, ML, _y(805), _site(d, email), "Poppins-Light", 7.5, MUT)
     _text(c, MR, _y(805), "02 / 02", "Mono", 7.5, MUT, right=True)
     c.save()
     return buf.getvalue()

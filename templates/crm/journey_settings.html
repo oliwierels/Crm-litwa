@@ -1,5 +1,5 @@
 {% extends "crm/base.html" %}
-{% block title %}Customer Journey — ustawienia – 33bots LT CRM{% endblock %}
+{% block title %}Customer Journey — ustawienia – {{ crm_brand }}{% endblock %}
 {% block page_title %}Customer Journey — ustawienia{% endblock %}
 {% block topbar_actions %}
 <a href="{{ url_for('crm_journey') }}" class="btn btn-secondary btn-sm">← Tablica</a>
@@ -43,7 +43,7 @@
   </form>
 
   <div class="panel">
-    <div class="panel-header"><i class="bi bi-file-earmark-word"></i> Wzór umowy (DOCX)</div>
+    <div class="panel-header"><i class="bi bi-file-earmark-word"></i> Wzór umowy (DOCX) — {{ mkt.flag }} {{ mkt.name }}, umowa {{ mkt.lang_in_pl }}</div>
     <div class="panel-body gap10" style="font-size:12.5px">
       <div>Teraz: <b>{{ 'wgrany plik „' ~ template_name ~ '”' if template_name else 'nasz tekst umowy z CRM' }}</b>.
         CRM wpisuje do wzoru to, co wie (daty, miejsce, cena, robot), a dane klienta zostawia wykropkowane — klient uzupełnia je sam.</div>

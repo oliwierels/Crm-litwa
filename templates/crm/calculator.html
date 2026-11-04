@@ -1,6 +1,6 @@
 {% extends "crm/base.html" %}
-{% block title %}Kalkulator wyceny – 33bots LT CRM{% endblock %}
-{% block page_title %}🧮 Kalkulator wyceny{% endblock %}
+{% block title %}Kalkulator wyceny – {{ crm_brand }}{% endblock %}
+{% block page_title %}🧮 Kalkulator wyceny {{ calc_market.flag }} {{ calc_market.name }}{% endblock %}
 
 {% block extra_head %}
 <style>
@@ -38,7 +38,7 @@
       {% endif %}
       <div>
         <label>Miejsce wydarzenia</label>
-        <input type="text" name="cel" value="{{ dest }}" placeholder="np. Gdańsk albo adres" maxlength="200" autofocus>
+        <input type="text" name="cel" value="{{ dest }}" placeholder="np. {{ 'Kaunas' if calc_market.code == 'lt' else 'Berlin' }} albo adres" maxlength="200" autofocus>
       </div>
       <div>
         <label>Czas na miejscu</label>
@@ -76,7 +76,7 @@
       <div class="kc-rules">
         Cennik: 8 h = {{ fmt_zl(cfg.base) }}, 4 h = 6/8, 2 h = 1/2 tej ceny. Każda godzina po {{ cfg.night_from }}:00
         (do {{ cfg.night_to }}:00) liczy się × {{ cfg.night_mult }} stawki godzinowej. Dojazd: {{ ('%.2f'|format(cfg.rate)).replace('.', ',') }} € za km
-        w jedną stronę × 2, liczony od granicy PL–LT (Budzisko). Nocleg jest zawsze: {{ fmt_zl(cfg.lodging) }} za każdy dzień wynajmu.
+        w jedną stronę × 2, liczony {{ cfg.calc_from }}. Nocleg jest zawsze: {{ fmt_zl(cfg.lodging) }} za każdy dzień wynajmu.
         Dojazd z noclegami może być najwyżej {{ cfg.share }}% ceny — jeśli wychodzi więcej, cena rośnie tak, żeby się zmieścił.
         Kilka dni: 2 dni −{{ cfg.disc[2] }}%, 3 i więcej −{{ cfg.disc[3] }}% od całości (jeden dojazd, ekipa zostaje na miejscu).
         Km z mapy są szacunkowe (linia prosta × 1,25) — wpisz własne, jeśli znasz trasę.
