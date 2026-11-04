@@ -4,7 +4,8 @@
 {% block content %}
 <div class="panel" style="padding:16px 18px;max-width:900px">
   {% if msg %}<div style="margin-bottom:10px;font-weight:600">{{ msg }}</div>{% endif %}
-  <p style="margin:0 0 12px;color:var(--muted);font-size:12.5px">Ci klienci ({{ mkt.flag }} {{ mkt.name }}) dostali mail z wyceną, w którym był błędny link do formularza.
+  <p style="margin:0 0 12px;color:var(--muted);font-size:12.5px">Ci klienci ({{ mkt.flag }} {{ mkt.name }}) dostali <b>ofertę z ceną</b>, w której był błędny link do formularza, i od tego czasu nie było z nimi kontaktu
+    (bez maili z prośbą o dane, leadów zamkniętych i tych, którzy odpisali albo z którymi rozmawialiście). Sprawdź listę — kogoś, kogo nie trzeba poprawiać, kliknij „Pomiń”.
     Poprawka to pełna oferta {{ mkt.lang_in_pl }}: krótkie przeprosiny za błędny link, cena, co robi robot (rozmowa, taniec, zdjęcia, powitanie gości), co jest w cenie
     i <b>PDF oferty w załączniku</b> — bez żadnych linków do formularzy.</p>
   {% if rows %}
@@ -15,8 +16,11 @@
   <div style="border-top:1px solid var(--border);padding:10px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px">
     <div style="flex:1;min-width:240px"><a href="{{ url_for('crm_lead_detail', lead_id=r.lead.id) }}" style="color:var(--text);font-weight:700">{{ r.lead.company }}</a>
       <span style="color:var(--muted)"> · {{ r.lead.emails|join(', ') }}</span>
+      <div style="color:var(--muted);font-size:11.5px">📨 {{ r.ev.when.strftime('%d.%m %H:%M') if r.ev.when else '' }} · {{ r.ev.line }}{% if r.ev.confirmed %} · ✅ potwierdzone w Wysłanych{% endif %}</div>
       {% if r.price %}<div style="color:var(--green)">{{ '{:,}'.format(r.price).replace(',', ' ') }} € — <a href="{{ url_for('crm_lt_offer_pdf', lead_id=r.lead.id) }}" target="_blank" style="color:var(--accent)">podgląd PDF</a></div>
       {% else %}<div style="color:var(--yellow)">Brak {{ r.missing|join(', ') }} — napisz ręcznie</div>{% endif %}</div>
+    <form method="post" action="{{ url_for('crm_badlink_skip', lead_id=r.lead.id) }}">
+      <button class="btn btn-ghost btn-sm">🚫 Pomiń</button></form>
     {% if r.price %}
     <form method="post" action="{{ url_for('crm_badlink_fix', lead_id=r.lead.id) }}" onsubmit="this.querySelector('button').disabled = true">
       <button class="btn btn-secondary btn-sm">📨 Wyślij poprawioną ofertę z PDF</button></form>

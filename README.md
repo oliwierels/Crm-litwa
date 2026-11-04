@@ -84,7 +84,7 @@ Wersję w złym języku CRM odrzuca i Claude pisze ją jeszcze raz. Model: `MAIL
 | `MAIL_PASSWORD` | wspólne hasło skrzynek — wystarczy ono dla o.latek@ i kontakt@ w 33bots.lt **i** 33bots.de (Poczta, wysyłka, import zapytań) |
 | `MAILBOXES_DE` | (opcjonalnie) inna lista skrzynek DE po przecinku — domyślnie `o.latek@33bots.de,kontakt@33bots.de` |
 | `INBOX_IMAP_USER_DE`, `INBOX_IMAP_PASS_DE` | (opcjonalnie) inna skrzynka zapytań DE — domyślnie kontakt@33bots.de z `MAIL_PASSWORD` |
-| `CALC_BASE_8H_DE`, `CALC_KM_RATE_DE`, `CALC_LODGING_DE` | cennik DE (domyślnie 2500 € / 0,75 € / 120 €) — km od granicy Frankfurt/Oder albo Görlitz (bliższa) |
+| `CALC_BASE_8H_DE`, `CALC_KM_RATE_DE`, `CALC_LODGING_DE`, `CALC_MIN_PRICE_DE` | cennik DE (domyślnie 2500 € / 0,75 € / 120 € / minimum 1 900 €) — km od granicy Frankfurt/Oder albo Görlitz (bliższa) |
 | `WHATSAPP_TEMPLATE_DE` (+ `WHATSAPP_TEMPLATE_LANG_DE`) | zatwierdzony szablon WhatsApp po niemiecku (4 pola: data, godziny, miejsce, cena) |
 | `NOTIFY_EMAILS_DE` | (opcjonalnie) gdzie wysłać powiadomienie o wypełnionym formularzu DE — domyślnie o.latek@33bots.de |
 
@@ -141,6 +141,9 @@ Przy leadzie: „🚀 Wyślij przez WhatsApp” — pierwsza wiadomość idzie j
 trafia do komentarzy leada (+ zadanie „Odpowiedz…”), a przez 24 h CRM wysyła już zwykły tekst z okienka.
 
 ## Automatyczna oferta mailem (nowe leady — tylko Litwa)
+
+**Cena minimalna: 1 900 € netto** (`CALC_MIN_PRICE_LT`, Niemcy `CALC_MIN_PRICE_DE`) — krótkie wydarzenia blisko granicy
+nie wychodzą taniej; 8 h + dalszy dojazd rośnie normalnie (np. Kłajpeda ≈ 2 600 €).
 
 Nowy lead z godzinami i miejscem w CRM (np. „iki 4 valandų”, „Miejsce wydarzenia – Šiaulių arena”) od razu dostaje
 normalny mail z ofertą po litewsku — cena (kalkulator: od granicy, nocleg, zaokrąglenie do setek od 25 €), co robi robot

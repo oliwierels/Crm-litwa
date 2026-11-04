@@ -3303,7 +3303,7 @@ def crm_calculator():
         cfg={"base": r["base"], "rate": r["km"], "share": int(pricing.TRAVEL_MAX_SHARE * 100),
              "round": pricing.ROUND_TO, "night_from": pricing.NIGHT_FROM, "night_to": pricing.NIGHT_TO,
              "night_mult": pricing.fmt_num(pricing.NIGHT_MULT), "lodging_km": pricing.LODGING_KM,
-             "lodging": r["lodging"], "calc_from": m["calc_from"],
+             "lodging": r["lodging"], "calc_from": m["calc_from"], "min": r.get("min") or 0,
              "disc": {d: int(p * 100) for d, p in pricing.DAY_DISCOUNTS.items()}},
         fmt_num=pricing.fmt_num,
         fmt_zl=pricing.fmt_zl,
@@ -8226,15 +8226,40 @@ app.jinja_env.globals.update(quote_mail_preview=quote_mail_preview)
 BADLINK_FIXED_KEY = "badlink_fixed:{}"
 
 
-def bad_link_leads(code=None):
-    """Leady (rynku `code`), które dostały mail z błędnym linkiem (adres-wzór z listy zmiennych) i nie dostały poprawki."""
+def bad_link_leads(code=None, with_evidence=False):
+    """Leady rynku `code`, które dostały OFERTĘ Z CENĄ (automatyczna / ręczna wycena mailem) z błędnym linkiem
+    (adres-wzór z listy zmiennych) i nie dostały poprawki. Bez: maili z prośbą o dane, leadów zamkniętych
+    (Wygrany / Zrealizowany / Stracony), pominiętych i takich, z którymi po tym mailu był już kontakt."""
     code = code or current_market()
-    ids = {r[0] for r in all_markets(db.session.query(Activity.lead_id).filter(
-        Activity.lead_id.isnot(None), Activity.notes.like(f"%{BAD_LINK_MARK}%"))).distinct()}
-    if not ids:
-        return []
-    leads = all_markets(Lead.query.filter(Lead.id.in_(ids), Lead.market == code)).order_by(Lead.created_at).all()
-    return [l for l in leads if not get_setting(BADLINK_FIXED_KEY.format(l.id))]
+    acts = (all_markets(Activity.query.filter(Activity.lead_id.isnot(None), Activity.notes.like("💶%"),
+                                              Activity.notes.like(f"%{BAD_LINK_MARK}%")))
+            .order_by(Activity.created_at).all())
+    first = {}
+    for a in acts:
+        first.setdefault(a.lead_id, a)
+    out = []
+    for lead_id, act in first.items():
+        lead = all_markets(Lead.query.filter(Lead.id == lead_id, Lead.market == code)).first()
+        if not lead or lead.stage in ("Wygrany", "Zrealizowany", "Stracony") or get_setting(BADLINK_FIXED_KEY.format(lead.id)):
+            continue
+        when = act.done_at or act.created_at or datetime.min
+        later = all_markets(Activity.query.filter(
+            Activity.lead_id == lead.id, Activity.id != act.id, Activity.done.is_(True),
+            db.or_(Activity.done_at > when, Activity.created_at > when),
+            db.or_(Activity.kind.in_(("call", "email", "meeting")), Activity.notes.like("📄%"), Activity.notes.like("✉️%")),
+            db.not_(Activity.notes.like(f"%{BAD_LINK_MARK}%")))).first()
+        replied = None
+        q = mail_query_for_addrs(lead.emails)
+        if q is not None:
+            replied = all_markets(q.filter(MailMessage.folder == "in", MailMessage.date > when)).first()
+        if later or replied:
+            continue  # po tym mailu był już kontakt (telefon, inny mail, odpowiedź klienta) — nie poprawiamy na ślepo
+        confirmed = False
+        if q is not None:
+            confirmed = bool(all_markets(q.filter(MailMessage.folder == "sent", MailMessage.body_text.like(f"%{BAD_LINK_MARK}%"))).first())
+        out.append((lead, {"when": to_local(when) if when != datetime.min else None,
+                           "line": (act.notes or "").split("\n")[0][:160], "confirmed": confirmed}) if with_evidence else lead)
+    return out
 
 
 def send_badlink_fix(lead, actor_id):
@@ -8251,11 +8276,10 @@ def send_badlink_fix(lead, actor_id):
 
 @app.route("/crm/poprawki")
 def crm_badlink_list():
-    leads = bad_link_leads()
     rows = []
-    for l in leads:
+    for l, ev in bad_link_leads(with_evidence=True):
         q = lt_quote(l, remote_budget=1)
-        rows.append({"lead": l, "price": q.get("price"), "missing": q.get("missing") or []})
+        rows.append({"lead": l, "price": q.get("price"), "missing": q.get("missing") or [], "ev": ev})
     return render_template("crm/poprawki.html", rows=rows, msg=request.args.get("msg", ""))
 
 
@@ -8266,6 +8290,14 @@ def crm_badlink_fix(lead_id):
     if err:
         db.session.rollback()
     return redirect(url_for("crm_badlink_list", msg=(f"⚠️ {lead.company}: {err}" if err else f"✅ {lead.company}: poprawiona oferta z PDF wysłana")))
+
+
+@app.route("/crm/poprawki/<int:lead_id>/pomin", methods=["POST"])
+def crm_badlink_skip(lead_id):
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    set_setting(BADLINK_FIXED_KEY.format(lead.id), "pominięty " + datetime.utcnow().isoformat(timespec="seconds"))
+    db.session.commit()
+    return redirect(url_for("crm_badlink_list", msg=f"{lead.company}: pominięty — nic nie wysłano"))
 
 
 @app.route("/crm/poprawki/wszystkim", methods=["POST"])

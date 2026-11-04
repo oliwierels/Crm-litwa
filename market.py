@@ -110,7 +110,7 @@ MARKETS = {
                         "łatwo pomylić), zakończ 'Pagarbiai,' + podpis."),
         "ai_greeting": "'Laba diena,' … 'Pagarbiai,'",
         # --- kalkulator ---
-        "price_base": 2100, "price_km": 0.75, "price_lodging": 70,
+        "price_base": 2100, "price_km": 0.75, "price_lodging": 70, "price_min": 1900,
         "departures": {"granica_lt": ("Granica PL–LT (Budzisko)", "od granicy", (54.38, 23.02))},
         "calc_from": "od granicy PL–LT (Budzisko)",
         "max_km_auto": 500,
@@ -214,7 +214,7 @@ MARKETS = {
         "ai_campaign": ("PISZESZ PO NIEMIECKU (klienci z Niemiec, forma 'Sie'). Zacznij od 'Guten Tag,', "
                         "zakończ 'Mit freundlichen Grüßen' + podpis."),
         "ai_greeting": "'Guten Tag,' … 'Mit freundlichen Grüßen' (forma 'Sie')",
-        "price_base": 2500, "price_km": 0.75, "price_lodging": 120,
+        "price_base": 2500, "price_km": 0.75, "price_lodging": 120, "price_min": 1900,
         "departures": {"granica_ffo": ("Granica PL–DE (Frankfurt/Oder)", "od granicy (Frankfurt/Oder)", (52.342, 14.553)),
                        "granica_gr": ("Granica PL–DE (Görlitz)", "od granicy (Görlitz)", (51.153, 14.990))},
         "calc_from": "od granicy PL–DE (Frankfurt/Oder albo Görlitz — taniej)",

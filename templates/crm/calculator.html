@@ -79,6 +79,7 @@
         w jedną stronę × 2, liczony {{ cfg.calc_from }}. Nocleg jest zawsze: {{ fmt_zl(cfg.lodging) }} za każdy dzień wynajmu.
         Dojazd z noclegami może być najwyżej {{ cfg.share }}% ceny — jeśli wychodzi więcej, cena rośnie tak, żeby się zmieścił.
         Kilka dni: 2 dni −{{ cfg.disc[2] }}%, 3 i więcej −{{ cfg.disc[3] }}% od całości (jeden dojazd, ekipa zostaje na miejscu).
+        {% if cfg.min %}Cena minimalna: {{ fmt_zl(cfg.min) }} netto.{% endif %}
         Km z mapy są szacunkowe (linia prosta × 1,25) — wpisz własne, jeśli znasz trasę.
       </div>
     </div>
@@ -107,6 +108,7 @@
           <div class="kc-row"><span>Dojazd: {{ q.km }} km × 2 × {{ ('%.2f'|format(cfg.rate)).replace('.', ',') }} €{% if q.round_trips > 1 %} × {{ q.round_trips }} (codzienny powrót){% endif %}</span><span>{{ fmt_zl(q.travel) }}</span></div>
           {% if q.lodging %}<div class="kc-row"><span>Nocleg{% if q.nights > 1 %}: {{ q.nights }} × {{ fmt_zl(cfg.lodging) }}{% endif %}</span><span>+{{ fmt_zl(q.lodging) }}</span></div>{% endif %}
           {% if q.raise_by %}<div class="kc-row"><span>Podniesienie (limit dojazdu {{ cfg.share }}%)</span><span>{{ fmt_zl(q.raise_by) }}</span></div>{% endif %}
+          {% if q.min_raise %}<div class="kc-row"><span>Cena minimalna {{ fmt_zl(q.min) }}</span><span>+{{ fmt_zl(q.min_raise) }}</span></div>{% endif %}
           {% if q.discount %}
           <div class="kc-row"><span>Suma przed rabatem</span><span>{{ fmt_zl(q.subtotal) }}</span></div>
           <div class="kc-row"><span>Rabat za {{ q.days }} dni (−{{ (q.discount_pct * 100)|round|int }}% od całości)</span><span style="color:var(--green)">−{{ fmt_zl(q.discount) }}</span></div>

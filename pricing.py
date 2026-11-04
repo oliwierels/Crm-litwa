@@ -7,7 +7,8 @@ Zasady (EUR, netto), osobno dla każdego rynku (market.py, zmiana w Railway):
 - nocleg jest zawsze — jeden za każdy dzień wynajmu (ekipa zostaje na miejscu, jeden dojazd),
 - dojazd (razem z noclegami) nie może być więcej niż 30% ceny — jeśli jest, cena idzie
   w górę tak, żeby stanowił dokładnie 30%,
-- kilka dni z rzędu: 2 dni −10%, 3 dni i więcej −15% od całości.
+- kilka dni z rzędu: 2 dni −10%, 3 dni i więcej −15% od całości,
+- cena nigdy nie jest niższa niż cena minimalna rynku (Litwa i Niemcy: 1 900 €, CALC_MIN_PRICE_LT / _DE).
 Stawki w Railway → Variables: CALC_BASE_8H_LT / _DE, CALC_KM_RATE_LT / _DE, CALC_LODGING_LT / _DE
 (dla Litwy działają też stare nazwy bez końcówki: CALC_BASE_8H, CALC_KM_RATE, CALC_LODGING).
 """
@@ -32,6 +33,7 @@ def rates(code="lt"):
         "base": int(_market.env_num(m["code"], "CALC_BASE_8H", m["price_base"])),
         "km": _market.env_num(m["code"], "CALC_KM_RATE", m["price_km"]),
         "lodging": int(_market.env_num(m["code"], "CALC_LODGING", m["price_lodging"])),
+        "min": int(_market.env_num(m["code"], "CALC_MIN_PRICE", m.get("price_min", 0))),
         "departures": _departures(m),
     }
 
@@ -127,6 +129,9 @@ def quote(hours, km_one_way, night=0.0, days=1, r=None):
     pct = day_discount(days)
     discount = round(subtotal * pct)
     total = subtotal - discount
+    minimum = int(r.get("min") or 0)
+    min_raise = minimum - total if total < minimum else 0  # cena minimalna rynku (Litwa: 1 900 €)
+    total += min_raise
     return {
         "hours": hours, "days": days, "km": km, "base": base, "hourly": hourly, "night": night,
         "night_extra": night_extra, "onsite": onsite, "round_trips": round_trips, "travel": travel,
@@ -134,6 +139,7 @@ def quote(hours, km_one_way, night=0.0, days=1, r=None):
         "discount_pct": pct, "discount": discount, "total": total,
         "travel_share": trip / subtotal if subtotal else 0.0,
         "rounded": round_price(total), "rate": r["km"], "lodging_cost": r["lodging"], "base8": r["base"],
+        "min": minimum, "min_raise": min_raise,
     }
 
 
@@ -184,6 +190,8 @@ def describe(q, departure_label="", place=""):
     if q.get("discount"):
         lines.append(f"Rabat za {days_label(days)} (−{q['discount_pct'] * 100:.0f}% od całości "
                      f"{fmt_zl(q['subtotal'])}): −{fmt_zl(q['discount'])}")
+    if q.get("min_raise"):
+        lines.append(f"Cena minimalna {fmt_zl(q['min'])} → +{fmt_zl(q['min_raise'])}")
     lines.append(f"Razem: {fmt_zl(q['total'])} netto (dojazd{' z noclegiem' if q.get('lodging') else ''} "
                  f"{q['travel_share'] * 100:.0f}% ceny przed rabatem), " if q.get("discount") else
                  f"Razem: {fmt_zl(q['total'])} netto (dojazd{' z noclegiem' if q.get('lodging') else ''} "
