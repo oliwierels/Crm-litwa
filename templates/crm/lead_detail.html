@@ -148,6 +148,7 @@
     <div class="panel">
       <div class="panel-header">{{ mkt.flag }} Klient — {{ mkt.name }} <span style="font-weight:400;color:var(--muted);font-size:11.5px">(maile {{ mkt.lang_in_pl }})</span></div>
       <div class="panel-body" style="font-size:12.5px">
+        {% if not mkt.auto_send %}<div style="margin-bottom:6px">✋ Bez automatu: do klienta z tego rynku nic nie wychodzi samo — wycena i maile czekają wygenerowane, wysyłasz Ty.</div>{% endif %}
         {% if lead.lt_mail_at %}
           <div>✅ Mail z prośbą o dane wysłany {{ to_local(lead.lt_mail_at).strftime('%d.%m %H:%M') }}</div>
         {% else %}
@@ -203,13 +204,26 @@
             </form>
             {% endif %}
             {% if lead.emails %}
-            <form method="post" action="{{ url_for('crm_lt_quote_mail', lead_id=lead.id) }}" style="display:inline"
-                  onsubmit="if (!confirm('Wysłać wycenę {{ lq.price }} € mailem do {{ lead.emails|join(', ') }}?')) return false; this.querySelector('button').disabled = true; return true;">
-              <button class="btn btn-secondary btn-sm">✉️ Wyślij wycenę mailem</button>
-            </form>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="const d = document.getElementById('lt-qmail'); d.open = true; d.scrollIntoView({behavior: 'smooth', block: 'center'})">✉️ Mail z wyceną</button>
             {% endif %}
             <a class="btn btn-ghost btn-sm" href="{{ lq.calc_url }}">🧮 Kalkulator</a>
           </div>
+          {% set qm = quote_mail_preview(lead, lq) if lead.emails else none %}
+          {% if qm %}
+          <details id="lt-qmail" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px" {{ 'open' if not mkt.auto_send and not qm.sent_at }}>
+            <summary style="cursor:pointer;font-weight:600">✉️ Wygenerowany mail z wyceną {{ mkt.lang_in_pl }}{% if qm.sent_at %} <span style="color:var(--green);font-weight:400">— wysłany {{ qm.sent_at[:10] }}</span>{% endif %}</summary>
+            {% if not mkt.auto_send %}<div style="color:var(--muted);margin:6px 0">{{ mkt.flag }} {{ mkt.name }}: nic nie wychodzi do klienta automatycznie — CRM przygotował mail, sprawdź go (możesz poprawić) i wyślij.</div>{% endif %}
+            <form method="post" action="{{ url_for('crm_lt_quote_mail', lead_id=lead.id) }}" style="margin-top:6px"
+                  onsubmit="if (!confirm('Wysłać ten mail z wyceną {{ lq.price }} € do {{ lead.emails|join(', ') }}?')) return false; this.querySelector('button').disabled = true; return true;">
+              <div style="color:var(--muted);font-size:11.5px;margin-bottom:4px">Od: {{ qm.from }} · Do: {{ lead.emails|join(', ') }}</div>
+              <input type="text" name="subject" value="{{ qm.subject }}" style="width:100%;margin-bottom:6px;font-size:12.5px">
+              <textarea name="body" rows="14" style="width:100%;font-size:12.5px;line-height:1.45">{{ qm.body }}</textarea>
+              <button class="btn btn-primary btn-sm" style="margin-top:6px">📨 {{ 'Wyślij ponownie' if qm.sent_at else 'Wyślij ten mail' }}</button>
+            </form>
+          </details>
+          {% elif lead.emails %}
+          <div id="lt-qmail" style="color:var(--yellow);margin-top:8px">Brak skrzynki {{ mkt.domain }} do wysłania wyceny (MAIL_PASSWORD w Railway).</div>
+          {% endif %}
           <div id="lt-msg-info" style="color:var(--muted);margin-top:6px">
             {% if not lq.whatsapp %}Brak poprawnego numeru telefonu — skopiuj wiadomość i wyślij ręcznie.{% else %}WhatsApp otworzy się z gotową wiadomością. Viber otworzy czat z klientem — wiadomość jest już skopiowana, wystarczy wkleić.{% endif %}
           </div>

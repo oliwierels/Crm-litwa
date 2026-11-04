@@ -7997,14 +7997,11 @@ LT_QUOTE_SENT_KEY = "lt_quote_sent:{}"
 
 
 def lt_auto_quote_enabled(code="lt"):
-    """Automatyczna wycena mailem: LT_AUTO_QUOTE (Litwa, domyślnie włączona), LT_AUTO_QUOTE_DE / AUTO_QUOTE_DE
-    (Niemcy — domyślnie wyłączona, dopóki cennik nie jest zatwierdzony)."""
-    if code == "lt":
-        raw = os.environ.get("LT_AUTO_QUOTE", "").strip()
-    else:
-        raw = (os.environ.get(f"LT_AUTO_QUOTE_{code.upper()}", "").strip()
-               or os.environ.get(f"AUTO_QUOTE_{code.upper()}", "").strip())
-    return (raw or markets.get(code)["auto_quote_default"]) != "0"
+    """Czy wycena wychodzi do klienta SAMA (automat dla nowych leadów i po wypełnieniu formularza).
+    Litwa: tak (LT_AUTO_QUOTE=0 wyłącza). Niemcy: nigdy — CRM tylko generuje mail, wysyła człowiek."""
+    if not markets.get(code)["auto_send"]:
+        return False
+    return (os.environ.get("LT_AUTO_QUOTE", "").strip() or markets.get(code)["auto_quote_default"]) != "0"
 
 
 def lt_quote_sender(lead):
@@ -8053,7 +8050,7 @@ def lt_quote_auto_ok(q, code="lt"):
         0 <= q.get("km", 99999) <= markets.get(code)["max_km_auto"]
 
 
-def send_lt_quote_mail(lead, actor_id=None, force=False):
+def send_lt_quote_mail(lead, actor_id=None, force=False, subject=None, body=None):
     """Automatyczna wycena mailem ze skrzynki rynku leada (33bots.lt / .de). Zwraca None (wysłano), LT_NO_QUOTE (brak danych —
     użyj formularza), LT_ALREADY_SENT albo opis błędu."""
     if not lead.emails:
@@ -8073,7 +8070,9 @@ def send_lt_quote_mail(lead, actor_id=None, force=False):
     if lead.lt_mail_at is None and not _claim_lt_mail(lead_id):
         return LT_ALREADY_SENT
     lead = db.session.get(Lead, lead_id)
-    subject, body = lt_quote_mail_draft(lead, q, sender)
+    draft_subject, draft_body = lt_quote_mail_draft(lead, q, sender)
+    subject = (subject or "").strip()[:300] or draft_subject  # człowiek mógł poprawić wygenerowany mail
+    body = (body or "").replace("\r\n", "\n").strip()[:10000] or draft_body
     to_addr = ", ".join(lead.emails)
     err = _smtp_send(to_addr, subject, body, sender["name"], sender=sender)
     if err:
@@ -8088,7 +8087,7 @@ def send_lt_quote_mail(lead, actor_id=None, force=False):
     set_setting(LT_QUOTE_SENT_KEY.format(lead_id), now.isoformat(timespec="seconds"))
     db.session.add(Activity(
         lead_id=lead_id, kind="email", done=True, done_at=now, assigned_to=actor,
-        notes=f"💶 Automatyczna wycena {q['price']} € wysłana do {to_addr} (od: {sender['email']})\n"
+        notes=f"💶 {'Wycena' if actor_id else 'Automatyczna wycena'} {q['price']} € wysłana do {to_addr} (od: {sender['email']})\n"
               f"Temat: {subject}\n🧮 {q['breakdown']}\n---\n{body}"))
     if lead.stage == "Nowy":
         record_stage_change(lead, "Oferta", actor)
@@ -8099,7 +8098,7 @@ def send_lt_quote_mail(lead, actor_id=None, force=False):
             if (a.notes or "").startswith(AUTO_CALL_PREFIX):
                 a.kind = "email"
                 a.due_date = datetime.combine(to_local(now).date() + timedelta(days=3), datetime.min.time())
-                a.notes = f"Follow-up mailem po automatycznej wycenie {q['price']} € z {to_local(now):%d.%m}."
+                a.notes = f"Follow-up mailem po wycenie {q['price']} € z {to_local(now):%d.%m}."
     for a in Activity.query.filter(Activity.lead_id == lead_id, Activity.done.isnot(True),
                                    Activity.notes.like("Przygotuj i wyślij ofertę%")).all():
         a.done, a.done_at = True, now  # oferta poszła automatycznie
@@ -8129,11 +8128,27 @@ def _send_quote_in_background(lead_id):
     threading.Thread(target=run, daemon=True).start()
 
 
+def quote_mail_preview(lead, q):
+    """Wygenerowany mail z wyceną do podglądu w leadzie (temat, treść, nadawca) albo None (brak ceny / skrzynki)."""
+    if not q or not q.get("price"):
+        return None
+    sender = lt_quote_sender(lead)
+    if not sender:
+        return None
+    subject, body = lt_quote_mail_draft(lead, q, sender)
+    return {"subject": subject, "body": body, "from": sender["email"],
+            "sent_at": get_setting(LT_QUOTE_SENT_KEY.format(lead.id)) or ""}
+
+
+app.jinja_env.globals.update(quote_mail_preview=quote_mail_preview)
+
+
 @app.route("/crm/leads/<int:lead_id>/lt-wycena-mail", methods=["POST"])
 def crm_lt_quote_mail(lead_id):
     """Ręcznie: wyślij wycenę mailem teraz (np. gdy automat czekał na dane albo po zmianie)."""
     lead = db.session.get(Lead, lead_id) or abort(404)
-    err = send_lt_quote_mail(lead, actor_id=get_current_user(request)["id"], force=True)
+    err = send_lt_quote_mail(lead, actor_id=get_current_user(request)["id"], force=True,
+                             subject=request.form.get("subject"), body=request.form.get("body"))
     if err == LT_NO_QUOTE:
         err = "brak godzin albo miejsca — uzupełnij je w leadzie"
     return redirect(url_for("crm_lead_detail", lead_id=lead.id, msg=("⚠️ " + err) if err else "✅ Wycena wysłana mailem"))
@@ -8159,8 +8174,8 @@ def lt_auto_mail():
         mc = lead_market(lead)
         if not lead.emails or not lt_mailbox_ready(mc):
             continue
-        if not lt_auto_quote_enabled(mc) and mc != "lt":
-            continue  # Niemcy bez zatwierdzonego cennika: bez automatu — ofertę wysyła człowiek
+        if not markets.get(mc)["auto_send"]:
+            continue  # Niemcy: żadnych automatycznych maili do klienta — wycena czeka wygenerowana w leadzie
         tries_key = f"lt_tries:{lead.id}"
         tries = int(get_setting(tries_key) or 0)
         if tries >= 3:

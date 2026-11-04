@@ -23,6 +23,7 @@ MARKETS = {
         "phone_codes": ("370",), "mobile_local": ("8", 9),  # krajowy zapis komórki: 8 6xx xxxxx
         "hours_unit": "val.", "date_style": "iso",
         "auto_quote_default": "1",
+        "auto_send": True,  # Litwa: nowy lead od razu dostaje mail (wycena albo prośba o dane)
         "whatsapp_lang": "lt",
         # --- formularz dla klienta (/f/…) ---
         "form": {
@@ -97,7 +98,8 @@ MARKETS = {
         "own_email": "o.latek@33bots.de", "inquiry_box": "kontakt@33bots.de",
         "phone_codes": ("49", "43", "41"), "mobile_local": ("0", 0),  # krajowy zapis: 0151 …
         "hours_unit": "Std.", "date_style": "dots",
-        "auto_quote_default": "0",  # automatyczna wycena DE dopiero po zatwierdzeniu cennika (LT_AUTO_QUOTE_DE=1)
+        "auto_quote_default": "0",
+        "auto_send": False,  # Niemcy: NIC nie wychodzi do klienta automatycznie — CRM generuje, człowiek wysyła
         "whatsapp_lang": "de",
         "form": {
             "title": "33Bots – Angaben zur Veranstaltung",

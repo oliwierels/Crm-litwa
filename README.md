@@ -58,9 +58,13 @@ wystarczy dopisać parę do `lt_strings.py`.
 | `MAILBOXES_DE` | (opcjonalnie) inna lista skrzynek DE po przecinku — domyślnie `o.latek@33bots.de,kontakt@33bots.de` |
 | `INBOX_IMAP_USER_DE`, `INBOX_IMAP_PASS_DE` | (opcjonalnie) inna skrzynka zapytań DE — domyślnie kontakt@33bots.de z `MAIL_PASSWORD` |
 | `CALC_BASE_8H_DE`, `CALC_KM_RATE_DE`, `CALC_LODGING_DE` | cennik DE (domyślnie 2500 € / 0,75 € / 120 €) — km od granicy Frankfurt/Oder albo Görlitz (bliższa) |
-| `LT_AUTO_QUOTE_DE` | `1` włącza automatyczną wycenę mailem dla Niemiec (domyślnie **wyłączona**, dopóki cennik nie jest zatwierdzony) |
 | `WHATSAPP_TEMPLATE_DE` (+ `WHATSAPP_TEMPLATE_LANG_DE`) | zatwierdzony szablon WhatsApp po niemiecku (4 pola: data, godziny, miejsce, cena) |
 | `NOTIFY_EMAILS_DE` | (opcjonalnie) gdzie wysłać powiadomienie o wypełnionym formularzu DE — domyślnie o.latek@33bots.de |
+
+**Niemcy: nic nie wychodzi do klienta automatycznie** (w kodzie, niezależnie od zmiennych). Nowy lead DE dostaje
+w CRM gotową cenę, wygenerowany mail z wyceną po niemiecku (do poprawienia w leadzie i wysłania jednym kliknięciem)
+oraz wiadomość na WhatsApp/Viber; oferta z Claude też czeka na sprawdzenie w „Oferty”. Automat (mail od razu
+po wpadnięciu leada i po wypełnieniu formularza) działa tylko dla Litwy.
 
 Nadawca maila do klienta: skrzynka opiekuna leada w domenie rynku (o.latek@33bots.de), a gdy osoba jej nie ma —
 kontakt@ rynku podpisana jej imieniem. Umowa DE: osobny wzór (Customer Journey → ustawienia, przy włączonym
@@ -109,7 +113,7 @@ Ar rezervuojame šią datą?
 Przy leadzie: „🚀 Wyślij przez WhatsApp” — pierwsza wiadomość idzie jako szablon; gdy klient odpisze, odpowiedź
 trafia do komentarzy leada (+ zadanie „Odpowiedz…”), a przez 24 h CRM wysyła już zwykły tekst z okienka.
 
-## Automatyczna wycena mailem (nowe leady — Litwa; Niemcy po włączeniu `LT_AUTO_QUOTE_DE=1`)
+## Automatyczna wycena mailem (nowe leady — tylko Litwa)
 
 Nowy lead z godzinami i miejscem w zapytaniu (np. „iki 4 valandų”, „Miejsce wydarzenia – Šiaulių arena”) od razu
 dostaje mail z ceną (kalkulator: od granicy, nocleg, zaokrąglenie do setek od 25 €) — ze skrzynki 33bots.lt
