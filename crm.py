@@ -135,6 +135,8 @@ class Lead(db.Model):
     contact_email = db.Column(db.String(200))
     contact_email2 = db.Column(db.String(200))  # drugi adres klienta (np. asystentka, księgowość)
     pl_id = db.Column(db.Integer, nullable=True)  # id leada w polskim CRM, jeśli został stamtąd przeniesiony
+    pl_copy_id = db.Column(db.Integer, nullable=True)  # kopia wygranego leada w polskim CRM (logistyka)
+    pl_copy_hash = db.Column(db.String(40), nullable=True)  # odcisk danych wysłanych ostatnio do tej kopii
     market = db.Column(db.String(2), nullable=False, default=_default_market, index=True)  # lt | de
     contact_phone = db.Column(db.String(50))
     stage = db.Column(db.String(50), nullable=False, default="Nowy")
@@ -561,6 +563,10 @@ def ensure_schema():
                 conn.exec_driver_sql(f"ALTER TABLE leads ADD COLUMN {col} {typ}")
         if "pl_id" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN pl_id INTEGER")
+        if "pl_copy_id" not in cols:
+            conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN pl_copy_id INTEGER")
+        if "pl_copy_hash" not in cols:
+            conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN pl_copy_hash VARCHAR(40)")
         if "lt_mail_at" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN lt_mail_at TIMESTAMP NULL")
         if "form_token" not in cols:
@@ -8811,26 +8817,39 @@ app.jinja_env.globals.update(wa_ready=wa_ready, wa_window_open=wa_window_open)
 # Potem CRM sam co 10 minut przenosi nowe litewskie leady, które wpadną do polskiego CRM.
 import pl_move  # noqa: E402
 
-PL_MOVE_AUTO_KEY = "pl_move_auto"
+PL_MOVE_AUTO_KEY = "pl_move_auto"  # litewskie: włączane pierwszym kliknięciem „Przenieś”
+PL_MOVE_AUTO_DE_KEY = "pl_move_auto_de"  # niemieckie: przenoszą się same od razu ("0" = wyłączone)
 PL_MOVE_LAST_KEY = "pl_move_last"
+PL_WON_LAST_KEY = "pl_won_last"
 _pl_move_lock = threading.Lock()
-_pl_count_cache = {"at": 0.0, "n": None, "err": ""}
+_pl_won_lock = threading.Lock()
+_pl_count_cache = {"at": 0.0, "n": {}, "err": ""}
 
 
 def pl_move_configured():
     return bool(os.environ.get("PL_DATABASE_URL", "").strip())
 
 
-def pl_pending_count(max_age=300):
-    """Ile litewskich leadów czeka w polskim CRM (z pamięci podręcznej na 5 minut)."""
+def pl_move_auto(code):
+    if code == "de":
+        return get_setting(PL_MOVE_AUTO_DE_KEY) != "0"
+    return get_setting(PL_MOVE_AUTO_KEY) == "1"
+
+
+def pl_pending_count(max_age=300, code=None):
+    """Ile leadów rynku `code` (lt / de) czeka w polskim CRM (z pamięci podręcznej na 5 minut)."""
     if not pl_move_configured():
         return None
+    code = code or current_market()
     if time.time() - _pl_count_cache["at"] > max_age:
         try:
-            _pl_count_cache.update(n=len(pl_move.find_lithuanian(pl_move.engine())), err="", at=time.time())
+            eng = pl_move.engine()
+            meta = pl_move._meta(eng)
+            _pl_count_cache.update(n={c: len(pl_move.find_market(eng, c, meta)) for c in markets.MARKETS},
+                                   err="", at=time.time())
         except Exception as e:  # zła baza / brak sieci — strona działa dalej
-            _pl_count_cache.update(n=None, err=f"{type(e).__name__}: {e}"[:300], at=time.time())
-    return _pl_count_cache["n"]
+            _pl_count_cache.update(n={}, err=f"{type(e).__name__}: {e}"[:300], at=time.time())
+    return _pl_count_cache["n"].get(code)
 
 
 PL_MOVE_STATE_KEY = "pl_move_state"  # postęp w bazie: widać go po restarcie i z każdego procesu
@@ -8861,37 +8880,97 @@ def _save_move_state(state, **extra):
         db.session.rollback()
 
 
-def run_pl_move(actor_id=None):
-    """Przenosi teraz wszystkie litewskie leady z PL. Zwraca (przeniesione, błędy)."""
+def _move_progress(state, st, code, moved_before, errors_before):
+    """Postęp całego przenoszenia (kilka rynków po kolei) z postępu jednego rynku."""
+    out = dict(state)
+    out.update(st)
+    out.update(done=moved_before + (st.get("done") or 0), errors=errors_before + list(st.get("errors") or []),
+               total=(state.get("total_before") or 0) + (st.get("total") or 0),
+               current=f"{code.upper()} {st.get('current') or ''}".strip() if st.get("current") else "")
+    return out
+
+
+def run_pl_move(actor_id=None, codes=None):
+    """Przenosi teraz leady z PL: rynki `codes` (domyślnie te z włączonym automatem). Zwraca (przeniesione, błędy)."""
+    codes = [c for c in (codes or [c for c in markets.MARKETS if pl_move_auto(c)]) if c in markets.MARKETS]
+    if not codes:
+        return 0, []
     if not _pl_move_lock.acquire(blocking=False):
         return 0, ["przenoszenie już trwa"]
-    state = {"running": True, "started_at": datetime.utcnow().isoformat(timespec="seconds"), "finished_at": None}
+    state = {"running": True, "started_at": datetime.utcnow().isoformat(timespec="seconds"), "finished_at": None,
+             "markets": codes}
+    moved_all, errors_all = 0, []
     try:
         _save_move_state(state)
-        moved, errors = pl_move.move_all(pl_move.engine(), db, {
-            "Lead": Lead, "LeadEventDate": LeadEventDate, "Activity": Activity, "ActivityComment": ActivityComment,
-            "StageHistory": StageHistory, "Crew": Crew, "Journey": Journey, "JourneyMail": JourneyMail,
-            "JourneyDocument": JourneyDocument, "ContractRequest": ContractRequest, "SentOffer": SentOffer,
-            "InboxMessage": InboxMessage,
-        }, actor_id or USERS[0]["id"], progress=state, on_step=lambda s: _save_move_state(s, running=True))
-        set_setting(PL_MOVE_LAST_KEY, f"{datetime.utcnow().isoformat(timespec='seconds')}|{moved}|{'; '.join(errors)[:500]}")
+        for code in codes:
+            sub = {}
+            moved, errors = pl_move.move_all(pl_move.engine(), db, {
+                "Lead": Lead, "LeadEventDate": LeadEventDate, "Activity": Activity, "ActivityComment": ActivityComment,
+                "StageHistory": StageHistory, "Crew": Crew, "Journey": Journey, "JourneyMail": JourneyMail,
+                "JourneyDocument": JourneyDocument, "ContractRequest": ContractRequest, "SentOffer": SentOffer,
+                "InboxMessage": InboxMessage,
+            }, actor_id or USERS[0]["id"], progress=sub, code=code,
+                on_step=lambda st, code=code: _save_move_state(_move_progress(state, st, code, moved_all, errors_all),
+                                                               running=True))
+            moved_all += moved
+            errors_all += [f"{code.upper()} {e}" for e in errors]
+            state.update(done=moved_all, errors=errors_all, total_before=(state.get("total_before") or 0) + (sub.get("total") or 0),
+                         total=(state.get("total_before") or 0) + (sub.get("total") or 0))
+        set_setting(PL_MOVE_LAST_KEY, f"{datetime.utcnow().isoformat(timespec='seconds')}|{moved_all}|{'; '.join(errors_all)[:500]}")
         db.session.commit()
         _pl_count_cache["at"] = 0.0
-        return moved, errors
+        return moved_all, errors_all
     except Exception as e:
         db.session.rollback()
-        state.setdefault("errors", []).append(f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}")
+        errors_all.append(f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}")
+        state["errors"] = errors_all
         app.logger.exception("pl_move")
-        return state.get("done", 0), state["errors"]
+        return moved_all, errors_all
     finally:
         _save_move_state(state, running=False, current="", finished_at=datetime.utcnow().isoformat(timespec="seconds"))
         _pl_move_lock.release()
 
 
-def _pl_move_background(actor_id):
+def sync_won_to_pl():
+    """Wygrane leady LT i DE → kopia w polskim CRM (tylko logistyka: dni, miejsca, robot, kontakt na miejscu).
+    Odświeża kopię, gdy coś się zmieni (data, miejsce, etap); cofnięty z wygranej trafia tam jako Stracony.
+    Do PL wracają TYLKO wygrane. Zwraca (wysłane / odświeżone, błędy)."""
+    if not pl_move_configured() or not _pl_won_lock.acquire(blocking=False):
+        return 0, []
+    done, errors = 0, []
+    try:
+        eng = pl_move.engine()
+        meta = pl_move._meta(eng)
+        leads = all_markets(Lead.query.filter(db.or_(Lead.stage.in_(pl_move.WON), Lead.pl_copy_id.isnot(None)))
+                            .order_by(Lead.id)).all()
+        for lead in leads:
+            code = lead.market if lead.market in pl_move.COPY_SOURCES else "lt"
+            try:
+                if lead.pl_copy_id and lead.pl_copy_hash == pl_move.copy_payload(lead, code)[2]:
+                    continue  # nic się nie zmieniło od ostatniej wysyłki
+                pl_id, mark = pl_move.push_copy(eng, meta, lead, code)
+                lead.pl_copy_id, lead.pl_copy_hash = pl_id, mark
+                db.session.commit()
+                done += 1
+            except Exception as e:
+                db.session.rollback()
+                errors.append(f"#{lead.id} {lead.company}: {type(e).__name__}: {str(e).splitlines()[0][:160] if str(e) else ''}")
+        set_setting(PL_WON_LAST_KEY, f"{datetime.utcnow().isoformat(timespec='seconds')}|{done}|{'; '.join(errors)[:500]}")
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        errors.append(f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}")
+        app.logger.exception("pl_won")
+    finally:
+        _pl_won_lock.release()
+    return done, errors
+
+
+def _pl_move_background(actor_id, codes=None):
     with app.app_context():
         try:
-            run_pl_move(actor_id)
+            run_pl_move(actor_id, codes)
+            sync_won_to_pl()
         finally:
             db.session.remove()
 
@@ -8899,21 +8978,29 @@ def _pl_move_background(actor_id):
 @app.route("/crm/przenies-z-pl", methods=["GET", "POST"])
 def crm_pl_move():
     if request.method == "POST":
-        # od teraz nowe litewskie leady przenoszą się same; samo przenoszenie idzie w tle (może trwać kilka minut)
-        set_setting(PL_MOVE_AUTO_KEY, "1")
+        code = request.form.get("market") if request.form.get("market") in markets.MARKETS else current_market()
+        # od teraz nowe leady tego rynku przenoszą się same; samo przenoszenie idzie w tle (może trwać kilka minut)
+        set_setting(PL_MOVE_AUTO_DE_KEY if code == "de" else PL_MOVE_AUTO_KEY, "1")
         db.session.commit()
         if not pl_move_state().get("running"):
-            threading.Thread(target=_pl_move_background, args=(get_current_user(request)["id"],), daemon=True).start()
+            threading.Thread(target=_pl_move_background, args=(get_current_user(request)["id"], [code]), daemon=True).start()
             time.sleep(1.5)
         return redirect(url_for("crm_pl_move"))
     st = pl_move_state()
     running = st.get("running")
     last = (get_setting(PL_MOVE_LAST_KEY) or "").split("|", 2)
-    return render_template("crm/pl_move.html", configured=pl_move_configured(),
-                           count=None if running else pl_pending_count(max_age=0),
+    won_last = (get_setting(PL_WON_LAST_KEY) or "").split("|", 2)
+    counts = {}
+    if not running:
+        pl_pending_count(max_age=0)
+        counts = dict(_pl_count_cache["n"])
+    return render_template("crm/pl_move.html", configured=pl_move_configured(), counts=counts,
                            error="" if running else _pl_count_cache["err"], running=running, progress=st,
-                           auto=get_setting(PL_MOVE_AUTO_KEY) == "1", last=last if len(last) == 3 else None,
-                           moved_total=Lead.query.filter(Lead.pl_id.isnot(None)).count())
+                           auto={c: pl_move_auto(c) for c in markets.MARKETS}, last=last if len(last) == 3 else None,
+                           won_last=won_last if len(won_last) == 3 else None,
+                           won_total=all_markets(Lead.query.filter(Lead.pl_copy_id.isnot(None))).count(),
+                           moved_total={c: all_markets(Lead.query.filter(Lead.pl_id.isnot(None), Lead.market == c)).count()
+                                        for c in markets.MARKETS})
 
 
 def _pl_move_scheduler():
@@ -8921,15 +9008,20 @@ def _pl_move_scheduler():
     while True:
         try:
             with app.app_context():
-                if get_setting(PL_MOVE_AUTO_KEY) == "1":
-                    run_pl_move()
+                run_pl_move()  # rynki z włączonym automatem (niemieckie — zawsze)
                 db.session.remove()
         except Exception:
             app.logger.exception("pl_move")
+        try:
+            with app.app_context():
+                sync_won_to_pl()
+                db.session.remove()
+        except Exception:
+            app.logger.exception("pl_won")
         time.sleep(600)
 
 
-if pl_move_configured():
+if pl_move_configured() and os.environ.get("PL_MOVE", "1") != "0":
     threading.Thread(target=_pl_move_scheduler, daemon=True).start()
 
 app.jinja_env.globals.update(pl_move_configured=pl_move_configured, pl_pending_count=pl_pending_count)

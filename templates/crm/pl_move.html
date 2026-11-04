@@ -7,7 +7,7 @@
     {% if running %}
       <meta http-equiv="refresh" content="4">
       <div style="background:#6366f11a;border:1px solid #6366f155;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:15px">
-        ⏳ Przenoszę leady w tle… <b>{{ progress.done or 0 }}</b>{% if progress.total %} z <b>{{ progress.total }}</b>{% endif %}.
+        ⏳ Przenoszę leady w tle{% if progress.markets %} ({{ progress.markets|join(', ')|upper }}){% endif %}… <b>{{ progress.done or 0 }}</b>{% if progress.total %} z <b>{{ progress.total }}</b>{% endif %}.
         {% if progress.current %}<div style="font-size:12px;color:var(--muted)">Teraz: {{ progress.current }}</div>{% endif %}
         <div style="font-size:12px;color:var(--muted)">Strona odświeża się sama — możesz też ją zamknąć, przenoszenie i tak się dokończy.</div>
       </div>
@@ -29,26 +29,38 @@
       </div>
     {% endif %}
     {% if not configured %}
-      <p>Żeby przenieść litewskie leady z polskiego CRM, dodaj w Railway (serwis LT CRM → Variables) zmienną
+      <p>Żeby przenieść litewskie i niemieckie leady z polskiego CRM, dodaj w Railway (serwis CRM LT/DE → Variables) zmienną
         <code>PL_DATABASE_URL</code> z adresem bazy polskiego CRM (Add Reference → Postgres z projektu polskiego CRM
         albo skopiuj DATABASE_URL z polskiego CRM).</p>
     {% else %}
       {% if error %}<p style="color:var(--red)">⚠️ Nie udało się połączyć z bazą polskiego CRM: {{ error }}</p>{% endif %}
-      {% if not running %}<p style="font-size:15px">W polskim CRM czeka <b>{{ count if count is not none else '?' }}</b> litewskich leadów
-        (telefon +370, e-mail .lt, kraj LT albo miasto na Litwie).</p>{% endif %}
+      {% for code, label, rule in [('lt', '🇱🇹 litewskich', 'telefon +370, e-mail .lt, kraj LT albo miasto na Litwie'),
+                                   ('de', '🇩🇪 niemieckich', 'kraj DE/AT/CH, e-mail .de/.at/.ch albo telefon +49/+43/+41 — tak jak zakładka „Niemcy” w polskim CRM')] %}
+      <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+        {% if not running %}<div style="font-size:15px">W polskim CRM czeka <b>{{ counts.get(code) if counts.get(code) is not none else '?' }}</b> {{ label }} leadów</div>{% endif %}
+        <div class="muted" style="font-size:12px">{{ rule }}</div>
+        <div class="muted" style="font-size:12px">{% if auto[code] %}✅ Nowe przenoszą się same co 10 minut.{% else %}Po pierwszym przeniesieniu nowe będą się przenosić same co 10 minut.{% endif %}
+          Przeniesionych łącznie: {{ moved_total[code] }}</div>
+        {% if not running %}
+        <form method="post" style="margin-top:6px" onsubmit="if (!confirm('Przenieść {{ label }} leady z polskiego CRM? Znikną z polskiego CRM (wygrane zostaną tam jako kopia do logistyki).')) return false; this.querySelector('button').disabled = true; return true;">
+          <input type="hidden" name="market" value="{{ code }}">
+          <button class="btn btn-primary btn-sm" {{ 'disabled' if not counts.get(code) }}>📦 Przenieś teraz</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
       <p class="muted">Przeniesienie kopiuje leada razem z zadaniami, komentarzami, historią etapów, ofertami,
-        Customer Journey i dokumentami. Dopiero gdy zapisze się tutaj, znika z polskiego CRM (statystyki PL go już nie liczą).
+        Customer Journey i dokumentami. Dopiero gdy zapisze się tutaj, znika z polskiego CRM.
         Operatorów i roboty w logistyce trzeba przypisać tutaj od nowa.</p>
-      {% if not running %}
-      <form method="post" onsubmit="if (!confirm('Przenieść litewskie leady z polskiego CRM? Znikną z polskiego CRM.')) return false; this.querySelector('button').disabled = true; return true;">
-        <button class="btn btn-primary" {{ 'disabled' if not count }}>📦 Przenieś teraz</button>
-      </form>
-      {% endif %}
-      <p class="muted" style="margin-top:12px">
-        {% if auto %}✅ Nowe litewskie leady, które wpadną do polskiego CRM, przenoszą się same co 10 minut.
-        {% else %}Po pierwszym przeniesieniu nowe litewskie leady z polskiego CRM będą się przenosić same co 10 minut.{% endif %}
-        <br>Przeniesionych łącznie: {{ moved_total }}{% if last %} · ostatnio {{ last[0].replace('T', ' ') }} UTC ({{ last[1] }}){% if last[2] %} · problemy: {{ last[2] }}{% endif %}{% endif %}
-      </p>
+      <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
+        <b>🚚 Wygrane wracają do polskiego CRM (logistyka)</b>
+        <p class="muted" style="margin:4px 0">Do polskiego CRM wracają <b>tylko wygrane</b> leady LT i DE — jako kopia z flagą 🇱🇹/🇩🇪 przed nazwą
+          (dni, miejsca, robot, kontakt), żeby logistyka zaplanowała ekipę i robota. Klienta dalej prowadzi ten CRM: maile, umowa i faktura idą stąd,
+          polski CRM nic do niego nie wysyła i nie liczy go w swoich statystykach. Zmiany (data, miejsce, etap) przechodzą same co 10 minut;
+          lead cofnięty z wygranej trafia tam jako Stracony.</p>
+        <div class="muted" style="font-size:12px">Kopii w polskim CRM: {{ won_total }}{% if won_last %} · ostatnio {{ won_last[0].replace('T', ' ') }} UTC (wysłano / odświeżono {{ won_last[1] }}){% if won_last[2] %} · problemy: {{ won_last[2] }}{% endif %}{% endif %}</div>
+      </div>
+      <p class="muted" style="margin-top:12px">{% if last %}Ostatnie przenoszenie {{ last[0].replace('T', ' ') }} UTC ({{ last[1] }}){% if last[2] %} · problemy: {{ last[2] }}{% endif %}{% endif %}</p>
     {% endif %}
   </div>
 </div>
