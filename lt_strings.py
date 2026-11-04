@@ -974,4 +974,6 @@ LT = {
     "⚠️ W leadzie nie ma godzin — przyjęto": "⚠️ Užklausoje nėra valandų – priimta",
     "Zmień czas wyżej, jeśli wiesz więcej.": "Pakeiskite laiką aukščiau, jei žinote daugiau.",
     "Zmień w kalkulatorze, jeśli wiesz więcej.": "Pakeiskite skaičiuoklėje, jei žinote daugiau.",
+    "✉️ Wyślij wycenę mailem": "✉️ Siųsti kainą el. paštu",
+    "✅ Wycena wysłana mailem": "✅ Kaina išsiųsta el. paštu",
 }

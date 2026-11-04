@@ -84,3 +84,17 @@ Ar rezervuojame šią datą?
 
 Przy leadzie: „🚀 Wyślij przez WhatsApp” — pierwsza wiadomość idzie jako szablon; gdy klient odpisze, odpowiedź
 trafia do komentarzy leada (+ zadanie „Odpowiedz…”), a przez 24 h CRM wysyła już zwykły tekst z okienka.
+
+## Automatyczna wycena mailem (nowe litewskie leady)
+
+Nowy lead z godzinami i miejscem w zapytaniu (np. „iki 4 valandų”, „Miejsce wydarzenia – Šiaulių arena”) od razu
+dostaje mail z ceną (kalkulator: od granicy, nocleg, zaokrąglenie do setek od 25 €) — ze skrzynki 33bots.lt
+opiekuna leada. Lead przechodzi na „Oferta”, wartość = cena, a drugim krokiem jest follow-up mailem za 3 dni.
+Brak godzin albo miejsca → jak dotąd mail z prośbą o dane (formularz); po wypełnieniu formularza wycena wychodzi sama.
+
+| Zmienna | Znaczenie |
+|---|---|
+| `SMTP_USER_OLIWIER` + `SMTP_PASS_OLIWIER` | `o.latek@33bots.lt` — wycena od Oliwiera |
+| `SMTP_USER_BARTEK` + `SMTP_PASS_BARTEK` | `b.wysocki@33bots.lt` — wycena od Bartosza (tylko adres .lt jest brany) |
+| `LT_QUOTE_SENDER` | `oliwier` albo `bartek` — zawsze ta osoba (domyślnie opiekun leada) |
+| `LT_AUTO_QUOTE` | `0` wyłącza automatyczną wycenę (zostaje mail z formularzem) |

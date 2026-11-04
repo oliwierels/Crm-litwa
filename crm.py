@@ -7691,10 +7691,163 @@ def send_lt_mail(lead, actor_id=None, resend=False):
     return None
 
 
+LT_NO_QUOTE = "brak danych do wyceny"
+LT_QUOTE_SENT_KEY = "lt_quote_sent:{}"
+
+
+def lt_auto_quote_enabled():
+    return os.environ.get("LT_AUTO_QUOTE", "1") != "0"
+
+
+def lt_quote_sender(lead):
+    """Nadawca wyceny: skrzynka 33bots.lt opiekuna leada (Oliwier / Bartosz), LT_QUOTE_SENDER wymusza osobę,
+    a bez skrzynki .lt — o.latek@33bots.lt (SMTP_PASS_LT)."""
+    forced = os.environ.get("LT_QUOTE_SENDER", "").strip().lower()
+    order = []
+    if forced:
+        order += [u for u in USERS if u["name"].lower() == forced]
+    order += [u for u in USERS if u["id"] == lead.assigned_to]
+    order += [u for u in USERS if u["name"].lower() in ("oliwier", "bartek")]
+    for u in order:
+        login, _pwd = _mailbox_for(u)
+        if login and login.lower().endswith(".lt"):
+            return dict(u, email=login)
+    return lt_sender() if lt_mailbox_ready() else None
+
+
+def lt_quote_mail_draft(lead, q, sender):
+    when = q.get("when") or ""
+    link = lead_form_url(lead) if public_base_url() else ""
+    price_txt = f"{q['price']:,}".replace(",", " ")
+    subject = "33Bots – humanoidinio roboto nuomos pasiūlymas" + (f" {when}" if when else "")
+    lines = [
+        "Laba diena,",
+        "",
+        "dėkojame už užklausą dėl humanoidinio roboto Unitree G1 nuomos!",
+        "",
+        f"Jūsų renginiui{(' ' + when) if when else ''} ({q['time']}, {q['place']}) roboto nuomos kaina – "
+        f"{price_txt} € be PVM.",
+        "",
+        "Į kainą įskaičiuota:",
+        "– atvykimas ir roboto paruošimas vietoje,",
+        "– asmeninis operatorius visą renginio laiką,",
+        "– roboto asmenybės ir žinių pritaikymas jūsų renginiui,",
+        "– techninė pagalba vietoje.",
+        "",
+        "Robotas pasitiks svečius, bendraus remdamasis paruošta žinių baze, šoks ir pozuos nuotraukoms.",
+        "",
+    ]
+    if link:
+        lines += ["Jei renginio detalės kitokios (data, laikas, vieta), patikslinkite jas čia – kainą atnaujinsime:",
+                  link, ""]
+    lines += [
+        "Ar rezervuojame šią datą? Užtenka atsakyti į šį laišką.",
+        "Pasiūlymas galioja 14 dienų.",
+        "",
+        "Pagarbiai,",
+        "\n".join(x for x in (sender.get("full_name") or sender.get("name"), "33Bots", sender.get("email"),
+                              sender.get("phone")) if x),
+    ]
+    return subject, "\n".join(lines)
+
+
+def lt_quote_auto_ok(q):
+    """Czy wycenę można wysłać bez człowieka: znane godziny (nie założone), miejsce na Litwie, ≤ 8 h."""
+    return bool(q.get("price")) and not q.get("assumed") and not q.get("over8") and 0 <= q.get("km", 9999) <= 500
+
+
+def send_lt_quote_mail(lead, actor_id=None, force=False):
+    """Automatyczna wycena mailem ze skrzynki 33bots.lt. Zwraca None (wysłano), LT_NO_QUOTE (brak danych —
+    użyj formularza), LT_ALREADY_SENT albo opis błędu."""
+    if not lead.emails:
+        return "lead nie ma adresu e-mail"
+    if get_setting(LT_QUOTE_SENT_KEY.format(lead.id)) and not force:
+        return LT_ALREADY_SENT
+    with app.test_request_context(base_url=public_base_url() or "http://localhost"):
+        q = lt_quote(lead, remote_budget=2)
+    if not lt_quote_auto_ok(q) and not force:
+        return LT_NO_QUOTE
+    if not q.get("price"):
+        return LT_NO_QUOTE
+    sender = lt_quote_sender(lead)
+    if not sender:
+        return "brak skrzynki 33bots.lt (SMTP_PASS_OLIWIER / SMTP_PASS_BARTEK z adresem .lt albo SMTP_PASS_LT)"
+    lead_id = lead.id
+    if lead.lt_mail_at is None and not _claim_lt_mail(lead_id):
+        return LT_ALREADY_SENT
+    lead = db.session.get(Lead, lead_id)
+    subject, body = lt_quote_mail_draft(lead, q, sender)
+    to_addr = ", ".join(lead.emails)
+    err = _smtp_send(to_addr, subject, body, sender["name"], sender=sender)
+    if err:
+        db.session.execute(db.update(Lead).where(Lead.id == lead_id, Lead.lt_mail_at.isnot(None),
+                                                 Lead.stage == "Nowy").values(lt_mail_at=None))
+        db.session.commit()
+        return err
+    now = datetime.utcnow()
+    actor = actor_id or lead.assigned_to or sender["id"]
+    lead.lt_mail_at = lead.lt_mail_at or now
+    lead.value_pln, lead.currency = float(q["price"]), "EUR"
+    set_setting(LT_QUOTE_SENT_KEY.format(lead_id), now.isoformat(timespec="seconds"))
+    db.session.add(Activity(
+        lead_id=lead_id, kind="email", done=True, done_at=now, assigned_to=actor,
+        notes=f"💶 Automatyczna wycena {q['price']} € wysłana do {to_addr} (od: {sender['email']})\n"
+              f"Temat: {subject}\n🧮 {q['breakdown']}\n---\n{body}"))
+    if lead.stage == "Nowy":
+        record_stage_change(lead, "Oferta", actor)
+        db.session.flush()
+        # do Litwinów nie dzwonimy — drugi krok to follow-up mailem
+        for a in Activity.query.filter(Activity.lead_id == lead_id, Activity.kind == "call",
+                                       Activity.done.isnot(True)).all():
+            if (a.notes or "").startswith(AUTO_CALL_PREFIX):
+                a.kind = "email"
+                a.due_date = datetime.combine(to_local(now).date() + timedelta(days=3), datetime.min.time())
+                a.notes = f"Follow-up mailem po automatycznej wycenie {q['price']} € z {to_local(now):%d.%m}."
+    for a in Activity.query.filter(Activity.lead_id == lead_id, Activity.done.isnot(True),
+                                   Activity.notes.like("Przygotuj i wyślij ofertę%")).all():
+        a.done, a.done_at = True, now  # oferta poszła automatycznie
+    db.session.commit()
+    return None
+
+
+def _send_quote_in_background(lead_id):
+    def run():
+        time.sleep(2)
+        with app.app_context():
+            try:
+                apply_user_profiles()
+                lead = db.session.get(Lead, lead_id)
+                if lead and lead.stage in ("Nowy", "Oferta") and not get_setting(LT_QUOTE_SENT_KEY.format(lead_id)):
+                    err = send_lt_quote_mail(lead)
+                    if err and err not in (LT_NO_QUOTE, LT_ALREADY_SENT):
+                        db.session.add(Activity(lead_id=lead_id, kind="note", done=True, done_at=datetime.utcnow(),
+                                                assigned_to=lead.assigned_to or USERS[0]["id"],
+                                                notes=f"⚠️ Automatyczna wycena po formularzu nie wyszła: {err}"))
+                        db.session.commit()
+            except Exception:
+                db.session.rollback()
+                app.logger.exception("lt_quote_mail")
+            finally:
+                db.session.remove()
+    threading.Thread(target=run, daemon=True).start()
+
+
+@app.route("/crm/leads/<int:lead_id>/lt-wycena-mail", methods=["POST"])
+def crm_lt_quote_mail(lead_id):
+    """Ręcznie: wyślij wycenę mailem teraz (np. gdy automat czekał na dane albo po zmianie)."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    err = send_lt_quote_mail(lead, actor_id=get_current_user(request)["id"], force=True)
+    if err == LT_NO_QUOTE:
+        err = "brak godzin albo miejsca — uzupełnij je w leadzie"
+    return redirect(url_for("crm_lead_detail", lead_id=lead.id, msg=("⚠️ " + err) if err else "✅ Wycena wysłana mailem"))
+
+
 def lt_auto_mail():
-    """Nowe litewskie leady (od włączenia funkcji) bez wysłanego maila — wyślij. Zwraca liczbę wysłanych."""
+    """Nowe litewskie leady (od włączenia funkcji) bez wysłanego maila — wyślij: od razu wycenę, gdy znamy
+    godziny i miejsce, inaczej prośbę o dane (formularz). Zwraca liczbę wysłanych."""
     if not lt_mailbox_ready() or os.environ.get("LT_AUTO_MAIL", "1") == "0":
         return 0
+    apply_user_profiles()  # w wątku w tle nie ma before_request — dane nadawców z Profilu
     since = get_setting(LT_SINCE_KEY)
     if not since:  # pierwsze uruchomienie: od teraz — starszych leadów nie ruszamy
         set_setting(LT_SINCE_KEY, datetime.utcnow().isoformat(timespec="seconds"))
@@ -7706,13 +7859,15 @@ def lt_auto_mail():
     sent = 0
     for lead in Lead.query.filter(Lead.created_at >= since_dt, Lead.lt_mail_at.is_(None),
                                   Lead.stage == "Nowy").order_by(Lead.created_at).limit(50).all():
-        if not lead.emails or not is_lithuanian(lead) or lead.pl_id:
+        if not lead.emails or not is_lithuanian(lead):
             continue
         tries_key = f"lt_tries:{lead.id}"
         tries = int(get_setting(tries_key) or 0)
         if tries >= 3:
             continue
-        err = send_lt_mail(lead)
+        err = send_lt_quote_mail(lead) if lt_auto_quote_enabled() else LT_NO_QUOTE
+        if err == LT_NO_QUOTE:  # brak godzin / miejsca — jak dotąd: mail z prośbą o dane (formularz)
+            err = send_lt_mail(lead)
         if err == LT_ALREADY_SENT:
             continue
         if err:
@@ -8286,6 +8441,8 @@ def lead_form(token):
                             notes="Przygotuj i wyślij ofertę — klient z Litwy wypełnił formularz (dane w komentarzu)."))
     db.session.commit()
     _notify_form_filled(lead.id, summary)
+    if lt_auto_quote_enabled():
+        _send_quote_in_background(lead.id)
     return render_template("crm/lead_form.html", lead=lead, done=True)
 
 

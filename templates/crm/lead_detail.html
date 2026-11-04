@@ -176,6 +176,7 @@
     <div class="panel" id="lt-price">
       <div class="panel-header">💶 Cena i wiadomość na WhatsApp / Viber</div>
       <div class="panel-body" style="font-size:12.5px">
+        {% if request.args.get('msg') %}<div style="margin-bottom:8px;font-weight:600">{{ request.args.get('msg')[:200] }}</div>{% endif %}
         {% if lq.price %}
           <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
             <span style="font-size:24px;font-weight:800;color:var(--green)">{{ '{:,}'.format(lq.price).replace(',', ' ') }} €</span>
@@ -198,6 +199,12 @@
             {% if not lead.value_pln or lead.value_pln|int != lq.price %}
             <form method="post" action="{{ url_for('crm_lt_set_price', lead_id=lead.id) }}" style="display:inline">
               <button class="btn btn-secondary btn-sm">💾 Ustaw {{ lq.price }} € jako wartość leada</button>
+            </form>
+            {% endif %}
+            {% if lead.emails %}
+            <form method="post" action="{{ url_for('crm_lt_quote_mail', lead_id=lead.id) }}" style="display:inline"
+                  onsubmit="if (!confirm('Wysłać wycenę {{ lq.price }} € mailem do {{ lead.emails|join(', ') }}?')) return false; this.querySelector('button').disabled = true; return true;">
+              <button class="btn btn-secondary btn-sm">✉️ Wyślij wycenę mailem</button>
             </form>
             {% endif %}
             <a class="btn btn-ghost btn-sm" href="{{ lq.calc_url }}">🧮 Kalkulator</a>
