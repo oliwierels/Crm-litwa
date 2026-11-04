@@ -13,6 +13,11 @@
 .mc-head label { color:var(--muted); }
 .mc-sig { white-space:pre-wrap; font-size:12px; color:var(--muted); border-top:1px dashed var(--border); margin-top:8px; padding-top:6px; }
 .mc-status { font-size:11.5px; color:var(--muted); }
+.mc-ai { background:color-mix(in srgb, var(--accent) 8%, var(--panel)); border:1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius:var(--radius); padding:12px 14px; margin-bottom:14px; }
+.mc-ai-head { font-weight:700; font-size:13px; margin-bottom:8px; }
+.mc-ai textarea { width:100%; font-size:13px; line-height:1.5; resize:vertical; }
+.mc-ai details { margin-top:6px; font-size:12px; }
+.mc-ai summary { cursor:pointer; color:var(--accent); margin-bottom:4px; }
 @media (max-width: 900px) { .mc-grid { grid-template-columns: 1fr; } .mc-head { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
@@ -37,6 +42,19 @@
     <label>Załączniki</label>
     <input type="file" name="files" multiple>
     {% if lead %}<label>Lead</label><a href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}" style="color:var(--accent)">{{ lead.company }}</a>{% endif %}
+  </div>
+
+  <div class="mc-ai">
+    <div class="mc-ai-head">✨ Claude napisze maila
+      <span class="mc-status">— {{ 'widzi maila, na który odpowiadasz' if reply else ('widzi przekazywanego maila' if fwd else 'opisz, co ma być w mailu') }}{{ ', wątek' if reply }}{{ ' i dane leada (cena z kalkulatora, daty, miejsce)' if lead or reply }}</span></div>
+    <textarea id="mc-ai-instr" rows="2" placeholder="{{ 'Np.: odpisz, że 12 grudnia jest wolny, cena jak w CRM, i poproś o adres sali' if reply else 'Np.: napisz do klienta, że wysyłamy umowę i prosimy o dane do faktury' }}"></textarea>
+    <details id="mc-ai-paste-wrap"><summary>Wklej treść maila albo notatkę (opcjonalnie)</summary>
+      <textarea id="mc-ai-paste" rows="5" placeholder="Wklej tu np. starego maila klienta — Claude odpowie na niego."></textarea></details>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <button type="button" class="btn btn-primary btn-sm" id="mc-ai-btn" onclick="mcGenerate()">✨ Wygeneruj</button>
+      <span class="mc-status">Ctrl+Enter · pisze po polsku (lewa) i od razu {{ lang_names.get(target_lang, target_lang) }} (prawa) — wszystko możesz poprawić przed wysłaniem. Jeśli coś już napisałeś, Claude to poprawi.</span>
+      <span class="mc-status" id="mc-ai-msg" style="color:var(--text)"></span>
+    </div>
   </div>
 
   <div class="mc-grid">
@@ -101,6 +119,45 @@ function mcTranslate() {
       document.getElementById('mc-msg').textContent = '✅ Przetłumaczono — sprawdź i wyślij';
     }).catch(() => { document.getElementById('mc-msg').textContent = '⚠️ Błąd połączenia — kliknij „Przetłumacz”.'; });
 }
+async function mcGenerate() {
+  const btn = document.getElementById('mc-ai-btn'), msg = document.getElementById('mc-ai-msg');
+  if (btn.disabled) return;
+  if (!MC_AI) { msg.textContent = '⚠️ Brak ANTHROPIC_API_KEY w Railway.'; return; }
+  const instr = document.getElementById('mc-ai-instr').value, pasted = document.getElementById('mc-ai-paste').value;
+  if (!instr.trim() && !pasted.trim() && !{{ 'true' if reply else 'false' }}) { msg.textContent = '⚠️ Napisz, co ma być w mailu.'; return; }
+  btn.disabled = true; msg.textContent = '⏳ Claude pisze… (zwykle 10–30 s)';
+  const fd = new FormData();
+  fd.append('instruction', instr); fd.append('pasted', pasted);
+  fd.append('reply', '{{ reply.id if reply else (fwd.id if fwd else '') }}'); fd.append('lead', '{{ lead.id if lead else '' }}');
+  fd.append('to', document.querySelector('input[name=to]').value);
+  fd.append('draft_pl', document.getElementById('mc-body').value); fd.append('draft_out', document.getElementById('mc-body-out').value);
+  try {
+    const start = await (await fetch('{{ url_for('crm_mail_ai_draft') }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})).json();
+    if (start.error) throw new Error(start.error);
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const job = await (await fetch(start.poll, {headers: {'X-Requested-With': 'fetch'}})).json();
+      if (job.status === 'pending') continue;
+      if (job.status === 'error' || !job.draft) throw new Error(job.error || 'Claude nie napisał maila');
+      const d = job.draft;
+      clearTimeout(mcTimer); mcSeq++;  // zatrzymaj automatyczne tłumaczenie, które mogło jeszcze iść
+      {% if not (reply or fwd) %}document.getElementById('mc-subj').value = d.subject_pl || document.getElementById('mc-subj').value;
+      document.getElementById('mc-subj-out').value = d.subject_out || document.getElementById('mc-subj-out').value;{% endif %}
+      document.getElementById('mc-body').value = d.body_pl || '';
+      document.getElementById('mc-body-out').value = d.body_out || '';
+      mcTouched = false;
+      document.getElementById('mc-msg').textContent = '';
+      msg.textContent = '✅ Gotowe — sprawdź obie wersje, popraw i wyślij';
+      return;
+    }
+    throw new Error('Claude nie zdążył w 3 minuty — spróbuj jeszcze raz.');
+  } catch (e) {
+    msg.textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+document.getElementById('mc-ai-instr').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); mcGenerate(); } });
 function mcBack() {
   const fd = new FormData();
   fd.append('subject', document.getElementById('mc-subj-out').value);

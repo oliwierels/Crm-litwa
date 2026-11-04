@@ -7487,7 +7487,7 @@ def crm_job(jid):
     if not job:
         abort(404)
     if request.args.get("format") == "json":
-        return jsonify({k: v for k, v in job.items() if k in ("status", "url", "info", "error", "lead_ids")})
+        return jsonify({k: v for k, v in job.items() if k in ("status", "url", "info", "error", "lead_ids", "draft")})
     return render_template("crm/job.html", jid=jid, job=job)
 
 
@@ -9324,6 +9324,144 @@ def crm_mail_translate_draft():
     except Exception as e:
         return jsonify({"error": f"Tłumaczenie nie wyszło: {type(e).__name__}"}), 502
     return jsonify({"ok": True, "subject": subj, "body": text})
+
+
+# --- Claude pisze maila (odpowiedź albo nowy) — po polsku i od razu w języku klienta ---
+MAIL_REPLY_AI_MODEL = os.environ.get("MAIL_REPLY_AI_MODEL", "").strip() or "claude-opus-5-5"
+MAIL_DRAFT_TOOL = {
+    "name": "write_email",
+    "description": "Gotowy mail do klienta: wersja po polsku (do wglądu dla zespołu) i wersja w języku klienta (wysyłana).",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "subject_pl": {"type": "string", "description": "Temat po polsku"},
+            "body_pl": {"type": "string", "description": "Treść po polsku — bez podpisu i bez formuły pożegnalnej"},
+            "subject_out": {"type": "string", "description": "Ten sam temat w języku klienta"},
+            "body_out": {"type": "string",
+                         "description": "Ta sama treść w języku klienta — bez podpisu i bez formuły pożegnalnej"},
+        },
+        "required": ["subject_pl", "body_pl", "subject_out", "body_out"],
+    },
+}
+
+
+def _dt(value):
+    return f"{value:%Y-%m-%d %H:%M}" if value else "bez daty"
+
+
+def _mail_draft_context(code, reply_id=None, lead_id=None, pasted="", to=""):
+    """Tekst z kontekstem dla Claude'a: mail, na który odpowiadamy (z wątkiem), dane leada i policzona cena."""
+    parts = []
+    reply = db.session.get(MailMessage, reply_id) if reply_id else None
+    lead = db.session.get(Lead, lead_id) if lead_id else None
+    if reply:
+        fresh, _old = poczta.split_quote(reply.body_text or "")
+        who = f"{reply.from_name} <{reply.from_addr}>" if reply.from_name else reply.from_addr
+        parts.append(f"MAIL, NA KTÓRY ODPOWIADAMY ({'od klienta' if reply.folder == 'in' else 'wysłany przez nas'}, "
+                     f"{_dt(reply.date)} od {who}):\nTemat: {reply.subject or ''}\n{fresh[:8000]}"
+                     + (f"\n\n(Tłumaczenie na polski: {reply.body_pl[:6000]})" if reply.body_pl else ""))
+        if reply.thread_key:
+            earlier = (MailMessage.query.filter(MailMessage.thread_key == reply.thread_key, MailMessage.id != reply.id)
+                       .order_by(MailMessage.date.desc()).limit(6).all())
+            for m in reversed(earlier):
+                f2, _ = poczta.split_quote(m.body_text or "")
+                parts.append(f"WCZEŚNIEJ W WĄTKU ({'klient' if m.folder == 'in' else 'my'}, {_dt(m.date)}): "
+                             f"{m.subject or ''}\n{f2[:1500]}")
+        lead = lead or mail_lead_for(reply)
+    if lead:
+        days = ", ".join(f"{d.event_date:%Y-%m-%d}" for d in sorted(lead.event_days, key=lambda d: d.event_date))
+        info = [f"Firma: {lead.company}", f"Osoba: {lead.contact_name or '—'}", f"Etap: {lead.stage}",
+                f"Dni wydarzenia: {days or '—'}", f"Miejsce: {lead.location or '—'}"]
+        if lead.value_pln:
+            info.append(f"Wartość w CRM: {lead.value_pln:g} {lead.currency or 'EUR'} netto")
+        try:
+            with app.test_request_context(base_url=public_base_url() or "http://localhost"):
+                q = lt_quote(lead, remote_budget=1)
+        except Exception:
+            q = {}
+        if q.get("price"):
+            info.append(f"Cena z kalkulatora CRM: {q['price']} € netto ({q['time']}, {q['place']}"
+                        + (f", {q['when']}" if q.get("when") else "") + ")"
+                        + (" — godziny ZAŁOŻONE, nie od klienta" if q.get("assumed") else ""))
+        if lead.notes:
+            info.append(f"Notatki: {lead.notes[:1500]}")
+        notes = [a.notes for a in sorted(lead.activities, key=lambda a: a.created_at or datetime.min, reverse=True)
+                 if a.kind == "note" and a.notes][:3]
+        if notes:
+            info.append("Ostatnie komentarze w CRM:\n" + "\n".join("- " + n[:500] for n in notes))
+        parts.append("DANE LEADA Z CRM:\n" + "\n".join(info))
+    elif to:
+        parts.append(f"Adresat: {to}")
+    if pasted.strip():
+        parts.append(f"TEKST WKLEJONY PRZEZ UŻYTKOWNIKA (np. stary mail albo notatka):\n{pasted[:10000]}")
+    return "\n\n".join(parts)
+
+
+def mail_ai_draft(code, instruction, pasted="", reply_id=None, lead_id=None, to="", writer_id=None,
+                  draft_pl="", draft_out="", is_reply=False):
+    """Claude pisze maila: polska wersja + ta sama treść w języku rynku (lt/de). Zadanie w tle — zwraca {'draft': …}."""
+    m = markets.get(code)
+    writer = USERS_BY_ID.get(writer_id) or USERS[0]
+    system = (
+        "Piszesz maile firmy 33Bots do klientów. 33Bots wynajmuje humanoidalnego robota Unitree G1 na wydarzenia "
+        "(targi, konferencje, eventy firmowe) razem z operatorem: dojazd, przygotowanie robota na miejscu, "
+        "dopasowanie osobowości i wiedzy robota do wydarzenia, wsparcie techniczne; robot wita gości, rozmawia "
+        "na podstawie przygotowanej bazy wiedzy, tańczy i pozuje do zdjęć. Ceny netto w EUR. "
+        f"Zdjęcia z realizacji: {OFFER_PHOTOS_URL}\n"
+        f"Klient jest z rynku: {m['name']} — wersja dla klienta (subject_out, body_out) ZAWSZE {m['lang_in_pl']}, "
+        "naturalnie, jak native speaker, forma grzecznościowa (" + ("„Jūs”" if code == "lt" else "„Sie”") + "); "
+        "nigdy po angielsku. subject_pl i body_pl to dokładnie ta sama treść po polsku (dla zespołu).\n"
+        f"Piszesz w imieniu: {writer.get('full_name') or writer['name']} (pierwsza osoba). "
+        f"Powitanie: {m['ai_greeting'].split('…')[0].strip()} "
+        + ("(bez imienia — litewski wołacz łatwo pomylić)" if code == "lt" else
+           "(albo „Sehr geehrte Frau X,” / „Sehr geehrter Herr X,”, gdy znasz nazwisko)") + ". "
+        "NIE dodawaj formuły pożegnalnej ani podpisu — podpis z pożegnaniem dokleja się sam.\n"
+        "Zasady: odpowiadaj konkretnie na to, o co pyta klient, i na polecenie użytkownika. Nie wymyślaj cen, dat, "
+        "dostępności ani obietnic — używaj tylko tego, co jest w poleceniu albo w danych z CRM; jeśli czegoś "
+        "brakuje (np. godzin, miejsca), grzecznie dopytaj. Krótkie akapity, ton ciepły i profesjonalny, bez "
+        "nagłówków i list w punktach, chyba że polecenie o nie prosi. Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
+    )
+    ctx = _mail_draft_context(code, reply_id, lead_id, pasted, to)
+    task = (f"POLECENIE UŻYTKOWNIKA: {instruction.strip() or 'Napisz odpowiedź na tego maila.'}\n\n"
+            + (ctx + "\n\n" if ctx else "")
+            + (f"OBECNY SZKIC (popraw go zgodnie z poleceniem):\nPL: {draft_pl[:4000]}\n"
+               f"{m['lang_name_pl']}: {draft_out[:4000]}\n\n" if (draft_pl.strip() or draft_out.strip()) else "")
+            + ("To odpowiedź w istniejącym wątku — temat zostaw jako „Re: …”." if is_reply else ""))
+    res = {}
+    for attempt in range(2):
+        res = _ai_forced_tool(MAIL_REPLY_AI_MODEL, system, task, MAIL_DRAFT_TOOL, max_tokens=4000)
+        bad = wrong_language(code, res.get("subject_out"), res.get("body_out"))
+        if not bad and str(res.get("body_out") or "").strip():
+            break
+        task += (f"\n\nUWAGA: poprzednia wersja dla klienta nie była {m['lang_in_pl']} (wykryto: {bad or 'pusto'}). "
+                 f"Napisz subject_out i body_out w całości {m['lang_in_pl']}.")
+    else:
+        return {"error": f"Claude nie napisał wersji {m['lang_in_pl']} — spróbuj jeszcze raz"}
+    draft = {k: str(res.get(k) or "").strip() for k in ("subject_pl", "body_pl", "subject_out", "body_out")}
+    return {"draft": draft, "info": "gotowe"}
+
+
+@app.route("/crm/poczta/generuj", methods=["POST"])
+def crm_mail_ai_draft():
+    """✨ w okienku pisania: Claude pisze maila (w tle — długie odpowiedzi nie blokują serwera)."""
+    if _ai_client() is None:
+        return jsonify({"error": "Brak ANTHROPIC_API_KEY w Railway — Claude nie może pisać maili."}), 400
+    f = request.form
+    instruction = (f.get("instruction") or "").strip()[:3000]
+    pasted = (f.get("pasted") or "")[:12000]
+    reply_id, lead_id = f.get("reply", type=int), f.get("lead", type=int)
+    if not instruction and not pasted.strip() and not reply_id:
+        return jsonify({"error": "Napisz Claude'owi, co ma być w mailu (albo wklej maila, na który odpowiadasz)."}), 400
+    if reply_id and not db.session.get(MailMessage, reply_id):
+        reply_id = None
+    if lead_id and not db.session.get(Lead, lead_id):
+        lead_id = None
+    jid = _start_job("Claude pisze maila", mail_ai_draft, current_market(), instruction, pasted, reply_id, lead_id,
+                     (f.get("to") or "")[:500], get_current_user(request)["id"], (f.get("draft_pl") or "")[:6000],
+                     (f.get("draft_out") or "")[:6000], bool(reply_id))
+    return jsonify({"jid": jid, "poll": url_for("crm_job", jid=jid, format="json")})
 
 
 def _quote_for_reply(row, lang):

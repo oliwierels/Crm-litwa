@@ -50,6 +50,13 @@ wystarczy dopisać parę do `lt_strings.py`.
 
 3. Settings → Networking → Generate Domain.
 
+## Poczta: ✨ Claude napisze maila
+
+W okienku odpowiedzi / nowego maila: wpisz polecenie (np. „odpisz, że 12 grudnia jest wolny, cena jak w CRM”) albo wklej
+starego maila — Claude pisze maila po polsku (lewa strona) i od razu w języku klienta (prawa). Widzi maila, na który
+odpowiadasz, wątek i dane leada (cenę z kalkulatora, daty, miejsce). Nic nie wychodzi bez kliknięcia „Wyślij”.
+Wersję w złym języku CRM odrzuca i Claude pisze ją jeszcze raz. Model: `MAIL_REPLY_AI_MODEL` (domyślnie `claude-opus-5-5`).
+
 ## Niemcy 🇩🇪 (ten sam serwis, te same zmienne + kilka nowych)
 
 | Zmienna | Wartość |
