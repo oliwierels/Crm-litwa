@@ -8850,6 +8850,7 @@ MAIL_LANG_FLAGS = {"pl": "🇵🇱", "lt": "🇱🇹", "de": "🇩🇪", "en": "
 MAIL_SYNC_SECONDS = int(os.environ.get("MAIL_SYNC_SECONDS", "120") or 120)
 MAIL_BATCH = int(os.environ.get("MAIL_SYNC_BATCH", "300") or 300)
 MAIL_TRANSLATE_MODEL = os.environ.get("TRANSLATE_AI_MODEL", "").strip() or INBOX_AI_MODEL
+MAIL_TRANSLATE_STRONG_MODEL = os.environ.get("TRANSLATE_AI_MODEL_STRONG", "").strip() or OFFER_AI_MODEL
 MAIL_AUTO_TRANSLATE_DAYS = int(os.environ.get("MAIL_AUTO_TRANSLATE_DAYS", "30") or 30)
 _mail_sync_lock = threading.Lock()
 
@@ -9023,17 +9024,51 @@ MAIL_TRANSLATE_TOOL = {
 }
 
 
-def ai_translate(subject, body, target="pl", tone_hint=""):
+def ai_translate(subject, body, target="pl", tone_hint="", model=None, insist=False):
     """(język źródłowy, temat, treść) przetłumaczone na `target` przez Claude. Rzuca wyjątek przy błędzie."""
     name = {"pl": "polski", "lt": "litewski", "de": "niemiecki", "en": "angielski"}.get(target, target)
+    name_en = {"pl": "Polish", "lt": "Lithuanian", "de": "German", "en": "English"}.get(target, target)
     system = (f"Jesteś tłumaczem korespondencji firmy 33Bots (wynajem humanoidalnych robotów Unitree G1 na eventy). "
-              f"Tłumacz wiernie na język {name}: zachowaj akapity, listy, nazwiska, adresy, numery, kwoty, daty i linki "
-              f"bez zmian. Nie dodawaj komentarzy ani wyjaśnień. Gdy tekst już jest w języku docelowym, przepisz go bez zmian."
-              + (f" {tone_hint}" if tone_hint else ""))
-    args = _ai_forced_tool(MAIL_TRANSLATE_MODEL, system, f"TEMAT:\n{subject or ''}\n\nTREŚĆ:\n{body or ''}",
+              f"Tłumacz wiernie na język {name} ({name_en}) — wynik (subject i body) MUSI być w całości w języku {name}, "
+              f"niezależnie od języka oryginału (niemiecki, litewski, angielski…). Zachowaj akapity, listy, nazwiska, "
+              f"nazwy firm, adresy, numery, kwoty, daty i linki. Nie dodawaj komentarzy ani wyjaśnień. "
+              f"Tylko gdy oryginał już jest w całości w języku {name}, przepisz go bez zmian."
+              + (f" {tone_hint}" if tone_hint else "")
+              + (f" UWAGA: poprzednia próba zwróciła tekst w złym języku — tym razem przetłumacz KAŻDE zdanie "
+                 f"na język {name}." if insist else ""))
+    args = _ai_forced_tool(model or MAIL_TRANSLATE_MODEL, system, f"TEMAT:\n{subject or ''}\n\nTREŚĆ:\n{body or ''}",
                            MAIL_TRANSLATE_TOOL, max_tokens=8000)
     return (str(args.get("source_lang") or "")[:8].lower(), str(args.get("subject") or "")[:600],
             str(args.get("body") or ""))
+
+
+def translation_ok(src_body, out_body, target):
+    """Czy tłumaczenie naprawdę jest w języku docelowym (a nie np. oryginał przepisany bez zmian)."""
+    out = (out_body or "").strip()
+    src = (src_body or "").strip()
+    if not src:
+        return True
+    if not out:
+        return False
+    src_lang = poczta.detect_lang(src)
+    out_lang = poczta.detect_lang(out)
+    if out_lang and out_lang != target:
+        return False
+    if src_lang and src_lang != target and " ".join(out.split()) == " ".join(src.split()):
+        return False
+    return True
+
+
+def ai_translate_checked(subject, body, target="pl", tone_hint=""):
+    """ai_translate ze sprawdzeniem języka: zły wynik → druga próba mocniejszym modelem z wyraźnym poleceniem.
+    Gdy dalej źle — wyjątek (lepiej błąd niż oryginał pokazany jako tłumaczenie)."""
+    lang, subj, text = ai_translate(subject, body, target, tone_hint)
+    if translation_ok(body, text, target):
+        return lang, subj, text
+    lang, subj, text = ai_translate(subject, body, target, tone_hint, model=MAIL_TRANSLATE_STRONG_MODEL, insist=True)
+    if translation_ok(body, text, target):
+        return lang, subj, text
+    raise RuntimeError(f"model zwrócił tekst, który nie jest po {'polsku' if target == 'pl' else target}")
 
 
 def mail_translate(row, force=False):
@@ -9042,7 +9077,7 @@ def mail_translate(row, force=False):
         return None
     fresh, _quoted = poczta.split_quote(row.body_text or "")
     try:
-        lang, subj, body = ai_translate(row.subject or "", fresh[:12000], "pl")
+        lang, subj, body = ai_translate_checked(row.subject or "", fresh[:12000], "pl")
     except Exception as e:
         row.translate_error = f"{type(e).__name__}: {str(e)[:200]}"
         db.session.commit()
@@ -9070,8 +9105,9 @@ def mail_translate_subjects(rows):
         return {}
     listing = "\n".join(f"{r.id}: {r.subject}" for r in todo[:40])
     args = _ai_forced_tool(MAIL_TRANSLATE_MODEL,
-                           "Przetłumacz tematy maili na polski. Zachowaj prefiksy Re:/Fwd:, nazwy firm i numery. "
-                           "Temat już po polsku przepisz bez zmian.", listing, MAIL_SUBJECTS_TOOL, max_tokens=4000)
+                           "Przetłumacz tematy maili na język polski (Polish) — każdy temat w obcym języku (niemiecki, "
+                           "litewski, angielski…) MUSI być po polsku. Prefiksy AW:/WG:/Ats:/Re:/Fwd: zamień na Re:/Fwd:, "
+                           "zachowaj nazwy firm i numery. Tylko temat już po polsku przepisz bez zmian.", listing, MAIL_SUBJECTS_TOOL, max_tokens=4000)
     got = {}
     for item in args.get("items") or []:
         try:
@@ -9080,10 +9116,41 @@ def mail_translate_subjects(rows):
             continue
         got[rid] = str(item.get("subject") or "")[:600]
     for r in todo:
-        if r.id in got:
-            r.subject_pl = got[r.id]
+        if r.id not in got:
+            continue
+        if got[r.id].strip() == (r.subject or "").strip() and poczta.detect_lang(r.subject) not in ("", "pl"):
+            got.pop(r.id)  # „przetłumaczony” temat został w obcym języku — przetłumaczy go tłumaczenie treści
+            continue
+        r.subject_pl = got[r.id]
     db.session.commit()
     return got
+
+
+MAIL_RETRANSLATE_KEY = "mail_retranslate_v1"
+
+
+def mail_fix_bad_translations(days=120):
+    """Raz: maile, których „tłumaczenie” zostało w obcym języku (np. niemiecki przepisany bez zmian), idą do
+    ponownego tłumaczenia."""
+    if get_setting(MAIL_RETRANSLATE_KEY):
+        return 0
+    since = datetime.utcnow() - timedelta(days=days)
+    n = 0
+    for r in all_markets(MailMessage.query.filter(MailMessage.translated_at.isnot(None),
+                                                  MailMessage.date >= since)).all():
+        if (r.lang or "") == "pl":
+            continue
+        fresh = poczta.split_quote(r.body_text or "")[0]
+        if not translation_ok(fresh, r.body_pl, "pl"):
+            r.body_pl = r.subject_pl = r.translated_at = r.translate_error = None
+            n += 1
+        elif r.subject_pl and r.subject and r.subject_pl.strip() == r.subject.strip() and \
+                poczta.detect_lang(r.subject) not in ("", "pl"):
+            r.subject_pl = None
+            n += 1
+    set_setting(MAIL_RETRANSLATE_KEY, f"{datetime.utcnow():%Y-%m-%d %H:%M} ({n})")
+    db.session.commit()
+    return n
 
 
 def mail_auto_translate(limit=15):
@@ -9106,6 +9173,7 @@ def _mail_scheduler():
             with app.app_context():
                 if mail_boxes():
                     mail_sync_all()
+                    mail_fix_bad_translations()
                     mail_auto_translate()
                 db.session.remove()
         except Exception:
@@ -9320,7 +9388,7 @@ def crm_mail_translate_draft():
     tone = ("To mail firmy do klienta: grzeczny, profesjonalny, naturalny język biznesowy jak u native speakera "
             "(w litewskim forma grzecznościowa „Jūs”, w niemieckim „Sie”).") if target != "pl" else ""
     try:
-        _lang, subj, text = ai_translate(subject, body, target, tone_hint=tone)
+        _lang, subj, text = ai_translate_checked(subject, body, target, tone_hint=tone)
     except Exception as e:
         return jsonify({"error": f"Tłumaczenie nie wyszło: {type(e).__name__}"}), 502
     return jsonify({"ok": True, "subject": subj, "body": text})

@@ -269,7 +269,6 @@ tr:hover td { background: var(--panel2); }
       (url_for('crm_inbox'), ep == 'crm_inbox', 'inbox', 'Skrzynka', 0, '', ''),
       (url_for('crm_clickup_inbox'), ep == 'crm_clickup_inbox', 'cloud-download', 'Z ClickUp', clickup_pending_count or 0, 'var(--accent)', 'Leady z ClickUp do zatwierdzenia'),
       (url_for('crm_campaigns'), ep in ['crm_campaigns', 'crm_campaign', 'crm_campaign_new'], 'megaphone', 'Blitzkrieg', campaigns_running or 0, 'var(--green)', 'Trwające kampanie'),
-      (url_for('crm_pl_move'), ep == 'crm_pl_move', 'box-arrow-in-down', 'Z polskiego CRM', 0, '', ''),
     ]),
     ('raporty', 'Raporty', [
       (url_for('crm_stats'), ep == 'crm_stats', 'graph-up', 'Statystyki', 0, '', ''),
