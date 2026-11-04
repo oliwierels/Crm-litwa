@@ -10365,12 +10365,8 @@ def alerts_state(code=None):
     others = {mc: len(unhandled_leads(mc)) for mc in markets.MARKETS if mc != code}
     tasks = mail_tasks_open(code)
     show_tasks = mail_tasks_visible()
-    try:
-        badlinks = len(bad_link_leads(code))
-    except Exception:
-        db.session.rollback()
-        badlinks = 0
-    return {"leads": leads, "other": {mc: n for mc, n in others.items() if n}, "badlinks": badlinks,
+    # pasek „klienci z błędnym linkiem” wyłączony — sprawa zamknięta (lista zostaje pod /crm/poprawki, bez przypominania)
+    return {"leads": leads, "other": {mc: n for mc, n in others.items() if n}, "badlinks": 0,
             "tasks": [_mail_task_row(t) for t in tasks] if show_tasks else [], "tasks_waiting": len(tasks),
             "show_tasks": show_tasks, "show_from": MAIL_TASKS_SHOW_FROM}
 

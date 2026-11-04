@@ -1,6 +1,6 @@
 {# Alarmy: nowe leady do obsłużenia DZIŚ (zawsze) + sprawy z przeglądu poczty (od godziny alerts.show_from).
    Okno zasłania CRM, dopóki wszystko nie jest obsłużone — można je odłożyć tylko na kilka minut. #}
-{% if alerts and (alerts.leads or alerts.tasks or alerts.other or alerts.badlinks) %}
+{% if alerts and (alerts.leads or alerts.tasks or alerts.other) %}
 {% set n_leads = alerts.leads|length %}
 {% set n_tasks = alerts.tasks|length %}
 <style>
@@ -44,7 +44,6 @@
   {% if n_leads %}<span>🚨 <b>{{ n_leads }} {{ 'nowy lead czeka' if n_leads == 1 else 'nowe leady czekają' }} na obsługę</b> — trzeba je obsłużyć jeszcze dziś (telefon, mail albo oferta).</span>{% endif %}
   {% if n_tasks %}<span>📋 <b>{{ n_tasks }} {{ 'sprawa' if n_tasks == 1 else 'spraw' }} z poczty</b> do załatwienia przed końcem dnia.</span>{% endif %}
   {% for mc, n in alerts.other.items() %}<span>{{ all_mkts[mc].flag }} {{ all_mkts[mc].name }}: <b>{{ n }}</b> {{ 'nowy lead' if n == 1 else 'nowe leady' }} — <a href="{{ url_for('set_market', code=mc) }}">przełącz</a></span>{% endfor %}
-  {% if alerts.badlinks %}<span>🔧 <b>{{ alerts.badlinks }}</b> {{ 'klient dostał' if alerts.badlinks == 1 else 'klientów dostało' }} mail z błędnym linkiem — <a href="{{ url_for('crm_badlink_list') }}">wyślij poprawioną ofertę z PDF</a></span>{% endif %}
   {% if n_leads or n_tasks %}<button type="button" onclick="alOpen()">Obsłuż teraz</button>{% endif %}
 </notr>
 {% if n_leads or n_tasks %}
