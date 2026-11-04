@@ -7052,6 +7052,11 @@ def crm_inbox_action(mid, action):
 OFFER_AI_ATTEMPTS = 3  # pierwsza próba + 2 poprawki po błędzie walidacji
 
 
+# folder ze zdjęciami z realizacji — trafia do maili z ofertą jako „zdjęcia”
+OFFER_PHOTOS_URL = os.environ.get("OFFER_PHOTOS_URL", "").strip() or \
+    "https://drive.google.com/drive/folders/1fOaECfc5eNKigB8xzW0z9rlq4jqr5CmK"
+
+
 def _offer_ai_system_prompt():
     return (
         "PISZESZ DO KLIENTÓW Z LITWY: mail i PDF PO LITEWSKU (offer.language='lt'), ceny w EUR, chyba że klient pisze "
@@ -7083,6 +7088,7 @@ def _offer_ai_system_prompt():
         "- doświadczenie (Fundacja Perspektywy, Grupa Rekord, Adamed, DSV) i linki do nagrań z realizacji:\n"
         "  https://drive.google.com/drive/folders/12ax3azbP5kkDTKEWO9-mB1e0ogFM9F-o?usp=sharing\n"
         "  https://drive.google.com/drive/folders/1TiyuixwoNU2RZVHoZmzPDqJFTi94cmpS?usp=sharing\n"
+        f"- zdjęcia z realizacji — osobna linijka podpisana jako zdjęcia (np. 'Zdjęcia z realizacji:'): {OFFER_PHOTOS_URL}\n"
         "- gdy brakuje daty/miejsca/godzin — poproś o nie; oferta ważna 14 dni;\n"
         "- podpis: 'Z pozdrowieniami,' imię i nazwisko nadawcy, '33Bots', jego e-mail i telefon.\n"
         "NIGDY nie pisz 'Edward Warchocki' — tylko 'Unitree G1'. Pisz 'personalizacja osobowości i wiedzy robota'. "
@@ -7735,6 +7741,9 @@ def lt_quote_mail_draft(lead, q, sender):
         "– techninė pagalba vietoje.",
         "",
         "Robotas pasitiks svečius, bendraus remdamasis paruošta žinių baze, šoks ir pozuos nuotraukoms.",
+        "",
+        "Nuotraukos iš mūsų renginių:",
+        OFFER_PHOTOS_URL,
         "",
     ]
     if link:
