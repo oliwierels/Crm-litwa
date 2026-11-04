@@ -1,0 +1,73 @@
+{% extends "crm/base.html" %}
+{% block title %}Skuteczność – RoboRent CRM{% endblock %}
+{% block page_title %}🎯 Skuteczność sprzedaży{% endblock %}
+{% block content %}
+{% macro money(v, cur) %}{{ '{:,.0f}'.format(v or 0).replace(',', ' ') }} {{ 'zł' if cur == 'PLN' else cur }}{% endmacro %}
+<style>
+.sp-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+.sp-card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+.sp-bar { height:10px; border-radius:5px; background:var(--panel2); position:relative; overflow:hidden; margin:6px 0 2px; }
+.sp-bar span { position:absolute; inset:0 auto 0 0; background:var(--green); border-radius:5px; }
+.sp-bar i { position:absolute; inset:0 auto 0 0; background:#22c55e44; border-radius:5px; }
+.sp-tbl td, .sp-tbl th { padding:5px 8px; font-size:12.5px; }
+.sp-muted { color:var(--muted); font-size:11.5px; }
+</style>
+<div class="sp-muted" style="margin-bottom:10px">Wygrane netto wg miesiąca zamknięcia (wygranej). Łączy CRM PL i wygrane z CRM LT/DE.
+  Kurs EUR: {{ '%.4f'|format(p.rate) }} zł {{ '(NBP ' ~ p.rate_date ~ ')' if p.rate_date and not p.rate_date.startswith('ręcznie') else ('(' ~ p.rate_date ~ ')' if p.rate_date else '(domyślny)') }}.
+  Prognoza = wynik do dziś × {{ p.days_in_month }} / {{ p.day }} dni miesiąca.</div>
+
+<div class="sp-grid">
+  {% for c in p.countries %}
+  <div class="sp-card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <b style="font-size:15px">{{ c.name }}</b>
+      <span class="sp-muted">{% if c.target %}cel {{ money(c.target, c.cur) }}{% if c.ambitious %} · ambitnie {{ money(c.ambitious, c.cur) }}{% endif %}{% else %}bez celu{% endif %}</span>
+    </div>
+    <div style="font-size:22px;font-weight:700;margin-top:4px">{{ money(c.current, c.cur) }}</div>
+    {% if c.target %}
+    <div class="sp-bar"><i style="width:{{ [100, 100 * c.forecast / c.target]|min }}%"></i><span style="width:{{ [100, 100 * c.current / c.target]|min }}%;background:{{ 'var(--green)' if c.forecast >= c.target else 'var(--yellow)' }}"></span></div>
+    <div class="sp-muted">prognoza na koniec miesiąca: <b style="color:{{ 'var(--green)' if c.forecast >= c.target else 'var(--yellow)' }}">{{ money(c.forecast, c.cur) }} ({{ c.forecast_pct }}% celu)</b></div>
+    {% else %}<div class="sp-muted">prognoza: {{ money(c.forecast, c.cur) }}</div>{% endif %}
+    <table class="sp-tbl" style="margin-top:8px"><tr><th>Miesiąc</th><th>Wygrane</th><th>Szt.</th><th>% celu</th></tr>
+      {% for r in c.rows|reverse %}<tr><td>{{ r.month }}</td><td>{{ money(r.value, c.cur) }}</td><td>{{ r.count }}</td><td>{{ (r.pct ~ '%') if r.pct is not none else '—' }}</td></tr>{% endfor %}
+    </table>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="sp-muted" style="margin:14px 0 6px">Okres dla wskaźników poniżej:
+  {% for d in [30, 90, 180, 365] %}<a href="?dni={{ d }}" style="margin-left:6px;{{ 'font-weight:700;color:var(--text)' if p.period_days == d }}">{{ d }} dni</a>{% endfor %}</div>
+<div class="sp-grid">
+  <div class="sp-card"><b>Skuteczność wg typu klienta</b>
+    <table class="sp-tbl"><tr><th>Typ</th><th>Wygr.</th><th>Strac.</th><th>%</th><th>Wartość</th></tr>
+    {% for g in p.by_type %}<tr><td>{{ g.label }}</td><td>{{ g.won }}</td><td>{{ g.lost }}</td><td>{{ g.rate if g.rate is not none else '—' }}%</td><td>{{ money(g.won_pln, 'PLN') }}</td></tr>{% else %}<tr><td colspan="5" class="sp-muted">Brak zamkniętych leadów.</td></tr>{% endfor %}</table></div>
+  <div class="sp-card"><b>Skuteczność wg opiekuna</b>
+    <table class="sp-tbl"><tr><th>Opiekun</th><th>Wygr.</th><th>Strac.</th><th>%</th><th>Wartość</th></tr>
+    {% for g in p.by_owner %}<tr><td>{{ g.label }}</td><td>{{ g.won }}</td><td>{{ g.lost }}</td><td>{{ g.rate if g.rate is not none else '—' }}%</td><td>{{ money(g.won_pln, 'PLN') }}</td></tr>{% endfor %}</table></div>
+  <div class="sp-card"><b>Powody strat</b>
+    <table class="sp-tbl">{% for r in p.reasons %}<tr><td>{{ r.label }}</td><td style="text-align:right"><b>{{ r.count }}</b></td></tr>{% else %}<tr><td class="sp-muted">Brak straconych.</td></tr>{% endfor %}</table></div>
+  <div class="sp-card"><b>Czas reakcji</b>
+    <div style="font-size:22px;font-weight:700;margin-top:4px;color:{{ 'var(--green)' if p.response.median is not none and p.response.median <= p.response.target else 'var(--yellow)' }}">{{ p.response.median if p.response.median is not none else '—' }} min</div>
+    <div class="sp-muted">mediana minut pracy do pierwszej odpowiedzi (cel {{ p.response.target }} min){% if p.response.within is not none %} · w celu: {{ p.response.within }}% z {{ p.response.count }} leadów{% endif %}</div></div>
+  <div class="sp-card"><b>Anulacje po wygranej</b> <span class="sp-muted">— {{ p.cancels|length }} szt., {{ money(p.cancel_pln, 'PLN') }}</span>
+    <table class="sp-tbl">{% for c in p.cancels %}<tr><td><a href="{{ url_for('crm_lead_detail', lead_id=c.lead.id) }}">{{ c.lead.company }}</a></td><td>{{ c.when.strftime('%d.%m') }}</td><td class="sp-muted">{{ c.reason }}</td><td>{{ money(c.pln, 'PLN') }}</td></tr>{% else %}<tr><td class="sp-muted">Brak.</td></tr>{% endfor %}</table></div>
+</div>
+
+<div class="sp-card" style="margin-top:12px"><b>Otwarte leady od 10 000 zł</b> <span class="sp-muted">— najpierw te bez następnego kroku</span>
+  <table class="sp-tbl"><tr><th>Lead</th><th>Etap</th><th>Wartość</th><th>Następny krok</th></tr>
+  {% for b in p.big_open %}<tr><td><a href="{{ url_for('crm_lead_detail', lead_id=b.lead.id) }}">{{ b.lead.company }}</a></td><td>{{ b.lead.stage }}</td><td>{{ money(b.pln, 'PLN') }}</td>
+    <td>{% if b.next %}{{ b.next.strftime('%d.%m.%Y') }}{% else %}<b style="color:var(--red)">brak — zaplanuj!</b>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="4" class="sp-muted">Brak.</td></tr>{% endfor %}</table></div>
+
+<details class="sp-card" style="margin-top:12px"><summary style="cursor:pointer"><b>Cele i kurs EUR</b></summary>
+  <form method="post" class="gap10" style="margin-top:10px;max-width:520px">
+    {% for c, label in [('PL', 'Polska (zł)'), ('DE', 'Niemcy (EUR)'), ('LT', 'Litwa (EUR)'), ('RO', 'Rumunia (EUR)')] %}
+    <div class="grid2"><div><label>{{ label }} — cel realny</label><input name="{{ c }}_realny" value="{{ (targets.get(c, {}).get('realny') or '')|int if targets.get(c, {}).get('realny') else '' }}"></div>
+      <div><label>cel ambitny</label><input name="{{ c }}_ambitny" value="{{ (targets.get(c, {}).get('ambitny') or '')|int if targets.get(c, {}).get('ambitny') else '' }}"></div></div>
+    {% endfor %}
+    <div class="grid2"><div><label>Kurs EUR ręcznie (puste = NBP)</label><input name="eur_rate" placeholder="{{ '%.4f'|format(p.rate) }}"></div>
+      <div style="align-self:end"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="eur_auto" value="1" style="width:auto"> wróć do kursu NBP</label></div></div>
+    <button class="btn btn-primary btn-sm">Zapisz</button>
+  </form>
+</details>
+{% endblock %}

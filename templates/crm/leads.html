@@ -189,15 +189,16 @@ document.querySelectorAll('.k-card').forEach(c => {
 document.querySelectorAll('.k-body').forEach(col => {
   col.addEventListener('dragover', e => { e.preventDefault(); col.style.outline = '2px solid var(--accent)'; });
   col.addEventListener('dragleave', () => col.style.outline = '');
-  col.addEventListener('drop', e => {
+  col.addEventListener('drop', async e => {
     e.preventDefault(); col.style.outline = '';
     if (!drag) return;
     const stage = col.id.replace('col-', '');
-    col.appendChild(drag);
-    fetch(`/crm/api/leads/${drag.dataset.lead}/stage`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({stage})
-    });
+    const card = drag, from = card.parentElement;
+    if (from === col) return;
+    col.appendChild(card);
+    // bramki etapów: Stracony wymaga powodu, Wygrany umowy/potwierdzenia, daty i wartości — inaczej karta wraca
+    const ok = await crmStage(card.dataset.lead, stage);
+    if (!ok) from.appendChild(card);
   });
 });
 </script>

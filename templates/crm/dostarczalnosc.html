@@ -1,0 +1,22 @@
+{% extends "crm/base.html" %}
+{% block title %}Dostarczalność – RoboRent CRM{% endblock %}
+{% block page_title %}🛡️ Dostarczalność maili (SPF, DKIM, DMARC){% endblock %}
+{% block content %}
+<div class="panel" style="padding:14px 16px;max-width:1000px">
+  <p style="margin:0 0 10px;color:var(--muted);font-size:12.5px">Sprawdzenie rekordów DNS domen, z których wychodzą oferty (odczyt przez DNS Google, odświeżany co godzinę).
+    Bez poprawnych SPF, DKIM i DMARC duże firmy (np. Orange) częściej wrzucają oferty do spamu. Serwer SMTP CRM: <code>{{ r.smtp_host }}</code>.</p>
+  {% for d in r.rows %}
+  <div style="border-top:1px solid var(--border);padding:10px 0">
+    <b style="font-size:15px">{{ '✅' if d.ok else '⚠️' }} {{ d.domain }}</b>
+    <table style="margin-top:6px"><tr><th style="width:90px">SPF</th><td style="font-size:12px">{{ d.spf|join(' | ') if d.spf else '— brak —' }}</td></tr>
+      <tr><th>DKIM</th><td style="font-size:12px">{{ ('selektory: ' ~ d.dkim|join(', ')) if d.dkim else '— nie znaleziono pod typowymi selektorami —' }}</td></tr>
+      <tr><th>DMARC</th><td style="font-size:12px">{{ d.dmarc|join(' | ') if d.dmarc else '— brak —' }}</td></tr>
+      <tr><th>MX</th><td style="font-size:12px">{{ d.mx|join(', ') if d.mx else '—' }}</td></tr></table>
+    {% if d.tips %}<ul style="margin:6px 0 0 18px;font-size:12.5px;color:var(--yellow)">{% for t in d.tips %}<li>{{ t }}</li>{% endfor %}</ul>{% endif %}
+  </div>
+  {% endfor %}
+  <p style="margin:12px 0 0;color:var(--muted);font-size:12px">Śledzenie otwarć PDF: oferty wychodzą z CRM jako <b>załącznik</b>, nie jako link — otwarcia
+    nie da się zmierzyć bez dodania linku do maili klientów. Jeśli zdecydujecie się na link do oferty w mailu, CRM może zapisywać jego otwarcie
+    i po 24 h bez otwarcia tworzyć zadanie telefonu.</p>
+</div>
+{% endblock %}

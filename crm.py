@@ -13,6 +13,7 @@ import market as markets
 import offers
 import poczta
 import pricing
+import sales_rules
 
 try:
     from zoneinfo import ZoneInfo
@@ -102,11 +103,12 @@ STAGE_COLORS = {  # Kontakt/Negocjacje zostają tylko dla starych wpisów w hist
     "Stracony": "#6b7280",
 }
 
-ACTIVITY_KINDS = ["call", "email", "online", "meeting", "note"]
-ACTIVITY_KIND_ICONS = {"call": "📞", "email": "✉️", "online": "💻", "meeting": "🤝", "note": "📝"}
+ACTIVITY_KINDS = ["call", "sms", "email", "online", "meeting", "note"]
+ACTIVITY_KIND_ICONS = {"call": "📞", "sms": "💬", "email": "✉️", "online": "💻", "meeting": "🤝", "note": "📝",
+                       "decision": "⚖️"}
 ACTIVITY_KIND_LABELS = {
-    "call": "Telefon", "email": "E-mail", "online": "Prezentacja online",
-    "meeting": "Spotkanie na żywo", "note": "Notatka",
+    "call": "Telefon", "sms": "SMS", "email": "E-mail", "online": "Prezentacja online",
+    "meeting": "Spotkanie na żywo", "note": "Notatka", "decision": "Decyzja",
 }
 
 ROBOT_MODELS = [
@@ -155,6 +157,14 @@ class Lead(db.Model):
     clickup_task_id = db.Column(db.String(64), nullable=True)
     clickup_pending = db.Column(db.Boolean, default=False)  # True = czeka w zakładce "Z ClickUp"
     lt_mail_at = db.Column(db.DateTime, nullable=True)  # wysłany mail do litewskiego leada (prośba o dane)
+    # proces sprzedaży (sales_rules.py): typ klienta, kraj, powód straty, potwierdzenie wygranej, telefon potwierdzający
+    client_type = db.Column(db.String(20), nullable=True)  # firma | prywatna | agencja | partner
+    country = db.Column(db.String(4), nullable=True)  # pusty = kraj rynku (LT / DE)
+    lost_reason = db.Column(db.String(30), nullable=True)
+    lost_comment = db.Column(db.Text, nullable=True)
+    win_confirmation = db.Column(db.String(20), nullable=True)  # umowa | mail
+    call_answers = db.Column(db.Text, nullable=True)  # JSON: odpowiedzi z telefonu potwierdzającego
+    response_alert_at = db.Column(db.DateTime, nullable=True)  # kiedy CRM zgłosił przekroczony czas reakcji
     form_token = db.Column(db.String(40), nullable=True, index=True)  # link do formularza dla klienta
     form_filled_at = db.Column(db.DateTime, nullable=True)  # klient wypełnił formularz
     handled_at = db.Column(db.DateTime, nullable=True)  # lead obsłużony (telefon / mail / oferta) — znika z alarmu
@@ -202,6 +212,7 @@ class Activity(db.Model):
     assigned_to = db.Column(db.Integer, default=1)
     notes = db.Column(db.Text)
     voice_note = db.Column(db.Text, nullable=True)  # data: URL nagranej wiadomości głosowej (komentarze)
+    outcome = db.Column(db.String(20), nullable=True)  # wynik kontaktu: odebral | nie_odebral | odpisal | bez_odpowiedzi
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
@@ -227,6 +238,8 @@ class StageHistory(db.Model):
     to_stage = db.Column(db.String(50), nullable=False)
     changed_by = db.Column(db.Integer)
     changed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reason = db.Column(db.String(30), nullable=True)  # powód straty / potwierdzenie wygranej przy tej zmianie
+    note = db.Column(db.Text, nullable=True)
 
     lead = db.relationship(
         "Lead",
@@ -561,6 +574,16 @@ def ensure_schema():
         for col, typ in (("handled_at", "TIMESTAMP NULL"), ("handled_by", "INTEGER"), ("handled_how", "VARCHAR(40)")):
             if col not in cols:
                 conn.exec_driver_sql(f"ALTER TABLE leads ADD COLUMN {col} {typ}")
+        # proces sprzedaży — tylko nowe kolumny (cofnięcie: docs/MIGRACJE.md)
+        for col, typ in (("client_type", "VARCHAR(20)"), ("country", "VARCHAR(4)"), ("lost_reason", "VARCHAR(30)"),
+                         ("lost_comment", "TEXT"), ("win_confirmation", "VARCHAR(20)"), ("call_answers", "TEXT"),
+                         ("response_alert_at", "TIMESTAMP NULL")):
+            if col not in cols:
+                conn.exec_driver_sql(f"ALTER TABLE leads ADD COLUMN {col} {typ}")
+        sh_cols = [c["name"] for c in db.inspect(db.engine).get_columns("stage_history")]
+        for col, typ in (("reason", "VARCHAR(30)"), ("note", "TEXT")):
+            if col not in sh_cols:
+                conn.exec_driver_sql(f"ALTER TABLE stage_history ADD COLUMN {col} {typ}")
         if "pl_id" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN pl_id INTEGER")
         if "pl_copy_id" not in cols:
@@ -600,6 +623,8 @@ def ensure_schema():
         act_cols = [c["name"] for c in act_cols_full]
         if "voice_note" not in act_cols:
             conn.exec_driver_sql("ALTER TABLE activities ADD COLUMN voice_note TEXT NULL")
+        if "outcome" not in act_cols:
+            conn.exec_driver_sql("ALTER TABLE activities ADD COLUMN outcome VARCHAR(20) NULL")
         # lead_id przestało być wymagane (zadania własne, bez firmy) — stare bazy mają NOT NULL
         lead_id_col = next((c for c in act_cols_full if c["name"] == "lead_id"), None)
         if lead_id_col is not None and not lead_id_col["nullable"]:
@@ -639,8 +664,10 @@ def ensure_schema():
     # backfill: leady z ustawionym event_date sprzed wprowadzenia tabeli konkretnych dni
     # (albo nietknięte od tamtej pory) nie mają jeszcze wpisów w event_days — bez tego
     # znikałyby z kalendarza, bo ten czyta wyłącznie z tej tabeli
-    MAX_BACKFILL_DAYS = 366
+    MAX_BACKFILL_DAYS = sales_rules.MAX_EVENT_DAYS  # dawniej 366 — zakres 0002…2026 rozpisywał się na setki dni
     for lead in Lead.query.filter(Lead.event_date.isnot(None)).filter(~Lead.event_days.any()).all():
+        if not sane_event_date(lead.event_date) or (lead.event_end_date and not sane_event_date(lead.event_end_date)):
+            continue  # literówka w roku — do ręcznej poprawy (raport „Porządki w danych”), nie rozpisujemy
         start = lead.event_date.date()
         end = lead.event_end_date.date() if lead.event_end_date else start
         if end < start:
@@ -930,21 +957,104 @@ def pending_activities(lead):
 ACTIVE_STAGES = [s for s in STAGES if s not in WON_STAGES + ("Stracony",)]
 
 
-def record_stage_change(lead, new_stage, actor_id):
-    """Zmień etap leada i zapisz wpis w historii. Zwraca True, gdy etap się zmienił."""
+def record_stage_change(lead, new_stage, actor_id, reason=None, note=None):
+    """Zmień etap leada i zapisz wpis w historii. Zwraca True, gdy etap się zmienił.
+    Bez bramek — to robią automaty CRM; zmiany od ludzi (UI, API, MCP) idą przez gated_stage_change."""
     if new_stage not in STAGES or new_stage == lead.stage:
         return False
     db.session.add(StageHistory(
-        lead_id=lead.id, from_stage=lead.stage, to_stage=new_stage, changed_by=actor_id,
+        lead_id=lead.id, from_stage=lead.stage, to_stage=new_stage, changed_by=actor_id, reason=reason, note=note,
     ))
     if new_stage == "Wygrany" and lead.stage != "Zrealizowany":
         lead.contract_signed = False  # świeża wygrana — umowa jeszcze do podpisania
+    if lead.stage == "Stracony" and new_stage != "Stracony":
+        lead.lost_reason = lead.lost_comment = None  # wrócił do gry (powód zostaje w historii etapów)
     lead.stage = new_stage
     if new_stage == "Oferta":
         ensure_followup_call(lead)  # oferta poszła (z CRM albo mailem poza nim) — za tydzień telefon
     if new_stage == "Wygrany":
         ensure_journey(lead)  # wygrany wpada do Customer Journey (umowa do wysłania)
     return True
+
+
+def last_sent_offer_value(lead):
+    """Kwota ostatniej wysłanej oferty (z PDF) — do ostrzeżenia, gdy wartość leada jest inna (przypadek VULCAN)."""
+    if not lead or not lead.id:
+        return None
+    o = (SentOffer.query.filter(SentOffer.lead_id == lead.id, SentOffer.sent_at.isnot(None))
+         .order_by(SentOffer.sent_at.desc()).first())
+    return offer_value(o)[0] if o else None
+
+
+def client_type_hint(lead):
+    """(klucz, etykieta, uzasadnienie) podpowiedzi typu klienta — dla UI, MCP i automatów."""
+    key, why = sales_rules.suggest_client_type(lead.company, lead.contact_name, lead.emails, getattr(lead, "nip", None),
+                                               lead.notes)
+    return key, sales_rules.CLIENT_TYPES[key], why
+
+
+def lead_country(lead):
+    """Kraj leada: wpisany ręcznie albo podpowiedź (faktura, język klienta, domena, waluta, miejsce)."""
+    if lead.country:
+        return lead.country
+    if getattr(lead, "market", None) in markets.MARKETS:  # CRM LT/DE: kraj = rynek leada
+        return lead.market.upper()
+    places = " ".join([lead.location or ""] + [d.location or "" for d in lead.event_days])
+    return sales_rules.suggest_country(places, lead.currency, lead.emails, lead.contact_phone, lead.billing_country,
+                                       lead_language(lead))
+
+
+def gate_form_data(src):
+    """Pola bramek etapów z formularza / JSON / narzędzia MCP."""
+    keys = ("lost_reason", "lost_comment", "win_confirmation", "client_type", "confirm_warning")
+    return {k: (str(src.get(k)).strip() if src.get(k) is not None else "") for k in keys}
+
+
+def stage_gate_check(lead, new_stage, data):
+    gate = {"need": [], "errors": [], "warnings": [], "message": ""}
+    if sales_rules.gates_enabled(os.environ) and new_stage in STAGES and new_stage != lead.stage:
+        gate = sales_rules.stage_gate(lead, new_stage, data, event_dates=[d.event_date for d in lead.event_days],
+                                      last_offer_value=last_sent_offer_value(lead),
+                                      contract_signed=bool(lead.contract_signed))
+    key, label, why = client_type_hint(lead)
+    gate["hint"] = {"client_type": key, "client_type_label": label, "why": why}
+    return gate
+
+
+def gated_stage_change(lead, new_stage, actor_id, data=None):
+    """Zmiana etapu przez człowieka (UI, API, MCP) — z bramkami procesu sprzedaży. Zwraca dict bramki;
+    changed=True gdy etap zmieniony, message = czytelny powód odmowy po polsku."""
+    new_stage = REMOVED_STAGES.get(new_stage, new_stage)
+    data = data or {}
+    if new_stage not in STAGES or new_stage == lead.stage:
+        return {"need": [], "errors": [], "warnings": [], "message": "", "changed": False}
+    gate = stage_gate_check(lead, new_stage, data)
+    if gate["message"]:
+        gate["changed"] = False
+        return gate
+    ct = data.get("client_type")
+    if ct in sales_rules.CLIENT_TYPES:
+        lead.client_type = ct
+    reason, note = None, None
+    if new_stage == "Stracony":
+        lead.lost_reason = data.get("lost_reason") or None
+        lead.lost_comment = (data.get("lost_comment") or "").strip() or None
+        reason, note = lead.lost_reason, lead.lost_comment
+    conf = None
+    if new_stage in WON_STAGES and lead.stage not in WON_STAGES:
+        conf = data.get("win_confirmation") if data.get("win_confirmation") in sales_rules.WIN_CONFIRMATIONS else (
+            "umowa" if lead.contract_signed else None)
+        lead.win_confirmation = conf
+        reason = conf
+    record_stage_change(lead, new_stage, actor_id, reason=reason, note=note)
+    if conf == "umowa" and lead.stage in WON_STAGES:  # umowa już podpisana — Customer Journey tego nie zgubi
+        j = ensure_journey(lead) if lead.stage in JOURNEY_STAGES else None
+        if j is not None:
+            journey_set_contract(j, lead, "podpisana", via="przy wygranej")
+        else:
+            lead.contract_signed = True
+    gate["changed"] = True
+    return gate
 
 
 FOLLOWUP_CALL_DAYS = 7
@@ -959,6 +1069,11 @@ def ensure_followup_call(lead, sent_on=None, days=FOLLOWUP_CALL_DAYS, after="ofe
     today = to_local(datetime.utcnow()).date()
     sent_on = sent_on or today
     due = datetime.combine(max(sent_on + timedelta(days=days), today), datetime.min.time())
+    # telefon potwierdzający: firma / agencja / partner albo oferta od 10 000 zł → następny dzień roboczy
+    confirm = after == "ofercie wysłanej" and sales_rules.needs_confirm_call(lead.client_type,
+                                                                             to_pln(lead.value_pln, lead.currency))
+    if confirm:
+        due = datetime.combine(max(sales_rules.next_work_day(sent_on), today), datetime.min.time())
     # zapytanie, nie lead.activities — widzi też zadania dodane przed chwilą w tej samej sesji
     calls = Activity.query.filter(
         Activity.lead_id == lead.id, Activity.kind == "call", Activity.done.isnot(True)).all()
@@ -967,10 +1082,33 @@ def ensure_followup_call(lead, sent_on=None, days=FOLLOWUP_CALL_DAYS, after="ofe
     act = calls[0] if calls else Activity(lead_id=lead.id, kind="call")
     act.due_date = due
     act.assigned_to = lead.assigned_to or USERS[0]["id"]
-    act.notes = f"{AUTO_CALL_PREFIX} po {after} {sent_on:%d.%m} — zapytaj o decyzję i pytania do oferty."
+    if confirm:
+        questions = " ".join(f"{i}) {q}" for i, (_k, q) in enumerate(sales_rules.CONFIRM_QUESTIONS, 1))
+        act.notes = (f"{AUTO_CALL_PREFIX} — {sales_rules.CONFIRM_CALL_PREFIX} po ofercie z {sent_on:%d.%m} "
+                     f"(dzwonimy {sales_rules.CALL_HOURS}). Zapytaj: {questions}")
+    else:
+        act.notes = f"{AUTO_CALL_PREFIX} po {after} {sent_on:%d.%m} — zapytaj o decyzję i pytania do oferty."
     if not calls:
         db.session.add(act)
     return act
+
+
+DEFAULT_RATES = {"PLN": 1.0, "EUR": 4.25, "USD": 3.9, "GBP": 5.0}  # domyślne — kurs EUR bierzemy z NBP (P3)
+
+
+def currency_rate(cur):
+    """Ile zł za 1 jednostkę waluty: ustawienie fx_<WAL> (panel skuteczności / NBP), inaczej domyślny."""
+    cur = (cur or "PLN").upper()
+    if cur == "PLN":
+        return 1.0
+    try:
+        return float(get_setting(f"fx_{cur}") or DEFAULT_RATES.get(cur, 1.0))
+    except (TypeError, ValueError):
+        return DEFAULT_RATES.get(cur, 1.0)
+
+
+def to_pln(value, cur):
+    return float(value or 0) * currency_rate(cur)
 
 
 def backfill_next_steps():
@@ -1058,6 +1196,8 @@ def _realize_scheduler():
             with app.app_context():
                 auto_realize_leads()
                 auto_merge_duplicates()
+                if os.environ.get("SALES_AUTOMATION", "1") != "0":
+                    sales_automation_pass()
                 db.session.remove()
         except Exception:
             pass
@@ -1080,6 +1220,10 @@ def inject_globals():
         "currencies": CURRENCIES,
         "sum_by_currency": sum_by_currency,
         "quality_levels": QUALITY_LEVELS,
+        "client_types": sales_rules.CLIENT_TYPES,
+        "lost_reasons": sales_rules.LOST_REASONS,
+        "win_confirmations": sales_rules.WIN_CONFIRMATIONS,
+        "countries": sales_rules.COUNTRIES,
         "quality_colors": QUALITY_COLORS,
         "quality_icons": QUALITY_ICONS,
         "activity_kinds": ACTIVITY_KINDS,
@@ -1239,6 +1383,8 @@ def set_lead_event_days(lead, days, locations=None):
     (najwcześniejszy/najpóźniejszy dzień) oraz rental_days (liczba wybranych dni)
     — używane w kalendarzu i dashboardzie."""
     locations = locations or {}
+    existing = [d.event_date for d in lead.event_days] if lead.id else []
+    days, _dropped, warnings, _blocked = sales_rules.check_new_event_days(existing, days)
     lead.event_days = [LeadEventDate(event_date=d, location=locations.get(d)) for d in days]
     if days:
         lead.event_date = datetime.combine(days[0], datetime.min.time())
@@ -1247,6 +1393,7 @@ def set_lead_event_days(lead, days, locations=None):
     else:
         lead.event_date = None
         lead.event_end_date = None
+    return warnings
 
 
 # ---------- CODZIENNY RAPORT E-MAIL ----------
@@ -1791,7 +1938,20 @@ def _closing_entry(lead, history=None):
     return found
 
 
-def closed_lead_events():
+def own_leads():
+    """W CRM LT/DE wszystkie leady są własne (kopie z innych CRM są tylko w CRM PL)."""
+    return db.true()
+
+
+def is_market_copy(lead):
+    return False
+
+
+def foreign_market(lead):
+    return None
+
+
+def closed_lead_events(include_copies=False):
     """Leady zamknięte wg ich OBECNEGO etapu: [(lead, "Wygrany"|"Stracony", kiedy)] (czas
     warszawski). Zrealizowany liczy się jako wygrany, z datą wygranej. Lead wygrany, a potem
     przeniesiony na Stracony, liczy się tylko jako stracony (w miesiącu straty); lead cofnięty
@@ -1805,6 +1965,158 @@ def closed_lead_events():
         if entry:
             out.append((lead, "Wygrany" if lead.stage in WON_STAGES else lead.stage, to_local(entry.changed_at)))
     return out
+
+
+# ---------- PANEL SKUTECZNOŚCI (P3) ----------
+SALES_TARGETS_KEY = "sales_targets"
+DEFAULT_SALES_TARGETS = {
+    "PL": {"cur": "PLN", "realny": 150000, "ambitny": 200000},
+    "DE": {"cur": "EUR", "realny": 30000},
+    "LT": {"cur": "EUR", "realny": 15000},
+}
+PANEL_COUNTRIES = ("PL", "DE", "LT", "RO")
+BIG_DEAL_PLN = 10000
+
+
+def sales_targets():
+    try:
+        t = json.loads(get_setting(SALES_TARGETS_KEY) or "{}")
+    except ValueError:
+        t = {}
+    out = {k: dict(v) for k, v in DEFAULT_SALES_TARGETS.items()}
+    for k, v in t.items():
+        if isinstance(v, dict):
+            out.setdefault(k, {}).update(v)
+    return out
+
+
+def refresh_eur_rate():
+    """Kurs EUR z NBP (tabela A) raz dziennie — tylko odczyt z api.nbp.pl. Ręcznie wpisany kurs ma pierwszeństwo."""
+    if get_setting("fx_EUR_manual") == "1" or get_setting("fx_EUR_date") == date.today().isoformat():
+        return
+    try:
+        import urllib.request
+        with urllib.request.urlopen("https://api.nbp.pl/api/exchangerates/rates/a/eur/?format=json", timeout=6) as r:
+            rate = float(json.loads(r.read().decode())["rates"][0]["mid"])
+        if 3.0 < rate < 7.0:
+            set_setting("fx_EUR", f"{rate:.4f}")
+            set_setting("fx_EUR_date", date.today().isoformat())
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _median(xs):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else round((xs[m - 1] + xs[m]) / 2)
+
+
+def build_sales_panel(period_days=90, today=None):
+    """Panel skuteczności: wygrane wg miesiąca zamknięcia i kraju na tle celów (z prognozą), skuteczność wg typu
+    klienta i opiekuna, powody strat, mediana czasu reakcji, anulacje po wygranej, duże otwarte leady.
+    Liczy z tych samych funkcji co Statystyki (closed_lead_events) — wspólne dla strony i MCP."""
+    today = today or to_local(datetime.utcnow()).date()
+    rate = currency_rate("EUR")
+    targets = sales_targets()
+    events = closed_lead_events(include_copies=True)
+    months = []
+    y, m = today.year, today.month
+    for _ in range(6):
+        months.append((y, m))
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    months.reverse()
+
+    def in_cur(lead, cur):
+        pln = to_pln(lead.value_pln, lead.currency)
+        return pln if cur == "PLN" else pln / rate
+
+    won = {}
+    for lead, stage, when in events:
+        if stage != "Wygrany":
+            continue
+        c = lead_country(lead)
+        c = c if c in PANEL_COUNTRIES else "INNE"
+        k = (when.year, when.month)
+        won.setdefault((c, k), {"pln": 0.0, "count": 0, "leads": []})
+        won[(c, k)]["pln"] += to_pln(lead.value_pln, lead.currency)
+        won[(c, k)]["count"] += 1
+        won[(c, k)]["leads"].append(lead)
+    import calendar as _cal
+    dim = _cal.monthrange(today.year, today.month)[1]
+    countries = []
+    for c in PANEL_COUNTRIES + ("INNE",):
+        t = targets.get(c, {})
+        cur = t.get("cur") or ("PLN" if c in ("PL", "INNE") else "EUR")
+        rows = []
+        for k in months:
+            w = won.get((c, k), {"pln": 0.0, "count": 0, "leads": []})
+            val = w["pln"] if cur == "PLN" else w["pln"] / rate
+            rows.append({"month": f"{k[0]}-{k[1]:02d}", "value": round(val), "count": w["count"],
+                         "pct": round(100 * val / t["realny"]) if t.get("realny") else None})
+        cur_val = rows[-1]["value"]
+        forecast = round(cur_val * dim / max(1, today.day))
+        if not any(r["count"] for r in rows) and c not in targets:
+            continue
+        countries.append({"code": c, "name": sales_rules.COUNTRIES.get(c, "Inne"), "cur": cur, "rows": rows,
+                          "target": t.get("realny"), "ambitious": t.get("ambitny"), "current": cur_val,
+                          "forecast": forecast,
+                          "forecast_pct": round(100 * forecast / t["realny"]) if t.get("realny") else None})
+    total_pln = sum(w["pln"] for (c, k), w in won.items() if k == months[-1])
+
+    since = today - timedelta(days=period_days)
+    closed = [(l, st, w) for l, st, w in events if w.date() >= since]
+
+    def group(keyf, labels):
+        out = {}
+        for lead, st, _w in closed:
+            g = out.setdefault(keyf(lead), {"won": 0, "lost": 0, "won_pln": 0.0})
+            if st == "Wygrany":
+                g["won"] += 1
+                g["won_pln"] += to_pln(lead.value_pln, lead.currency)
+            else:
+                g["lost"] += 1
+        return [{"key": k, "label": labels.get(k, k or "nie ustawiono"), "won": v["won"], "lost": v["lost"],
+                 "rate": round(100 * v["won"] / (v["won"] + v["lost"])) if v["won"] + v["lost"] else None,
+                 "won_pln": round(v["won_pln"])} for k, v in sorted(out.items(), key=lambda kv: -(kv[1]["won"] + kv[1]["lost"]))]
+
+    by_type = group(lambda l: l.client_type or "", sales_rules.CLIENT_TYPES)
+    by_owner = group(lambda l: str(l.assigned_to or ""), {str(u["id"]): u["name"] for u in USERS})
+    reasons = {}
+    for lead, st, _w in closed:
+        if st == "Stracony":
+            k = lead.lost_reason or ""
+            reasons[k] = reasons.get(k, 0) + 1
+    reasons = [{"key": k, "label": sales_rules.LOST_REASONS.get(k, "brak powodu (sprzed obowiązkowego pola)"), "count": n}
+               for k, n in sorted(reasons.items(), key=lambda kv: -kv[1])]
+    created = [l for l in Lead.query.filter(Lead.created_at >= datetime.combine(since, datetime.min.time()),
+                                            Lead.handled_at.isnot(None), Lead.clickup_pending.isnot(True), own_leads()).all()]
+    resp = [lead_response_minutes(l) for l in created]
+    resp = [r for r in resp if r is not None]
+    cancels = []
+    for h in StageHistory.query.filter(StageHistory.to_stage == "Stracony", StageHistory.from_stage.in_(WON_STAGES),
+                                       StageHistory.changed_at >= datetime.combine(since, datetime.min.time())).all():
+        if h.lead is not None:
+            cancels.append({"lead": h.lead, "when": to_local(h.changed_at), "reason": sales_rules.LOST_REASONS.get(h.reason or "", ""),
+                            "pln": round(to_pln(h.lead.value_pln, h.lead.currency))})
+    big = []
+    for lead in Lead.query.filter(Lead.stage.in_(ACTIVE_STAGES), Lead.clickup_pending.isnot(True), own_leads()).all():
+        pln = to_pln(lead.value_pln, lead.currency)
+        if pln >= BIG_DEAL_PLN:
+            nxt = min((a.due_date for a in lead.activities if not a.done and a.kind != "note" and a.due_date), default=None)
+            big.append({"lead": lead, "pln": round(pln), "next": nxt})
+    big.sort(key=lambda x: (x["next"] is not None, x["next"] or datetime.min, -x["pln"]))
+    return {"months": [f"{y}-{m:02d}" for y, m in months], "countries": countries, "total_pln_current": round(total_pln),
+            "rate": rate, "rate_date": get_setting("fx_EUR_date") or "", "period_days": period_days,
+            "by_type": by_type, "by_owner": by_owner, "reasons": reasons,
+            "response": {"median": _median(resp), "count": len(resp), "target": sales_rules.RESPONSE_TARGET_MIN,
+                         "within": round(100 * sum(1 for r in resp if r <= sales_rules.RESPONSE_TARGET_MIN) / len(resp)) if resp else None},
+            "cancels": cancels, "cancel_pln": sum(c["pln"] for c in cancels), "big_open": big,
+            "day": today.day, "days_in_month": dim}
 
 
 def lead_closed_on(lead):
@@ -2100,15 +2412,208 @@ def api_activities():
     return jsonify(events)
 
 
+def is_confirm_call(a):
+    return a is not None and a.kind == "call" and sales_rules.CONFIRM_CALL_PREFIX in (a.notes or "")
+
+
+def complete_activity(a, user_id, outcome=None, answers=None):
+    """Odhacza zadanie (UI, API, MCP). Telefon / SMS / mail przy leadzie wymaga wyniku kontaktu, a telefon
+    potwierdzający po ofercie (odebrany) — odpowiedzi na 4 pytania; zapisują się w leadzie.
+    Zwraca None albo dict błędu {"error", "need_outcome", ...} (nic nie zmienione)."""
+    outcome = (outcome or "").strip() or None
+    answers = {k: str(v).strip() for k, v in (answers or {}).items() if str(v or "").strip()}
+    confirm = is_confirm_call(a)
+    if a.lead_id and a.kind in sales_rules.OUTCOME_KINDS and sales_rules.gates_enabled(os.environ):
+        allowed = ("odebral", "nie_odebral") if a.kind == "call" else ("odpisal", "bez_odpowiedzi")
+        if outcome not in allowed:
+            return {"error": "Podaj wynik kontaktu: " + " / ".join(sales_rules.OUTCOMES[o] for o in allowed),
+                    "need_outcome": True, "kind": a.kind, "confirm": confirm,
+                    "outcomes": {o: sales_rules.OUTCOMES[o] for o in allowed},
+                    "questions": dict(sales_rules.CONFIRM_QUESTIONS) if confirm else {}}
+        if confirm and outcome == "odebral":
+            missing = [q for k, q in sales_rules.CONFIRM_QUESTIONS if not answers.get(k)]
+            if missing:
+                return {"error": "Telefon potwierdzający: wpisz odpowiedzi — " + "; ".join(missing),
+                        "need_outcome": True, "kind": a.kind, "confirm": True, "outcomes": {"odebral": "Odebrał", "nie_odebral": "Nie odebrał"},
+                        "questions": dict(sales_rules.CONFIRM_QUESTIONS)}
+    a.done, a.done_at, a.outcome = True, datetime.utcnow(), outcome
+    if confirm and outcome == "odebral" and a.lead:
+        who = USERS_BY_ID.get(user_id, {}).get("name", "")
+        a.lead.call_answers = json.dumps(dict(answers, at=f"{to_local(datetime.utcnow()):%d.%m.%Y}", by=who), ensure_ascii=False)
+        db.session.add(Activity(
+            lead_id=a.lead_id, kind="note", done=True, done_at=datetime.utcnow(), assigned_to=user_id,
+            notes="📞 Telefon potwierdzający — " + "; ".join(f"{q} {answers.get(k, '—')}" for k, q in sales_rules.CONFIRM_QUESTIONS)))
+    after_contact_outcome(a, user_id)
+    return None
+
+
+def lead_contact_events(lead):
+    """Próby kontaktu leada: [(kiedy, "fail"/"success")]. Nieudane: telefon nieodebrany (wynik albo 📵),
+    SMS / mail bez odpowiedzi. Udane: odebrany telefon, spotkanie, odpowiedź klienta (też mail od klienta w Poczcie)."""
+    ev = []
+    for a in lead.activities:
+        for c in getattr(a, "comments", []) or []:
+            if (c.text or "").startswith("📵 Nie odebrał"):
+                ev.append((c.created_at, "fail"))
+        if not a.done:
+            continue
+        when = a.done_at or a.created_at
+        notes = a.notes or ""
+        if a.outcome in sales_rules.FAILED_OUTCOMES or notes.startswith("📵"):
+            ev.append((when, "fail"))
+        elif a.outcome in sales_rules.SUCCESS_OUTCOMES or (a.kind in ("call", "meeting", "online") and not a.outcome):
+            ev.append((when, "success"))
+    try:
+        q = mail_query_for_addrs(lead.emails)
+        last_in = q.filter(MailMessage.folder == "in").order_by(MailMessage.date.desc()).first() if q is not None else None
+        if last_in is not None and last_in.date:
+            ev.append((last_in.date, "success"))
+    except Exception:
+        db.session.rollback()
+    return ev
+
+
+def lead_failed_attempts(lead):
+    """Nieudane próby kontaktu z rzędu (od ostatniego udanego kontaktu)."""
+    return sales_rules.contact_attempts(lead_contact_events(lead)) if lead and lead.id else 0
+
+
+def check_contact_limit(lead, actor_id=None):
+    """Po CONTACT_ATTEMPT_LIMIT nieudanych próbach: zadanie „Zdecyduj” dla opiekuna (bez automatycznej straty
+    i bez żadnej wysyłki). Jedno na serię prób. Zwraca zadanie albo None."""
+    if not lead or lead.stage not in ACTIVE_STAGES or is_market_copy(lead):
+        return None
+    ev = lead_contact_events(lead)
+    n = sales_rules.contact_attempts(ev)
+    if n < sales_rules.CONTACT_ATTEMPT_LIMIT:
+        return None
+    last_fail = max((w for w, k in ev if k == "fail" and w), default=None)
+    exists = Activity.query.filter(Activity.lead_id == lead.id, Activity.kind == "decision").filter(
+        db.or_(Activity.done.isnot(True), Activity.created_at >= (last_fail or datetime.min))).first()
+    if exists:
+        return None
+    act = Activity(lead_id=lead.id, kind="decision", assigned_to=lead.assigned_to or actor_id or USERS[0]["id"],
+                   due_date=datetime.combine(to_local(datetime.utcnow()).date(), datetime.min.time()),
+                   notes=f"{sales_rules.DECIDE_PREFIX}: {n} nieudane próby kontaktu z rzędu. Zamknij jako Stracony "
+                         f"(powód: brak kontaktu) albo zaplanuj inny kanał / termin.")
+    db.session.add(act)
+    return act
+
+
+def after_contact_outcome(a, user_id):
+    """Po wyniku kontaktu: nieodebrany telefon → kolejna próba jutro (jeśli nie ma zaplanowanej),
+    a po limicie prób — zadanie „Zdecyduj”."""
+    if not a.lead_id or a.outcome not in sales_rules.FAILED_OUTCOMES:
+        return None
+    db.session.flush()
+    lead = db.session.get(Lead, a.lead_id)
+    db.session.expire(lead, ["activities"])
+    decide = check_contact_limit(lead, user_id)
+    if decide is None and a.kind == "call":
+        has_call = Activity.query.filter(Activity.lead_id == lead.id, Activity.kind == "call",
+                                         Activity.done.isnot(True)).first()
+        if not has_call:
+            n = lead_failed_attempts(lead)
+            db.session.add(Activity(lead_id=lead.id, kind="call", assigned_to=lead.assigned_to or user_id,
+                                    due_date=datetime.combine(sales_rules.next_work_day(date.today()), datetime.min.time()),
+                                    notes=f"Zadzwonić ponownie ({n + 1}. próba, nie odebrał)"))
+    return decide
+
+
+def private_price_text(lead):
+    """Cena pakietu z kalkulatora rynku (EUR, z ceną minimalną) dla leada; bez danych — od ceny minimalnej rynku."""
+    try:
+        q = lt_quote(lead, remote_budget=1)
+        if q.get("price"):
+            return f"robot z operatorem za {q['price']:,} € netto (z dojazdem)".replace(",", " ")
+    except Exception:
+        pass
+    return f"robot z operatorem od {pricing.rates(lead_market(lead)).get('min', 1900):,.0f} € netto + dojazd".replace(",", " ")
+
+
+def sales_automation_pass():
+    """Automaty procesu sprzedaży (co 10 min, w tle). Tylko wewnętrzne zadania i szkice — NIC nie wysyłają:
+    1) szkic pierwszej odpowiedzi dla nowych osób prywatnych (do sprawdzenia i wysłania przez człowieka),
+    2) telefon, gdy prywatny klient odpisał na pierwszą odpowiedź,
+    3) zadanie „Zdecyduj” po limicie nieudanych prób kontaktu,
+    4) zapis przekroczenia czasu reakcji (alert w oknie nowych leadów)."""
+    now = datetime.utcnow()
+    today0 = datetime.combine(to_local(now).date(), datetime.min.time())
+    made = {"drafts": 0, "reply_calls": 0, "decide": 0, "late": 0}
+    # 1) osoby prywatne — szkic pierwszej odpowiedzi
+    for lead in Lead.query.filter(Lead.stage == "Nowy", Lead.created_at >= now - timedelta(days=3),
+                                  Lead.handled_at.is_(None), Lead.clickup_pending.isnot(True), own_leads()).all():
+        if not lead.emails or foreign_market(lead) or (lead.client_type or client_type_hint(lead)[0]) != "prywatna":
+            continue
+        if Activity.query.filter(Activity.lead_id == lead.id,
+                                 Activity.notes.like(sales_rules.PRIVATE_DRAFT_PREFIX + "%")).first():
+            continue
+        owner = USERS_BY_ID.get(lead.assigned_to) or USERS[0]
+        subject, body = sales_rules.private_draft(lead.company, lead.contact_name, private_price_text(lead), lead.location,
+                                                  [d.event_date for d in lead.event_days], owner.get("full_name", ""),
+                                                  owner.get("phone", ""))
+        db.session.add(Activity(lead_id=lead.id, kind="email", due_date=today0, assigned_to=owner["id"],
+                                notes=f"{sales_rules.PRIVATE_DRAFT_PREFIX} — szkic gotowy, NIC nie poszło do klienta. "
+                                      f"Sprawdź i wyślij: Poczta → „Otwórz szkic”.\nTemat: {subject}\n---\n{body}"))
+        made["drafts"] += 1
+    db.session.commit()
+    # 2) prywatny klient odpisał po naszej pierwszej odpowiedzi → telefon (dopiero teraz)
+    for d in Activity.query.filter(Activity.notes.like(sales_rules.PRIVATE_DRAFT_PREFIX + "%"), Activity.done.is_(True),
+                                   Activity.done_at >= now - timedelta(days=30)).all():
+        lead = d.lead
+        if not lead or lead.stage not in ACTIVE_STAGES:
+            continue
+        q = mail_query_for_addrs(lead.emails)
+        reply = q.filter(MailMessage.folder == "in", MailMessage.date > d.done_at).first() if q is not None else None
+        if reply is None or Activity.query.filter(Activity.lead_id == lead.id, Activity.notes.like(sales_rules.REPLY_CALL_PREFIX + "%")).first():
+            continue
+        db.session.add(Activity(lead_id=lead.id, kind="call", assigned_to=lead.assigned_to or d.assigned_to, due_date=today0,
+                                notes=f"{sales_rules.REPLY_CALL_PREFIX} na pierwszą odpowiedź ({to_local(reply.date):%d.%m %H:%M}) — "
+                                      "zadzwoń i domknij termin, godziny i budżet."))
+        made["reply_calls"] += 1
+    db.session.commit()
+    # 3) limit prób kontaktu
+    for lead in Lead.query.filter(Lead.stage.in_(ACTIVE_STAGES), Lead.clickup_pending.isnot(True), own_leads(),
+                                  Lead.id.in_(db.session.query(Activity.lead_id).filter(
+                                      Activity.done.is_(True), Activity.done_at >= now - timedelta(days=60),
+                                      db.or_(Activity.outcome.in_(sales_rules.FAILED_OUTCOMES), Activity.notes.like("📵%"))))).all():
+        if check_contact_limit(lead):
+            made["decide"] += 1
+    db.session.commit()
+    # 4) przekroczony czas reakcji — zapis (alert pokazuje okno nowych leadów)
+    for lead in [l for code in markets.MARKETS for l in unhandled_leads(code)]:
+        if lead.response_alert_at is None and (lead_response_minutes(lead) or 0) > sales_rules.RESPONSE_TARGET_MIN:
+            lead.response_alert_at = now
+            made["late"] += 1
+    db.session.commit()
+    return made
+
+
+def lead_response_minutes(lead):
+    """Czas reakcji w minutach pracy (pn–pt 8–18): od wpłynięcia zapytania do pierwszej odpowiedzi (lead obsłużony);
+    nieobsłużony — ile już czeka. None dla leadów sprzed alarmu nowych leadów."""
+    if not lead or not lead.created_at:
+        return None
+    end = lead.handled_at or datetime.utcnow()
+    return sales_rules.working_minutes(to_local(lead.created_at).replace(tzinfo=None), to_local(end).replace(tzinfo=None))
+
+
 @app.route("/crm/api/activity/<int:aid>/done", methods=["POST"])
 def api_mark_done(aid):
     a = db.session.get(Activity, aid)
     if not a:
         abort(404)
-    a.done = not a.done
-    a.done_at = datetime.utcnow() if a.done else None
+    data = request.get_json(silent=True) or {}
+    if a.done:  # cofnięcie odhaczenia
+        a.done, a.done_at, a.outcome = False, None, None
+        db.session.commit()
+        return jsonify({"ok": True, "done": False})
+    err = complete_activity(a, get_current_user(request)["id"], data.get("outcome"), data.get("answers"))
+    if err:
+        db.session.rollback()
+        return jsonify(dict(err, ok=False)), 422
     db.session.commit()
-    return jsonify({"ok": True, "done": a.done})
+    return jsonify({"ok": True, "done": True})
 
 
 @app.route("/crm/api/activity/<int:aid>/assign", methods=["POST"])
@@ -2143,6 +2648,12 @@ def api_no_answer(aid):
     ))
     tomorrow = datetime.combine(date.today() + timedelta(days=1), datetime.min.time())
     a.due_date = tomorrow
+    if a.lead_id:
+        db.session.flush()
+        lead = db.session.get(Lead, a.lead_id)
+        db.session.expire(a, ["comments"])
+        db.session.expire(lead, ["activities"])
+        check_contact_limit(lead, get_current_user(request)["id"])
     db.session.commit()
     return jsonify({
         "ok": True,
@@ -2298,6 +2809,7 @@ def api_activity_followup(aid):
         return jsonify({"error": f"Mail nie wyszedł: {err}"}), 502
     now = datetime.utcnow()
     act.done, act.done_at = True, now
+    act.outcome = act.outcome or "bez_odpowiedzi"  # follow-up mailem wysłany — czekamy na odpowiedź
     db.session.add(Activity(
         lead_id=lead.id, kind="note", done=True, done_at=now, assigned_to=user["id"],
         notes=f"📨 Follow-up ({FOLLOWUP_LANGS[lang]}) wysłany do {to_addr} (od: {sender['full_name']}, {sender['email']})\nTemat: {subject}\n---\n{body}",
@@ -2495,20 +3007,41 @@ def _save_lead_fields(lead, form, actor_id=None):
     lead.assigned_to = assigned if assigned in USERS_BY_ID else (lead.assigned_to or 1)
     lead.source = form.get("source", "").strip()
     lead.location = form.get("location", "").strip()
+    if form.get("client_type") in sales_rules.CLIENT_TYPES:
+        lead.client_type = form.get("client_type")
+    if "country" in form:
+        c = (form.get("country") or "").strip().upper()
+        lead.country = c if c in sales_rules.COUNTRIES else None
     # brak wybranych dni w kalendarzu = zostaw ręcznie wpisane "Dni wynajmu" z pola wyżej
     # (set_lead_event_days z pustą listą tylko czyści event_date/event_end_date, nie rental_days)
-    set_lead_event_days(
+    msgs = set_lead_event_days(
         lead,
         parse_event_dates(form.get("event_dates", "")),
         parse_event_locations(form.get("event_locations", "")),
-    )
+    ) or []
     # etap na końcu — telefon po ofercie trafia do opiekuna już zmienionego w tym samym formularzu
     new_stage = form.get("stage", lead.stage)
     if new_stage in STAGES and new_stage != lead.stage:
         if lead.id:
-            record_stage_change(lead, new_stage, actor_id)
+            gate = gated_stage_change(lead, new_stage, actor_id, gate_form_data(form))
+            if gate["message"]:
+                msgs.append(gate["message"])
         else:
-            lead.stage = new_stage
+            gate = sales_rules.stage_gate(lead, new_stage, gate_form_data(form),
+                                          event_dates=[d.event_date for d in lead.event_days]) \
+                if sales_rules.gates_enabled(os.environ) else {"message": ""}
+            if gate["message"]:
+                msgs.append(gate["message"] + " — lead zapisany jako Nowy")
+                lead.stage = "Nowy"
+            else:
+                lead.stage = new_stage
+                data = gate_form_data(form)
+                if new_stage == "Stracony":
+                    lead.lost_reason, lead.lost_comment = data.get("lost_reason") or None, data.get("lost_comment") or None
+                if new_stage in WON_STAGES:
+                    lead.win_confirmation = data.get("win_confirmation") or None
+                    lead.contract_signed = data.get("win_confirmation") == "umowa"
+    return msgs
 
 
 @app.route("/crm/leads/add", methods=["POST"])
@@ -2518,7 +3051,7 @@ def crm_add_lead():
     if not company:
         return redirect(url_for("crm_leads"))
     lead = Lead(company=company, assigned_to=1)
-    _save_lead_fields(lead, request.form, actor_id=user["id"])
+    msgs = _save_lead_fields(lead, request.form, actor_id=user["id"])
     if lead.stage not in STAGES:
         lead.stage = "Nowy"
     db.session.add(lead)
@@ -2537,7 +3070,7 @@ def crm_add_lead():
         ensure_followup_call(lead)
         db.session.commit()
 
-    return redirect(url_for("crm_lead_detail", lead_id=lead.id))
+    return redirect(url_for("crm_lead_detail", lead_id=lead.id, **({"uwaga": " • ".join(msgs)[:600]} if msgs else {})))
 
 
 @app.route("/crm/leads/<int:lead_id>")
@@ -2588,9 +3121,9 @@ def crm_edit_lead(lead_id):
     lead = db.session.get(Lead, lead_id)
     if not lead:
         abort(404)
-    _save_lead_fields(lead, request.form, actor_id=get_current_user(request)["id"])
+    msgs = _save_lead_fields(lead, request.form, actor_id=get_current_user(request)["id"])
     db.session.commit()
-    return redirect(url_for("crm_lead_detail", lead_id=lead_id))
+    return redirect(url_for("crm_lead_detail", lead_id=lead_id, **({"uwaga": " • ".join(msgs)[:600]} if msgs else {})))
 
 
 @app.route("/crm/leads/<int:lead_id>/stage", methods=["POST"])
@@ -2598,14 +3131,222 @@ def crm_set_stage(lead_id):
     lead = db.session.get(Lead, lead_id)
     if not lead:
         abort(404)
-    stage = request.form.get("stage")
-    if not stage and request.is_json:
-        stage = (request.get_json(silent=True) or {}).get("stage")
-    if record_stage_change(lead, stage, get_current_user(request)["id"]):
+    src = request.get_json(silent=True) or {} if request.is_json else request.form
+    stage = src.get("stage")
+    gate = gated_stage_change(lead, stage, get_current_user(request)["id"], gate_form_data(src))
+    if gate.get("changed"):
         db.session.commit()
+    else:
+        db.session.rollback()
     if request.is_json:
-        return jsonify({"ok": True})
-    return redirect(url_for("crm_lead_detail", lead_id=lead_id))
+        return jsonify(_gate_json(gate)), (200 if not gate["message"] else 422)
+    return redirect(url_for("crm_lead_detail", lead_id=lead_id, **({"uwaga": gate["message"]} if gate["message"] else {})))
+
+
+def _gate_json(gate):
+    return {"ok": not gate["message"], "changed": bool(gate.get("changed")), "error": gate["message"],
+            "need": gate["need"], "errors": gate["errors"], "warnings": gate["warnings"], "hint": gate.get("hint", {}),
+            "lost_reasons": sales_rules.LOST_REASONS, "client_types": sales_rules.CLIENT_TYPES,
+            "win_confirmations": sales_rules.WIN_CONFIRMATIONS}
+
+
+@app.route("/crm/api/leads/<int:lead_id>/stage-check", methods=["POST"])
+def api_stage_check(lead_id):
+    """Sprawdza bramki etapu bez zmiany (formularz edycji leada przed zapisem). Można podać value_pln i event_dates
+    z formularza, żeby liczyły się wartości jeszcze niezapisane."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    data = request.get_json(silent=True) or {}
+    with db.session.no_autoflush:
+        if data.get("value_pln") not in (None, ""):
+            try:
+                lead.value_pln = float(data.get("value_pln"))
+            except (TypeError, ValueError):
+                pass
+        if data.get("event_dates") is not None:
+            days = parse_event_dates(str(data.get("event_dates")))
+            gate = stage_gate_check(_GateLead(lead, days), data.get("stage"), gate_form_data(data))
+        else:
+            gate = stage_gate_check(lead, data.get("stage"), gate_form_data(data))
+    db.session.rollback()
+    return jsonify(_gate_json(gate))
+
+
+class _GateLead:
+    """Lead z dniami wynajmu z formularza (jeszcze niezapisanymi) — tylko do sprawdzenia bramek."""
+    def __init__(self, lead, days):
+        self._lead, self.event_days = lead, [type("D", (), {"event_date": d, "location": None})() for d in days]
+
+    def __getattr__(self, name):
+        return getattr(self._lead, name)
+
+
+@app.route("/crm/leads/<int:lead_id>/sprzedaz", methods=["POST"])
+def crm_lead_sales_fields(lead_id):
+    """Typ klienta i kraj z panelu „Proces sprzedaży” na stronie leada."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    if request.form.get("client_type") in sales_rules.CLIENT_TYPES:
+        lead.client_type = request.form["client_type"]
+    if "country" in request.form:
+        c = (request.form.get("country") or "").strip().upper()
+        lead.country = c if c in sales_rules.COUNTRIES else None
+    db.session.commit()
+    return redirect(url_for("crm_lead_detail", lead_id=lead.id) + "#sprzedaz")
+
+
+def _fromjson(raw):
+    try:
+        return json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+
+
+app.jinja_env.filters["fromjson"] = _fromjson
+app.jinja_env.globals.update(client_type_hint=client_type_hint, lead_country=lead_country,
+                             confirm_questions=sales_rules.CONFIRM_QUESTIONS,
+                             attempt_limit=sales_rules.CONTACT_ATTEMPT_LIMIT,
+                             response_target=sales_rules.RESPONSE_TARGET_MIN)
+
+
+@app.context_processor
+def _sales_helpers():
+    return {"lead_failed_attempts": lead_failed_attempts, "lead_response_minutes": lead_response_minutes}
+
+
+@app.route("/crm/skutecznosc", methods=["GET", "POST"])
+def crm_sales_panel():
+    if request.method == "POST":
+        t = sales_targets()
+        for c in ("PL", "DE", "LT", "RO"):
+            for k in ("realny", "ambitny"):
+                raw = (request.form.get(f"{c}_{k}") or "").replace(" ", "").replace(",", ".")
+                if raw:
+                    try:
+                        t.setdefault(c, {"cur": "PLN" if c == "PL" else "EUR"})[k] = float(raw)
+                    except ValueError:
+                        pass
+                elif f"{c}_{k}" in request.form and k in t.get(c, {}):
+                    t[c].pop(k)
+        set_setting(SALES_TARGETS_KEY, json.dumps(t))
+        raw = (request.form.get("eur_rate") or "").replace(",", ".").strip()
+        if raw:
+            try:
+                if 3.0 < float(raw) < 7.0:
+                    set_setting("fx_EUR", f"{float(raw):.4f}")
+                    set_setting("fx_EUR_manual", "1")
+                    set_setting("fx_EUR_date", f"ręcznie {date.today().isoformat()}")
+            except ValueError:
+                pass
+        elif request.form.get("eur_auto"):
+            set_setting("fx_EUR_manual", "0")
+            set_setting("fx_EUR_date", "")
+        db.session.commit()
+        return redirect(url_for("crm_sales_panel", dni=request.args.get("dni", 90)))
+    refresh_eur_rate()
+    days = max(30, min(request.args.get("dni", 90, type=int) or 90, 365))
+    return render_template("crm/skutecznosc.html", p=build_sales_panel(days), targets=sales_targets())
+
+
+DELIVERABILITY_DOMAINS = ("33bots.pl", "33bots.de", "33bots.lt")
+DKIM_SELECTORS = ("default", "google", "selector1", "selector2", "k1", "mail", "dkim", "s1", "s2", "mx", "smtp", "x")
+_dns_cache = {}
+
+
+def dns_txt(name, rtype="TXT"):
+    """Rekordy DNS przez DNS-over-HTTPS (dns.google) — tylko odczyt; wynik z pamięci na godzinę."""
+    hit = _dns_cache.get((name, rtype))
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    import urllib.parse
+    import urllib.request
+    try:
+        url = "https://dns.google/resolve?" + urllib.parse.urlencode({"name": name, "type": rtype})
+        with urllib.request.urlopen(url, timeout=6) as r:
+            data = json.loads(r.read().decode())
+        out = [a.get("data", "").strip('"').replace('" "', "") for a in data.get("Answer", []) or []]
+    except Exception as e:
+        out = None if not isinstance(e, ValueError) else []
+    _dns_cache[(name, rtype)] = (time.time(), out)
+    return out
+
+
+def deliverability_report():
+    rows = []
+    for d in DELIVERABILITY_DOMAINS:
+        txt = dns_txt(d)
+        spf = [t for t in (txt or []) if t.lower().startswith("v=spf1")]
+        dmarc = [t for t in (dns_txt(f"_dmarc.{d}") or []) if t.lower().startswith("v=dmarc1")]
+        dkim = []
+        for sel in DKIM_SELECTORS:
+            recs = dns_txt(f"{sel}._domainkey.{d}") or []
+            if any("v=dkim1" in r.lower() or "p=" in r for r in recs):
+                dkim.append(sel)
+        mx = dns_txt(d, "MX") or []
+        tips = []
+        if txt is None:
+            tips.append("Nie udało się odpytać DNS — spróbuj później.")
+        else:
+            if not spf:
+                tips.append(f"Brak SPF: dodaj TXT dla {d}: „v=spf1 include:<serwer poczty> ~all” (dostawca poczty poda include).")
+            elif len(spf) > 1:
+                tips.append("Są dwa rekordy SPF — musi być jeden (połącz je), inaczej SPF nie działa.")
+            elif "+all" in spf[0]:
+                tips.append("SPF z „+all” pozwala każdemu wysyłać jako Wy — zmień na „~all” albo „-all”.")
+            if not dmarc:
+                tips.append(f"Brak DMARC: dodaj TXT dla _dmarc.{d}: „v=DMARC1; p=none; rua=mailto:kontakt@{d}” "
+                            "(po 2–4 tygodniach zaostrz do p=quarantine).")
+            elif "p=none" in dmarc[0].lower():
+                tips.append("DMARC jest w trybie p=none (tylko raporty) — gdy raporty są czyste, przejdź na p=quarantine.")
+            if not dkim:
+                tips.append("Nie znaleziono DKIM pod typowymi selektorami — włącz podpis DKIM u dostawcy poczty i dodaj "
+                            "rekord TXT <selektor>._domainkey." + d + " (bez DKIM duzi odbiorcy, np. Orange, częściej wrzucają do spamu).")
+        rows.append({"domain": d, "spf": spf, "dmarc": dmarc, "dkim": dkim, "mx": mx, "tips": tips, "ok": txt is not None and not tips})
+    return {"rows": rows, "smtp_host": os.environ.get("SMTP_HOST", "").strip() or "—"}
+
+
+@app.route("/crm/dostarczalnosc")
+def crm_deliverability():
+    return render_template("crm/dostarczalnosc.html", r=deliverability_report())
+
+
+def data_cleanup_report():
+    """Porządki w danych — lista do RĘCZNEJ poprawy (nic nie zmienia): wygrane bez daty, absurdalne daty,
+    wartość inna niż wysłana oferta, leady bez wartości, bardzo długie zakresy dni."""
+    out = {"won_no_date": [], "bad_dates": [], "value_vs_offer": [], "no_value": [], "long_range": [], "won_no_type": []}
+    for lead in Lead.query.filter(Lead.clickup_pending.isnot(True), own_leads()).all():
+        days = [d.event_date for d in lead.event_days]
+        bad = [d for d in days if not sane_event_date(datetime.combine(d, datetime.min.time()))]
+        if lead.event_date and not sane_event_date(lead.event_date):
+            bad.append(lead.event_date.date())
+        if bad:
+            out["bad_dates"].append({"lead": lead, "info": ", ".join(f"{d:%d.%m.%Y}" for d in sorted(set(bad))[:5])
+                                     + (f" (+{len(set(bad)) - 5})" if len(set(bad)) > 5 else "")})
+        good = sorted(d for d in days if d not in bad)
+        if lead.stage in WON_STAGES and not good:
+            out["won_no_date"].append({"lead": lead, "info": lead.stage})
+        if lead.stage in WON_STAGES and not lead.client_type:
+            out["won_no_type"].append({"lead": lead, "info": lead.stage})
+        if good and (good[-1] - good[0]).days + 1 > sales_rules.LONG_RANGE_DAYS:
+            out["long_range"].append({"lead": lead, "info": f"{good[0]:%d.%m.%Y} – {good[-1]:%d.%m.%Y} ({len(good)} dni)"})
+        if lead.stage in ("Oferta", "Wygrany", "Zrealizowany") and not lead.value_pln:
+            out["no_value"].append({"lead": lead, "info": lead.stage})
+        if lead.stage in ("Oferta", "Wygrany", "Zrealizowany") and lead.value_pln:
+            ov = last_sent_offer_value(lead)
+            if ov and abs(float(lead.value_pln) - ov) > max(1.0, 0.01 * ov):
+                out["value_vs_offer"].append({"lead": lead, "info": f"w leadzie {lead.value_pln:,.0f}, w ofercie {ov:,.0f}".replace(",", " ")})
+            elif lead.notes and lead.value_pln:  # kwota z notatki (np. VULCAN: 6 000 przy ofercie 68 600 w notatce)
+                amounts = [float(a.replace(" ", "").replace("\xa0", "").replace(",", ".")) for a in
+                           re.findall(r"(\d{1,3}(?:[ \xa0]\d{3})+|\d{4,6})(?:[,.]\d{2})?\s*(?:zł|zl|pln|PLN|netto)", lead.notes)]
+                if amounts and max(amounts) > 2 * float(lead.value_pln):
+                    out["value_vs_offer"].append({"lead": lead, "info": f"w leadzie {lead.value_pln:,.0f}, w notatce {max(amounts):,.0f}".replace(",", " ")})
+    return out
+
+
+@app.route("/crm/porzadki")
+def crm_data_cleanup():
+    return render_template("crm/porzadki.html", r=data_cleanup_report(), labels={
+        "won_no_date": "Wygrane bez daty wydarzenia", "bad_dates": "Daty spoza 2020–2041 (np. rok 0002)",
+        "value_vs_offer": "Wartość inna niż w ofercie / notatce", "no_value": "Oferta / wygrana bez wartości",
+        "long_range": "Zakres dni dłuższy niż 14 dni", "won_no_type": "Wygrane bez typu klienta"})
 
 
 @app.route("/crm/leads/<int:lead_id>/contract/toggle", methods=["POST"])
@@ -2789,10 +3530,12 @@ def api_set_stage(lead_id):
     if not lead:
         abort(404)
     data = request.get_json(silent=True) or {}
-    stage = data.get("stage")
-    if record_stage_change(lead, stage, get_current_user(request)["id"]):
+    gate = gated_stage_change(lead, data.get("stage"), get_current_user(request)["id"], gate_form_data(data))
+    if gate.get("changed"):
         db.session.commit()
-    return jsonify({"ok": True})
+    else:
+        db.session.rollback()
+    return jsonify(_gate_json(gate)), (200 if not gate["message"] else 422)
 
 
 # ---------- LOGISTYKA (operatorzy, flota, trasy) ----------
@@ -5583,13 +6326,21 @@ ASSISTANT_TOOLS = [
                 "event_dates": {"type": "array", "items": {"type": "string"}, "description": "Konkretne dni wynajmu, format YYYY-MM-DD (mogą być niekolejne)"},
                 "event_locations": {"type": "object", "description": "Opcjonalnie inna lokalizacja na konkretny dzień: {\"YYYY-MM-DD\": \"Miasto\"}", "additionalProperties": {"type": "string"}},
                 "closed_on": {"type": "string", "description": "Data zamknięcia YYYY-MM-DD (kiedy lead faktycznie został wygrany/stracony) — od niej zależy miesiąc w Statystykach. Tylko dla etapu Wygrany/Stracony; podaj, gdy lead trafia do CRM później niż był zamknięty."},
+                "client_type": {"type": "string", "enum": list(sales_rules.CLIENT_TYPES), "description": "Typ klienta: firma (firma/instytucja), prywatna (osoba prywatna), agencja (agencja eventowa), partner (firma robotyczna/partner). Wymagany przed wysłaniem oferty i przy Wygrany."},
+                "country": {"type": "string", "enum": list(sales_rules.COUNTRIES), "description": "Kraj klienta / wydarzenia (PL, LT, DE, RO…) — panel skuteczności; pusty = podpowiedź z danych"},
+                "lost_reason": {"type": "string", "enum": list(sales_rules.LOST_REASONS), "description": "WYMAGANY przy stage=Stracony: cena, konkurencja (inny dostawca), brak_decyzji, brak_kontaktu, odrzucony (słaby klient), termin (zajęty / brak robota), inne (+ lost_comment)"},
+                "lost_comment": {"type": "string", "description": "Komentarz do powodu straty (wymagany przy lost_reason=inne)"},
+                "win_confirmation": {"type": "string", "enum": list(sales_rules.WIN_CONFIRMATIONS), "description": "WYMAGANE przy stage=Wygrany (chyba że contract_signed): umowa = umowa podpisana, mail = pisemne potwierdzenie mailem. Wygrany wymaga też co najmniej jednego dnia wynajmu (od 2025) i wartości > 0."},
+                "confirm_warning": {"type": "boolean", "description": "true = sprawdzono kwotę: wartość leada inna niż ostatnia wysłana oferta (ostrzeżenie przy Wygrany)"},
             },
             "required": ["company"],
         },
     },
     {
         "name": "update_lead",
-        "description": "Zmienia istniejącego leada. Podawaj TYLKO pola do zmiany — reszta zostaje bez zmian. event_dates (jeśli podane) ZASTĘPUJE cały zestaw dni wynajmu.",
+        "description": "Zmienia istniejącego leada. Podawaj TYLKO pola do zmiany — reszta zostaje bez zmian. event_dates (jeśli podane) ZASTĘPUJE cały zestaw dni wynajmu. "
+                       "Bramki etapów: Stracony wymaga lost_reason; Wygrany wymaga win_confirmation (umowa/mail), client_type, dnia wynajmu od 2025 i wartości > 0; "
+                       "Oferta (z Nowy) wymaga client_type. Bez nich zwraca błąd po polsku i nic nie zmienia.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -5613,6 +6364,12 @@ ASSISTANT_TOOLS = [
                 "event_dates": {"type": "array", "items": {"type": "string"}},
                 "event_locations": {"type": "object", "additionalProperties": {"type": "string"}},
                 "closed_on": {"type": "string", "description": "Data zamknięcia YYYY-MM-DD (kiedy lead faktycznie został wygrany/stracony) — od niej zależy miesiąc w Statystykach. Tylko dla etapu Wygrany/Stracony; podaj, gdy lead trafia do CRM później niż był zamknięty."},
+                "client_type": {"type": "string", "enum": list(sales_rules.CLIENT_TYPES), "description": "Typ klienta: firma (firma/instytucja), prywatna (osoba prywatna), agencja (agencja eventowa), partner (firma robotyczna/partner). Wymagany przed wysłaniem oferty i przy Wygrany."},
+                "country": {"type": "string", "enum": list(sales_rules.COUNTRIES), "description": "Kraj klienta / wydarzenia (PL, LT, DE, RO…) — panel skuteczności; pusty = podpowiedź z danych"},
+                "lost_reason": {"type": "string", "enum": list(sales_rules.LOST_REASONS), "description": "WYMAGANY przy stage=Stracony: cena, konkurencja (inny dostawca), brak_decyzji, brak_kontaktu, odrzucony (słaby klient), termin (zajęty / brak robota), inne (+ lost_comment)"},
+                "lost_comment": {"type": "string", "description": "Komentarz do powodu straty (wymagany przy lost_reason=inne)"},
+                "win_confirmation": {"type": "string", "enum": list(sales_rules.WIN_CONFIRMATIONS), "description": "WYMAGANE przy stage=Wygrany (chyba że contract_signed): umowa = umowa podpisana, mail = pisemne potwierdzenie mailem. Wygrany wymaga też co najmniej jednego dnia wynajmu (od 2025) i wartości > 0."},
+                "confirm_warning": {"type": "boolean", "description": "true = sprawdzono kwotę: wartość leada inna niż ostatnia wysłana oferta (ostrzeżenie przy Wygrany)"},
             },
             "required": ["lead_id"],
         },
@@ -5624,7 +6381,7 @@ ASSISTANT_TOOLS = [
             "type": "object",
             "properties": {
                 "lead_id": {"type": "integer"},
-                "kind": {"type": "string", "enum": [k for k in ACTIVITY_KINDS if k != "note"]},
+                "kind": {"type": "string", "enum": [k for k in ACTIVITY_KINDS if k != "note"], "description": "call = telefon, sms, email, online, meeting"},
                 "due_date": {"type": "string", "description": "YYYY-MM-DD"},
                 "notes": {"type": "string"},
                 "assigned_to": {"type": "string", "description": "Imię użytkownika CRM"},
@@ -5643,10 +6400,20 @@ ASSISTANT_TOOLS = [
     },
     {
         "name": "complete_task",
-        "description": "Oznacza zadanie jako zrobione.",
+        "description": "Oznacza zadanie jako zrobione. Telefon / SMS / mail przy leadzie WYMAGA outcome (wynik kontaktu): "
+                       "telefon: odebral | nie_odebral; SMS i mail: odpisal | bez_odpowiedzi — liczą się do limitu 3 nieudanych prób. "
+                       "Telefon potwierdzający po ofercie (odebrany) wymaga odpowiedzi: dotarla, decyzja_kiedy, decyduje, porownanie "
+                       "— zapisują się w leadzie.",
         "input_schema": {
             "type": "object",
-            "properties": {"task_id": {"type": "integer"}},
+            "properties": {
+                "task_id": {"type": "integer"},
+                "outcome": {"type": "string", "enum": list(sales_rules.OUTCOMES)},
+                "dotarla": {"type": "string", "description": "Telefon potwierdzający: czy oferta dotarła?"},
+                "decyzja_kiedy": {"type": "string", "description": "Telefon potwierdzający: kiedy zapadnie decyzja?"},
+                "decyduje": {"type": "string", "description": "Telefon potwierdzający: kto decyduje?"},
+                "porownanie": {"type": "string", "description": "Telefon potwierdzający: z kim nas porównują?"},
+            },
             "required": ["task_id"],
         },
     },
@@ -5770,6 +6537,16 @@ ASSISTANT_TOOLS = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "sales_performance",
+        "description": "Panel skuteczności sprzedaży (zakładka Skuteczność): wartość wygranych wg miesiąca ZAMKNIĘCIA, osobno dla "
+                       "Polski, Niemiec, Litwy i Rumunii, na tle celów (PL 150 tys. zł realnie / 200 tys. ambitnie, DE 30 tys. EUR, "
+                       "LT 15 tys. EUR) z prognozą na koniec miesiąca; skuteczność wg typu klienta i opiekuna, powody strat, mediana "
+                       "czasu reakcji, anulacje po wygranej i otwarte leady od 10 000 zł z datą następnego kroku. Łączy CRM PL i LT/DE.",
+        "input_schema": {"type": "object", "properties": {
+            "period_days": {"type": "integer", "description": "Okres dla skuteczności, powodów strat i czasu reakcji (domyślnie 90)"}},
+            "required": []},
     },
     {
         "name": "closed_leads",
@@ -6040,11 +6817,23 @@ def _not_compose_offer():
     return db.or_(SentOffer.data.is_(None), db.not_(SentOffer.data.like('%"compose": true%')))
 
 
+def offer_client_type_error(lead):
+    """Oferta nie wychodzi bez typu klienta (bramka procesu sprzedaży). Zwraca komunikat albo None."""
+    if lead is None or lead.client_type in sales_rules.CLIENT_TYPES or not sales_rules.gates_enabled(os.environ):
+        return None
+    _key, label, why = client_type_hint(lead)
+    return (f"Najpierw ustaw typ klienta w leadzie „{lead.company}” (podpowiedź: {label} — {why}). "
+            "Bez typu klienta oferta nie wychodzi.")
+
+
 def deliver_offer(offer, actor):
     """Wysyła szkic oferty (mail + PDF) ze skrzynki nadawcy i aktualizuje leada.
     Zwraca (błąd albo None, ostrzeżenie albo None, lista zmian w leadzie)."""
     if offer.sent_at:
         return "ta oferta została już wysłana", None, []
+    type_err = offer_client_type_error(db.session.get(Lead, offer.lead_id) if offer.lead_id else None)
+    if type_err:
+        return type_err, None, []
     sender = market_sender(USERS_BY_ID.get(offer.sender_id) or actor,
                            lead_market(db.session.get(Lead, offer.lead_id) if offer.lead_id else None))
     err = _smtp_send(offer.to_addr, offer.subject, offer.body, sender["name"],
@@ -6073,6 +6862,8 @@ def deliver_offer(offer, actor):
             if currency:
                 lead.currency = currency
             changes.append(f"wartość {value:g} {currency or lead.currency or 'EUR'}")
+            if lead.stage in ACTIVE_STAGES:  # telefon potwierdzający zależy od kwoty oferty — ten sam, nie drugi
+                ensure_followup_call(lead)
         if not lead.contact_email:
             lead.contact_email = offer.to_addr
         days = opts.get("followup_days", 3)
@@ -6109,6 +6900,8 @@ def _assistant_lead_brief(lead):
         "value": lead.value_pln, "currency": lead.currency or "EUR",
         "location": lead.location or "", "assigned_to": au.get("name", ""),
         "event_days": [ed.event_date.isoformat() for ed in lead.event_days],
+        "client_type": lead.client_type or None, "country": lead_country(lead),
+        **({"lost_reason": lead.lost_reason, "lost_comment": lead.lost_comment} if lead.stage == "Stracony" else {}),
     }
 
 
@@ -6161,15 +6954,46 @@ def _assistant_apply_lead_fields(lead, inp, user):
         lead.contract_signed = bool(inp["contract_signed"])
     if "assigned_to" in inp:
         lead.assigned_to = _assistant_resolve_user(inp.get("assigned_to"), lead.assigned_to or user["id"])
+    if inp.get("client_type") in sales_rules.CLIENT_TYPES:
+        lead.client_type = inp["client_type"]
+    if str(inp.get("country") or "").upper() in sales_rules.COUNTRIES:
+        lead.country = str(inp["country"]).upper()
+    warnings = []
+    if "event_dates" in inp and inp["event_dates"] is not None:  # dni przed etapem — bramka Wygrany ich wymaga
+        days, locations = _assistant_parse_days(inp)
+        warnings += set_lead_event_days(lead, days, locations) or []
     stage = REMOVED_STAGES.get(inp.get("stage"), inp.get("stage"))  # stara nazwa z zapamiętanego schematu
     if stage in STAGES and stage != lead.stage:
         if lead.id:
-            record_stage_change(lead, stage, user["id"])
-        else:
+            gate = gated_stage_change(lead, stage, user["id"], gate_form_data(inp))
+            if gate["message"]:
+                hint = gate.get("hint", {})
+                extra = []
+                if "lost_reason" in gate["need"]:
+                    extra.append("lost_reason: " + ", ".join(sales_rules.LOST_REASONS))
+                if "win_confirmation" in gate["need"]:
+                    extra.append("win_confirmation: umowa | mail")
+                if "client_type" in gate["need"]:
+                    extra.append(f"client_type: {', '.join(sales_rules.CLIENT_TYPES)} (podpowiedź: {hint.get('client_type')})")
+                if gate["warnings"]:
+                    extra.append("po sprawdzeniu kwoty podaj confirm_warning=true")
+                return gate["message"] + (" [" + "; ".join(extra) + "]" if extra else "")
+        else:  # nowy lead od razu na dalszym etapie (np. wygrany wpisany po fakcie) — te same bramki
+            data = gate_form_data(inp)
+            gate = stage_gate_check(lead, stage, data)
+            if gate["message"]:
+                return gate["message"] + (f" [lost_reason: {', '.join(sales_rules.LOST_REASONS)}; win_confirmation: umowa | mail; "
+                                          f"client_type: {', '.join(sales_rules.CLIENT_TYPES)}]")
+            if data.get("client_type") in sales_rules.CLIENT_TYPES:
+                lead.client_type = data["client_type"]
+            if stage == "Stracony":
+                lead.lost_reason, lead.lost_comment = data["lost_reason"], data.get("lost_comment") or None
+            if stage in WON_STAGES:
+                lead.win_confirmation = data.get("win_confirmation") or ("umowa" if lead.contract_signed else None)
+                lead.contract_signed = bool(lead.contract_signed) or lead.win_confirmation == "umowa"
             lead.stage = stage
-    if "event_dates" in inp and inp["event_dates"] is not None:
-        days, locations = _assistant_parse_days(inp)
-        set_lead_event_days(lead, days, locations)
+    lead._mcp_warnings = warnings
+    return None
 
 
 def _assistant_execute(name, inp, user):
@@ -6199,6 +7023,10 @@ def _assistant_execute(name, inp, user):
             "nip": lead.nip or "", "dane_do_faktury": ", ".join(x for x in (lead.billing_name, lead.billing_street, " ".join(y for y in (lead.billing_postcode, lead.billing_city) if y)) if x),
             "notes": lead.notes or "", "contract_signed": bool(lead.contract_signed),
             "rental_days": lead.rental_days,
+            "client_type_hint": client_type_hint(lead)[0], "win_confirmation": lead.win_confirmation,
+            "failed_contact_attempts": lead_failed_attempts(lead),
+            "response_minutes": lead_response_minutes(lead),
+            "confirm_call_answers": json.loads(lead.call_answers) if lead.call_answers else None,
             **({"closed_on": f"{lead_closed_on(lead):%Y-%m-%d}" if lead_closed_on(lead) else None}
                if lead.stage in CLOSED_STAGES else {}),
             "event_days": [
@@ -6240,7 +7068,9 @@ def _assistant_execute(name, inp, user):
                                    inp.get("billing_country"), inp.get("location")) or current_market()
         lead = Lead(company=company, stage="Nowy", assigned_to=user["id"], currency="EUR", quality="Średni",
                     market=mcode)
-        _assistant_apply_lead_fields(lead, inp, user)
+        err = _assistant_apply_lead_fields(lead, inp, user)
+        if err:
+            return _json.dumps({"error": err + " — lead NIE został utworzony"}, ensure_ascii=False), None
         db.session.add(lead)
         db.session.flush()
         db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage=lead.stage, changed_by=user["id"]))
@@ -6257,13 +7087,14 @@ def _assistant_execute(name, inp, user):
         lead = db.session.get(Lead, int(inp.get("lead_id", 0) or 0))
         if not lead:
             return _json.dumps({"error": "nie ma leada o tym id"}), None
-        _assistant_apply_lead_fields(lead, inp, user)
-        err = _assistant_closed_on(lead, inp, user)
+        err = _assistant_apply_lead_fields(lead, inp, user) or _assistant_closed_on(lead, inp, user)
         if err:
             db.session.rollback()
             return _json.dumps({"error": err + " — nic nie zostało zmienione"}, ensure_ascii=False), None
         db.session.commit()
         out = _assistant_lead_brief(lead)
+        if getattr(lead, "_mcp_warnings", None):
+            out["warnings"] = lead._mcp_warnings
         if lead.stage in CLOSED_STAGES:
             closed = lead_closed_on(lead)
             out["closed_on"] = closed.strftime("%Y-%m-%d") if closed else None
@@ -6303,8 +7134,14 @@ def _assistant_execute(name, inp, user):
         a = db.session.get(Activity, int(inp.get("task_id", 0) or 0))
         if not a:
             return _json.dumps({"error": "nie ma zadania o tym id"}), None
-        a.done = True
-        a.done_at = datetime.utcnow()
+        if a.done:
+            return _json.dumps({"ok": True, "note": "zadanie było już odhaczone"}), None
+        answers = {k: inp.get(k) for k, _q in sales_rules.CONFIRM_QUESTIONS if inp.get(k)}
+        err = complete_activity(a, user["id"], inp.get("outcome"), answers)
+        if err:
+            db.session.rollback()
+            return _json.dumps({"error": err["error"], "outcomes": list(err.get("outcomes", {})),
+                                "questions": err.get("questions") or None}, ensure_ascii=False), None
         db.session.commit()
         return _json.dumps({"ok": True}), f"Odhaczono zadanie #{a.id}"
 
@@ -6500,6 +7337,8 @@ def _assistant_execute(name, inp, user):
                 continue
             entry = _assistant_lead_brief(lead)
             entry["closed_on"] = when.strftime("%Y-%m-%d")
+            if stage != "Wygrany":
+                entry["lost_reason_label"] = sales_rules.LOST_REASONS.get(lead.lost_reason or "", "brak (sprzed obowiązkowego powodu)")
             (won if stage == "Wygrany" else lost).append(entry)
         # wygrane w tym miesiącu, które potem zmieniły etap (np. jednak Stracony) — już nie liczą się jako wygrane
         changed = {}
@@ -6514,6 +7353,21 @@ def _assistant_execute(name, inp, user):
             "won": won, "lost": lost, "changed_after_win": list(changed.values()),
             "note": "wg obecnego etapu leada i daty, kiedy na niego trafił",
         }, ensure_ascii=False), None
+
+    if name == "sales_performance":
+        p = build_sales_panel(max(30, min(int(inp.get("period_days") or 90), 365)))
+        brief = lambda l: {"id": l.id, "company": l.company, "stage": l.stage}
+        return _json.dumps({
+            "months": p["months"], "eur_pln_rate": p["rate"],
+            "countries": [{k: v for k, v in c.items()} for c in p["countries"]],
+            "by_client_type": p["by_type"], "by_owner": p["by_owner"], "lost_reasons": p["reasons"],
+            "response_time_minutes": p["response"],
+            "cancellations_after_win": [{**brief(c["lead"]), "when": f"{c['when']:%Y-%m-%d}", "reason": c["reason"], "value_pln": c["pln"]}
+                                        for c in p["cancels"]],
+            "open_leads_10k": [{**brief(b["lead"]), "value_pln": b["pln"],
+                                "next_step": f"{b['next']:%Y-%m-%d}" if b["next"] else None} for b in p["big_open"]],
+            "note": "wartości netto; EUR przeliczane po kursie NBP; miesiąc = miesiąc zamknięcia (wygranej)",
+        }, ensure_ascii=False, default=str), None
 
     if name == "monthly_revenue":
         def add(d, cur, v):
@@ -8130,6 +8984,13 @@ def send_lt_quote_mail(lead, actor_id=None, force=False, subject=None, body=None
         return "lead nie ma adresu e-mail"
     if get_setting(LT_QUOTE_SENT_KEY.format(lead.id)) and not force:
         return LT_ALREADY_SENT
+    if not lead.client_type:
+        if actor_id is None or fixed:  # automat / poprawka oferty, która już raz poszła — typ z podpowiedzi
+            lead.client_type = client_type_hint(lead)[0]
+        else:
+            type_err = offer_client_type_error(lead)
+            if type_err:
+                return type_err
     with app.test_request_context(base_url=public_base_url() or "http://localhost"):
         q = lt_quote(lead, remote_budget=2)
     if not lt_quote_auto_ok(q, lead_market(lead)) and not force:
@@ -8948,7 +9809,8 @@ def sync_won_to_pl():
             try:
                 if lead.pl_copy_id and lead.pl_copy_hash == pl_move.copy_payload(lead, code)[2]:
                     continue  # nic się nie zmieniło od ostatniej wysyłki
-                pl_id, mark = pl_move.push_copy(eng, meta, lead, code)
+                entry = _closing_entry(lead) if lead.stage in CLOSED_STAGES else None
+                pl_id, mark = pl_move.push_copy(eng, meta, lead, code, closed_at=entry.changed_at if entry else None)
                 lead.pl_copy_id, lead.pl_copy_hash = pl_id, mark
                 db.session.commit()
                 done += 1
@@ -10039,6 +10901,14 @@ def crm_mail_compose():
     if not from_box:
         mine = next((b for b in boxes if b.get("user_id") == user["id"]), None)
         from_box = (mine or (boxes[0] if boxes else {"login": ""}))["login"]
+    draft = db.session.get(Activity, request.args.get("draft", type=int) or 0)
+    draft_body = ""
+    if draft and (draft.notes or "").startswith(sales_rules.PRIVATE_DRAFT_PREFIX) and "\n---\n" in draft.notes:
+        head, draft_body = draft.notes.split("\n---\n", 1)
+        m = re.search(r"^Temat: (.+)$", head, re.M)
+        subject = subject or (m.group(1).strip() if m else "")
+        lead = lead or draft.lead
+        to = to or (", ".join(draft.lead.emails) if draft.lead else "")
     task = db.session.get(MailTask, request.args.get("task", type=int) or 0)
     ai_instruction = (request.args.get("ai") or (task.reply_hint if task else "") or "")[:2000]
     offer_price = ""
@@ -10052,6 +10922,7 @@ def crm_mail_compose():
         "crm/poczta_nowa.html", offer_price=offer_price, boxes=boxes, from_box=from_box, to=to, cc=cc, subject=subject, subject_pl=subject_pl,
         quoted=quoted, task=task, ai_instruction=ai_instruction, ai_auto=request.args.get("auto") == "1",
         reply=reply, fwd=fwd, lead=lead, target_lang=M()["lang"], lang_names=MAIL_LANG_NAMES,
+        draft=draft if draft_body else None, draft_body=draft_body,
         lang_flags=MAIL_LANG_FLAGS, signatures={b["login"]: mail_signature(b, user) for b in boxes}, ai_ok=bool(_ai_client()),
     )
 
@@ -10088,6 +10959,11 @@ def _mail_send_from_form(boxes, user):
         files.append((journey.safe_filename(up.filename), data, up.mimetype or "application/octet-stream"))
     offer = db.session.get(SentOffer, f.get("offer_id", type=int) or 0)
     if offer and not offer.sent_at:
+        olead_chk = db.session.get(Lead, f.get("lead", type=int) or 0) or (
+            db.session.get(Lead, offer.lead_id) if offer.lead_id else None)
+        type_err = offer_client_type_error(olead_chk)
+        if type_err:
+            return jsonify({"error": type_err}), 400
         files.append((offer.filename, offer.pdf, "application/pdf"))
     reply = db.session.get(MailMessage, f.get("reply", type=int) or 0)
     headers = {}
@@ -10117,6 +10993,9 @@ def _mail_send_from_form(boxes, user):
     db.session.flush()
     lead = db.session.get(Lead, f.get("lead", type=int) or 0) or mail_lead_for(row)
     if lead:
+        for d in Activity.query.filter(Activity.lead_id == lead.id, Activity.done.isnot(True),
+                                       Activity.notes.like(sales_rules.PRIVATE_DRAFT_PREFIX + "%")).all():
+            d.done, d.done_at, d.outcome = True, now, "bez_odpowiedzi"  # pierwsza odpowiedź wysłana — czekamy
         db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=now, assigned_to=user["id"],
                                 notes=f"✉️ Mail z CRM do {', '.join(recipients)} (od: {box['login']})\nTemat: {subject}\n---\n"
                                       f"{body.split(chr(10) + chr(10) + '>')[0][:4000]}"
@@ -10135,6 +11014,8 @@ def _mail_send_from_form(boxes, user):
             if value is not None:
                 olead.value_pln = value
                 olead.currency = currency or olead.currency
+            if olead.stage in ACTIVE_STAGES:
+                ensure_followup_call(olead)
             due = datetime.combine(date.today() + timedelta(days=3), datetime.min.time())
             db.session.add(Activity(lead_id=olead.id, kind="email", due_date=due, assigned_to=user["id"],
                                     notes=f"Follow-up oferty ({offer.price} netto) wysłanej {date.today():%d.%m}"))
@@ -10318,7 +11199,7 @@ def mark_lead_handled(lead, user_id=None, how="ręcznie", note=None):
     if note:
         db.session.add(Activity(lead_id=lead.id, kind="call" if how == "telefon" else "note", done=True,
                                 done_at=datetime.utcnow(), assigned_to=user_id or lead.assigned_to or USERS[0]["id"],
-                                notes=note))
+                                outcome="odebral" if how == "telefon" else None, notes=note))
 
 
 @_sa_event.listens_for(_OrmSession, "after_flush")
@@ -10327,10 +11208,10 @@ def _auto_handle_leads(session, _ctx):
     ids = set()
     for obj in session.new:
         if isinstance(obj, Activity) and obj.lead_id and obj.done and (
-                obj.kind in ("call", "email", "meeting") or (obj.notes or "").startswith(_HANDLED_NOTE_PREFIXES)):
+                obj.kind in ("call", "sms", "email", "meeting") or (obj.notes or "").startswith(_HANDLED_NOTE_PREFIXES)):
             ids.add(obj.lead_id)
     for obj in session.dirty:
-        if isinstance(obj, Activity) and obj.lead_id and obj.done and obj.kind in ("call", "email", "meeting"):
+        if isinstance(obj, Activity) and obj.lead_id and obj.done and obj.kind in ("call", "sms", "email", "meeting"):
             ids.add(obj.lead_id)
     if ids:
         session.connection().execute(
@@ -10345,7 +11226,11 @@ def _lead_alert_row(lead):
             "email": ", ".join(lead.emails), "has_email": bool(lead.emails), "source": lead.source or "",
             "when": f"{created:%d.%m %H:%M}" if created else "", "age_h": round(age_h, 1),
             "old": bool(created and created.date() < to_local(datetime.utcnow()).date()),
-            "notes": " ".join((lead.notes or "").split())[:220], "market": lead.market}
+            "notes": " ".join((lead.notes or "").split())[:220], "market": lead.market,
+            "resp_min": lead_response_minutes(lead), "target": sales_rules.RESPONSE_TARGET_MIN,
+            "late": (lead_response_minutes(lead) or 0) > sales_rules.RESPONSE_TARGET_MIN,
+            "draft_id": next((a.id for a in lead.activities if not a.done
+                              and (a.notes or "").startswith(sales_rules.PRIVATE_DRAFT_PREFIX)), None)}
 
 
 def mail_tasks_open(code=None):

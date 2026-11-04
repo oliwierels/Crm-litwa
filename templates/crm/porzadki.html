@@ -1,0 +1,18 @@
+{% extends "crm/base.html" %}
+{% block title %}Porządki w danych – RoboRent CRM{% endblock %}
+{% block page_title %}🔧 Porządki w danych{% endblock %}
+{% block content %}
+<div class="panel" style="padding:14px 16px;max-width:1000px">
+  <p style="margin:0 0 10px;color:var(--muted);font-size:12.5px">Lista do <b>ręcznej</b> poprawy — CRM niczego tu sam nie zmienia.
+    Kliknij lead, popraw w „Edytuj” (data, wartość, typ klienta). Po poprawce lead znika z listy.</p>
+  {% for key, items in r.items() %}
+  <h3 style="font-size:14px;margin:14px 0 6px">{{ labels[key] }} <span style="color:{{ 'var(--red)' if items else 'var(--green)' }}">({{ items|length }})</span></h3>
+  {% if items %}
+  <table><tr><th>Lead</th><th>Etap</th><th>Opiekun</th><th>Szczegóły</th></tr>
+    {% for it in items[:200] %}<tr><td><a href="{{ url_for('crm_lead_detail', lead_id=it.lead.id) }}">{{ it.lead.company }}</a></td><td>{{ it.lead.stage }}</td>
+      <td>{{ USERS_BY_ID.get(it.lead.assigned_to, {}).get('name', '') }}</td><td style="font-size:12px">{{ it.info }}</td></tr>{% endfor %}
+  </table>
+  {% else %}<div style="color:var(--green);font-size:12.5px">✅ Brak.</div>{% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

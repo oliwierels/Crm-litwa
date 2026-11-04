@@ -81,7 +81,7 @@
               {% if r.won_leads %}<div><span style="color:var(--green);font-weight:700">✅ Wygrane:</span>
                 {% for l in r.won_leads %}{% if l.stage == 'Zrealizowany' %}<span title="Zrealizowany">🏁</span>{% endif %}<a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="color:var(--green);text-decoration:underline">{{ l.company }}</a>{% if l.value_pln %} ({{ l.value_pln|pln }} {{ l.currency or 'EUR' }}){% endif %}{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
               {% if r.lost_leads %}<div><span style="color:var(--red);font-weight:700">✖ Stracone:</span>
-                {% for l in r.lost_leads %}<a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="color:var(--red);text-decoration:underline">{{ l.company }}</a>{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
+                {% for l in r.lost_leads %}<a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="color:var(--red);text-decoration:underline">{{ l.company }}</a>{% if l.lost_reason %} <span style="color:var(--muted)">({{ lost_reasons.get(l.lost_reason, l.lost_reason) }}{% if l.lost_comment %}: {{ l.lost_comment[:60] }}{% endif %})</span>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
               {% if r.new_leads %}<div><span style="color:var(--accent);font-weight:700">＋ Nowe:</span>
                 {% for l in r.new_leads %}<a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" style="text-decoration:underline">{{ l.company }}</a>{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
               {% if not r.won_leads and not r.lost_leads and not r.new_leads %}<span style="color:var(--muted)">Brak leadów w tym miesiącu.</span>{% endif %}

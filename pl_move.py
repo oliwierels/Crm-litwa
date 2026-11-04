@@ -256,6 +256,9 @@ def copy_payload(lead, code):
         "rental_days": lead.rental_days, "location": lead.location, "event_date": lead.event_date,
         "event_end_date": lead.event_end_date, "contract_signed": bool(lead.contract_signed),
         "assigned_to": lead.assigned_to, "source": COPY_SOURCES[code], "notes": info,
+        # kwota do panelu skuteczności w CRM PL (statystyki i przychody PL kopii nie liczą)
+        "value_pln": value, "currency": lead.currency or "EUR",
+        "client_type": getattr(lead, "client_type", None), "country": code.upper(),
         "billing_country": (lead.billing_country or code.upper())[:2],
     }
     days = [(d.event_date, d.location) for d in lead.event_days]
@@ -265,7 +268,7 @@ def copy_payload(lead, code):
     return fields, days, mark
 
 
-def push_copy(eng, meta, lead, code, now=None):
+def push_copy(eng, meta, lead, code, now=None, closed_at=None):
     """Zapisuje / odświeża kopię wygranego leada w bazie polskiego CRM. Zwraca (id w PL, odcisk)."""
     now = now or datetime.utcnow()
     t = meta.tables
@@ -283,12 +286,12 @@ def push_copy(eng, meta, lead, code, now=None):
                 conn.execute(update(leads).where(leads.c.id == pl_id).values(**fields))
         if not pl_id:
             extra = {"created_at": now, "handled_at": now, "handled_how": f"CRM {code.upper()}"[:40],
-                     "currency": lead.currency or "EUR", "value_pln": None, "clickup_pending": False,
+                     "clickup_pending": False,
                      "quality": getattr(lead, "quality", None)}
             values = dict(fields, **{k: v for k, v in extra.items() if k in leads.c})
             pl_id = conn.execute(insert(leads).values(**values)).inserted_primary_key[0]
         if hist is not None and old_stage != fields.get("stage"):
-            row = {"lead_id": pl_id, "from_stage": old_stage, "to_stage": fields.get("stage"), "changed_at": now}
+            row = {"lead_id": pl_id, "from_stage": old_stage, "to_stage": fields.get("stage"), "changed_at": closed_at or now}
             conn.execute(insert(hist).values(**{k: v for k, v in row.items() if k in hist.c}))
         if days_t is not None:
             key = lambda d: (str(d[0]), d[1] or "")

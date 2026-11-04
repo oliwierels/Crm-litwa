@@ -272,6 +272,9 @@ tr:hover td { background: var(--panel2); }
     ]),
     ('raporty', 'Raporty', [
       (url_for('crm_stats'), ep == 'crm_stats', 'graph-up', 'Statystyki', 0, '', ''),
+      (url_for('crm_sales_panel'), ep == 'crm_sales_panel', 'bullseye', 'Skuteczność', 0, '', ''),
+      (url_for('crm_data_cleanup'), ep == 'crm_data_cleanup', 'wrench-adjustable', 'Porządki w danych', 0, '', ''),
+      (url_for('crm_deliverability'), ep == 'crm_deliverability', 'shield-check', 'Dostarczalność', 0, '', ''),
     ]),
   ] %}
   <nav>
@@ -434,6 +437,13 @@ tr:hover td { background: var(--panel2); }
             </div>
           </div>
           <div>
+            <label>Typ klienta <span style="color:var(--muted);font-size:10px">(wymagany najpóźniej przy wysłaniu oferty)</span></label>
+            <select name="client_type">
+              <option value="">— wybierz —</option>
+              {% for k, v in client_types.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+            </select>
+          </div>
+          <div>
             <label>Ocena leada</label>
             <div class="qual-toggle" id="q-qualBtns">
               {% for q in quality_levels %}
@@ -573,6 +583,152 @@ tr:hover td { background: var(--panel2); }
   </div>
 </div>
 
+
+<!-- Bramki etapów (proces sprzedaży): powód straty, potwierdzenie wygranej, typ klienta -->
+<div class="modal-bg" id="sgModal" style="z-index:9600">
+  <div class="modal" style="width:500px">
+    <div class="modal-head"><span id="sg-title">Zmiana etapu</span><button class="modal-close" type="button" onclick="sgClose(null)">×</button></div>
+    <div class="modal-body gap10" id="sg-body"></div>
+  </div>
+</div>
+<script>
+const SG_DATA = {lost: {{ lost_reasons|tojson }}, types: {{ client_types|tojson }}, wins: {{ win_confirmations|tojson }}};
+let sgResolve = null;
+function sgEsc(t) { const d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
+function sgClose(val) { document.getElementById('sgModal').classList.remove('open'); if (sgResolve) { const r = sgResolve; sgResolve = null; r(val); } }
+function sgOpen(gate, stage) {
+  return new Promise(resolve => {
+    sgResolve = resolve;
+    const need = gate.need || [], errs = gate.errors || [], warns = gate.warnings || [], hint = gate.hint || {};
+    let h = '';
+    if (errs.length) h += '<div style="background:#ef44441a;border:1px solid #ef444455;border-radius:8px;padding:8px 10px;font-size:12.5px">'
+      + '<b style="color:var(--red)">Najpierw popraw w leadzie (Edytuj):</b><ul style="margin:4px 0 0 16px;padding:0">'
+      + errs.map(e => '<li>' + sgEsc(e) + '</li>').join('') + '</ul></div>';
+    if (need.includes('lost_reason') || need.includes('lost_comment')) {
+      h += '<div><label>Powód straty *</label><select id="sg-lost" onchange="document.getElementById(\'sg-lc-req\').style.display=this.value===\'inne\'?\'inline\':\'none\'">'
+        + '<option value="">— wybierz —</option>' + Object.entries(SG_DATA.lost).map(([k, v]) => `<option value="${k}">${sgEsc(v)}</option>`).join('')
+        + '</select></div><div><label>Komentarz <span id="sg-lc-req" style="display:none;color:var(--red)">* (wymagany przy „inne”)</span></label>'
+        + '<textarea id="sg-lc" rows="2" placeholder="np. wybrali tańszą ofertę z animatorem"></textarea></div>';
+    }
+    if (need.includes('win_confirmation')) {
+      h += '<div><label>Na jakiej podstawie Wygrany? *</label>' + Object.entries(SG_DATA.wins).map(([k, v]) =>
+        `<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin:4px 0"><input type="radio" name="sg-win" value="${k}" style="width:auto"> ${sgEsc(v)}</label>`).join('')
+        + '<div style="font-size:11px;color:var(--muted)">Samo „klient chce” nie wystarcza — 12 anulacji po wygranej było bez podpisanej umowy.</div></div>';
+    }
+    if (need.includes('client_type')) {
+      h += '<div><label>Typ klienta *</label><select id="sg-type">' + '<option value="">— wybierz —</option>'
+        + Object.entries(SG_DATA.types).map(([k, v]) => `<option value="${k}" ${k === hint.client_type ? 'selected' : ''}>${sgEsc(v)}</option>`).join('')
+        + '</select>' + (hint.client_type ? `<div style="font-size:11px;color:var(--muted)">Podpowiedź: ${sgEsc(hint.client_type_label)} (${sgEsc(hint.why)})</div>` : '') + '</div>';
+    }
+    if (warns.length) h += '<div style="background:#f59e0b1a;border:1px solid #f59e0b55;border-radius:8px;padding:8px 10px;font-size:12.5px">'
+      + warns.map(w => '⚠️ ' + sgEsc(w)).join('<br>')
+      + '<label style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="sg-warn" style="width:auto"> Sprawdziłem — zmień mimo to</label></div>';
+    const canSave = need.length || warns.length;
+    h += '<div id="sg-err" style="color:var(--red);font-size:12px"></div><div class="row" style="gap:8px;justify-content:flex-end">'
+      + '<button type="button" class="btn btn-ghost btn-sm" onclick="sgClose(null)">Anuluj</button>'
+      + (canSave ? '<button type="button" class="btn btn-primary btn-sm" onclick="sgSubmit()">Zapisz etap</button>' : '') + '</div>';
+    document.getElementById('sg-title').textContent = 'Etap → ' + stage;
+    document.getElementById('sg-body').innerHTML = h;
+    document.getElementById('sgModal').classList.add('open');
+    window._sgNeed = need; window._sgWarn = warns.length > 0;
+  });
+}
+function sgSubmit() {
+  const out = {}, need = window._sgNeed || [], err = document.getElementById('sg-err');
+  const lost = document.getElementById('sg-lost'), lc = document.getElementById('sg-lc');
+  if (lost) { if (!lost.value) { err.textContent = 'Wybierz powód straty.'; return; } out.lost_reason = lost.value; out.lost_comment = lc.value.trim();
+    if (lost.value === 'inne' && !out.lost_comment) { err.textContent = 'Przy „inne” wpisz komentarz.'; return; } }
+  if (need.includes('win_confirmation')) { const r = document.querySelector('input[name="sg-win"]:checked'); if (!r) { err.textContent = 'Wybierz potwierdzenie wygranej.'; return; } out.win_confirmation = r.value; }
+  const t = document.getElementById('sg-type'); if (t) { if (!t.value) { err.textContent = 'Wybierz typ klienta.'; return; } out.client_type = t.value; }
+  if (window._sgWarn) { if (!document.getElementById('sg-warn').checked) { err.textContent = 'Potwierdź, że sprawdziłeś kwotę.'; return; } out.confirm_warning = '1'; }
+  sgClose(out);
+}
+// zmiana etapu z kanbanu / przycisków: pyta o brakujące pola i ponawia; true = zmieniono
+async function crmStage(leadId, stage, extra) {
+  extra = extra || {};
+  for (let i = 0; i < 4; i++) {
+    const r = await fetch(`/crm/api/leads/${leadId}/stage`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(Object.assign({stage}, extra))});
+    let d = {}; try { d = await r.json(); } catch (e) { alert('Nie udało się zmienić etapu.'); return false; }
+    if (d.ok) return true;
+    const fields = await sgOpen(d, stage);
+    if (!fields) return false;
+    Object.assign(extra, fields);
+  }
+  return false;
+}
+// formularz edycji: sprawdza bramki przed zapisem (z wartością i dniami z formularza); zwraca pola albo null
+async function crmStageCheck(leadId, stage, payload) {
+  let extra = {};
+  for (let i = 0; i < 4; i++) {
+    const r = await fetch(`/crm/api/leads/${leadId}/stage-check`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(Object.assign({stage}, payload || {}, extra))});
+    const d = await r.json();
+    if (d.ok) return extra;
+    const fields = await sgOpen(d, stage);
+    if (!fields) return null;
+    Object.assign(extra, fields);
+  }
+  return null;
+}
+</script>
+
+<!-- Odhaczanie zadania z wynikiem kontaktu (telefon / SMS / mail) i odpowiedziami z telefonu potwierdzającego -->
+<div class="modal-bg" id="tdModal" style="z-index:9600">
+  <div class="modal" style="width:480px">
+    <div class="modal-head"><span>Wynik kontaktu</span><button class="modal-close" type="button" onclick="tdClose(null)">×</button></div>
+    <div class="modal-body gap10" id="td-body"></div>
+  </div>
+</div>
+<script>
+let tdResolve = null;
+function tdClose(v) { document.getElementById('tdModal').classList.remove('open'); if (tdResolve) { const r = tdResolve; tdResolve = null; r(v); } }
+function tdOpen(d) {
+  return new Promise(resolve => {
+    tdResolve = resolve;
+    let h = `<div style="font-size:12.5px;color:var(--muted)">${sgEsc(d.error || '')}</div><div class="row" style="gap:8px;flex-wrap:wrap">`;
+    for (const [k, v] of Object.entries(d.outcomes || {})) h += `<label class="btn btn-secondary btn-sm" style="cursor:pointer"><input type="radio" name="td-out" value="${k}" style="width:auto;margin-right:6px" onchange="tdToggle()">${sgEsc(v)}</label>`;
+    h += '</div>';
+    if (d.confirm) {
+      h += '<div id="td-q" style="display:none;flex-direction:column;gap:6px"><b style="font-size:13px">📞 Telefon potwierdzający — odpowiedzi trafią do leada</b>';
+      for (const [k, q] of Object.entries(d.questions || {})) h += `<div><label>${sgEsc(q)} *</label><input id="td-${k}" data-q="${k}"></div>`;
+      h += '</div>';
+    }
+    h += '<div id="td-err" style="color:var(--red);font-size:12px"></div><div class="row" style="gap:8px;justify-content:flex-end">'
+      + '<button type="button" class="btn btn-ghost btn-sm" onclick="tdClose(null)">Anuluj</button>'
+      + '<button type="button" class="btn btn-primary btn-sm" onclick="tdSubmit()">Zapisz</button></div>';
+    document.getElementById('td-body').innerHTML = h;
+    document.getElementById('tdModal').classList.add('open');
+  });
+}
+function tdToggle() {
+  const r = document.querySelector('input[name="td-out"]:checked'), q = document.getElementById('td-q');
+  if (q) q.style.display = r && r.value === 'odebral' ? 'flex' : 'none';
+}
+function tdSubmit() {
+  const r = document.querySelector('input[name="td-out"]:checked');
+  if (!r) { document.getElementById('td-err').textContent = 'Wybierz wynik.'; return; }
+  const answers = {};
+  if (r.value === 'odebral') document.querySelectorAll('#td-q input').forEach(i => { answers[i.dataset.q] = i.value.trim(); });
+  if (r.value === 'odebral' && document.getElementById('td-q') && Object.values(answers).some(v => !v)) {
+    document.getElementById('td-err').textContent = 'Wpisz odpowiedzi na wszystkie 4 pytania (może być „nie wiadomo”).'; return;
+  }
+  tdClose({outcome: r.value, answers});
+}
+// odhacza zadanie; przy telefonie / SMS / mailu pyta o wynik. Zwraca {ok, done} (jak odpowiedź API)
+async function crmTaskDone(id) {
+  let body = {};
+  for (let i = 0; i < 3; i++) {
+    const r = await fetch(`/crm/api/activity/${id}/done`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json().catch(() => ({ok: false}));
+    if (d.ok || !d.need_outcome) return d;
+    const v = await tdOpen(d);
+    if (!v) return {ok: false};
+    body = v;
+  }
+  return {ok: false};
+}
+</script>
 {% block scripts %}{% endblock %}
 <script>
 // Wybór adresatów: lead z dwoma adresami — pod polem „Do” oba do zaznaczenia (domyślnie oba).

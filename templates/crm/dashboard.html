@@ -275,8 +275,7 @@ function hideOpLink() {
 function markDone(id, btn) {
   if (btn.disabled) return;  // blokada podwójnego kliknięcia — endpoint przełącza done/niedone
   btn.disabled = true;
-  fetch(`/crm/api/activity/${id}/done`, {method:'POST'})
-    .then(r=>r.json()).then(res => {
+  crmTaskDone(id).then(res => {
       if (!res || !res.ok || !res.done) { btn.disabled = false; return; }
       const row = btn.closest('.act-row');
       if (row) { row.style.opacity='.3'; row.style.pointerEvents='none'; }

@@ -66,10 +66,12 @@
         <b>{{ l.company }}</b>
         <span class="al-meta">{{ l.contact }}{% if l.phone %} · 📞 <a href="tel:{{ l.phone }}" style="color:inherit">{{ l.phone }}</a>{% endif %}{% if l.email %} · ✉️ {{ l.email }}{% endif %}{% if l.source %} · {{ l.source }}{% endif %}</span>
         <span class="al-age">{{ '⚠️ z poprzedniego dnia · ' if l.old }}wpadł {{ l.when }} ({{ l.age_h|round|int }} h temu)</span>
+        {% if l.resp_min is not none %}<span class="al-age" style="{{ 'color:#fff;background:#dc2626;border-radius:5px;padding:1px 6px' if l.late else '' }}">⏱ {{ l.resp_min }} min pracy bez odpowiedzi{{ ' — przekroczony cel ' ~ l.target ~ ' min' if l.late }}</span>{% endif %}
       </div>
       {% if l.notes %}<div class="al-notes">{{ l.notes }}</div>{% endif %}
       <div class="al-acts">
         <a class="al-main" href="{{ url_for('crm_lead_detail', lead_id=l.id) }}">Otwórz lead</a>
+        {% if l.draft_id %}<a href="{{ url_for('crm_mail_compose', lead=l.id, draft=l.draft_id) }}">✉️ Otwórz szkic (osoba prywatna)</a>{% endif %}
         <button type="button" class="al-ok" onclick="alHandled({{ l.id }}, 'telefon', this)">📞 Zadzwoniłem — obsłużony</button>
         <a href="{{ url_for('crm_mail_compose', lead=l.id, auto=1, ai=nocall) }}" {{ 'disabled' if not l.has_email }} title="{{ 'Brak e-maila w leadzie' if not l.has_email }}" {% if not l.has_email %}onclick="return false"{% endif %}>📵 Nie odebrał → mail</a>
         <a href="{{ url_for('crm_mail_compose', lead=l.id, auto=1, ai=ask) }}" {{ 'disabled' if not l.has_email }} {% if not l.has_email %}onclick="return false"{% endif %}>✉️ Mail z prośbą o dane (Claude)</a>

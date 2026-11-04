@@ -65,7 +65,7 @@ const ep = document.getElementById('ep');
 
 function markDonePopup() {
   if (!curId) return;
-  fetch(`/crm/api/activity/${curId}/done`, {method:'POST'}).then(() => { cal.refetchEvents(); ep.style.display='none'; });
+  crmTaskDone(curId).then(res => { if (res && res.ok) { cal.refetchEvents(); ep.style.display='none'; } });
 }
 
 const cal = new FullCalendar.Calendar(document.getElementById('calendar'), {

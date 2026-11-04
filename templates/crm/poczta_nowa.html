@@ -76,7 +76,8 @@
     <div class="mc-col">
       <h4>🇵🇱 Piszesz po polsku</h4>
       <input type="text" name="subject" id="mc-subj" value="{{ subject_pl }}" placeholder="Temat po polsku" style="width:100%;margin-bottom:8px">
-      <textarea name="body" id="mc-body" placeholder="Napisz treść po polsku — obok sama pojawi się wersja dla klienta.&#10;&#10;Np.: Dzień dobry, dziękujemy za wiadomość. Termin 12 grudnia jest wolny…"></textarea>
+      {% if draft %}<div style="background:#6366f11a;border:1px solid #6366f155;border-radius:8px;padding:6px 10px;margin-bottom:6px;font-size:12px">✉️ Szkic pierwszej odpowiedzi dla osoby prywatnej (po polsku — obok pojawi się wersja dla klienta). Sprawdź i popraw — wyjdzie dopiero po kliknięciu „Wyślij”.</div>{% endif %}
+      <textarea name="body" id="mc-body" placeholder="Napisz treść po polsku — obok sama pojawi się wersja dla klienta.&#10;&#10;Np.: Dzień dobry, dziękujemy za wiadomość. Termin 12 grudnia jest wolny…">{{ draft_body or '' }}</textarea>
       <div class="mc-status">Tłumaczenie robi się samo chwilę po tym, jak przestaniesz pisać. Podpis dodaje się sam na końcu.</div>
     </div>
     <div class="mc-col mc-out">

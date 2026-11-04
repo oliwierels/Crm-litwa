@@ -32,11 +32,58 @@
 {% set urg_cls = {'overdue':'u-overdue','today':'u-today','soon':'u-soon','future':'u-future','done':'u-done'} %}
 {% set ic_colors = {'green':'var(--green)','yellow':'var(--yellow)','red':'var(--red)'} %}
 {% set ic_labels = {'green':'Aktywny','yellow':'Wymaga uwagi','red':'Nieaktywny – zadzwoń!'} %}
+{% if request.args.get('uwaga') %}
+<div style="background:#f59e0b1a;border:1px solid #f59e0b66;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px">
+  ⚠️ {{ request.args.get('uwaga') }}
+</div>
+{% endif %}
 
 <div style="display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start">
 
   <!-- LEFT -->
   <div style="display:flex;flex-direction:column;gap:12px">
+
+    <!-- Proces sprzedaży: typ klienta, kraj, powód straty, potwierdzenie, telefon potwierdzający -->
+    {% set ct_hint = client_type_hint(lead) %}
+    <div class="panel" id="sprzedaz">
+      <div class="panel-header">🎯 Proces sprzedaży</div>
+      <div class="panel-body" style="font-size:12.5px;display:flex;flex-direction:column;gap:6px">
+        <form method="post" action="{{ url_for('crm_lead_sales_fields', lead_id=lead.id) }}" style="display:flex;flex-direction:column;gap:6px">
+          <div><label style="margin:0">Typ klienta {% if not lead.client_type %}<span style="color:var(--red)">— wymagany przed ofertą</span>{% endif %}</label>
+            <select name="client_type" onchange="this.form.submit()">
+              <option value="">— wybierz —</option>
+              {% for k, v in client_types.items() %}<option value="{{ k }}" {{ 'selected' if lead.client_type == k }}>{{ v }}</option>{% endfor %}
+            </select>
+            {% if not lead.client_type %}<div style="color:var(--muted);font-size:11px">Podpowiedź: <b>{{ ct_hint[1] }}</b> ({{ ct_hint[2] }})
+              <button class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:11px" name="client_type" value="{{ ct_hint[0] }}">✓ ustaw</button></div>{% endif %}
+          </div>
+          <div><label style="margin:0">Kraj</label>
+            <select name="country" onchange="this.form.submit()">
+              <option value="">{{ countries.get(lead_country(lead), lead_country(lead)) }} (podpowiedź)</option>
+              {% for k, v in countries.items() %}<option value="{{ k }}" {{ 'selected' if lead.country == k }}>{{ v }}</option>{% endfor %}
+            </select>
+          </div>
+        </form>
+        {% set fails = lead_failed_attempts(lead) %}
+        <div>📵 Nieudane próby kontaktu z rzędu: <b style="color:{{ 'var(--red)' if fails >= attempt_limit else 'inherit' }}">{{ fails }}/{{ attempt_limit }}</b>
+          {% if fails >= attempt_limit %}<span style="color:var(--red)"> — zdecyduj (zadanie ⚖️)</span>{% endif %}</div>
+        {% set rmin = lead_response_minutes(lead) %}
+        {% if rmin is not none and lead.created_at and (lead.handled_at or lead.stage == 'Nowy') %}
+          <div>⏱ Czas reakcji: <b style="color:{{ 'var(--red)' if rmin > response_target else 'var(--green)' }}">{{ rmin }} min</b> pracy
+            {{ '(lead jeszcze bez odpowiedzi)' if not lead.handled_at }} <span style="color:var(--muted)">· cel {{ response_target }} min</span></div>
+        {% endif %}
+        {% if lead.stage == 'Stracony' %}
+          <div>❌ Powód straty: <b>{{ lost_reasons.get(lead.lost_reason or '', 'brak (sprzed obowiązkowego powodu)') }}</b>{% if lead.lost_comment %} — {{ lead.lost_comment }}{% endif %}</div>
+        {% endif %}
+        {% if lead.stage in ['Wygrany', 'Zrealizowany'] and lead.win_confirmation %}
+          <div>✅ Wygrany na podstawie: <b>{{ win_confirmations.get(lead.win_confirmation, lead.win_confirmation) }}</b></div>
+        {% endif %}
+        {% if lead.call_answers %}{% set ans = lead.call_answers|fromjson %}
+          <div style="border-top:1px solid var(--border);padding-top:6px">📞 <b>Telefon potwierdzający</b>{% if ans.at %} ({{ ans.at }}){% endif %}
+            {% for k, q in confirm_questions %}<div><span style="color:var(--muted)">{{ q }}</span> {{ ans.get(k) or '—' }}</div>{% endfor %}</div>
+        {% endif %}
+      </div>
+    </div>
 
     <!-- Inactivity -->
     <div class="panel" style="border-color:{{ ic_colors[inactive_color] }}44">
@@ -55,7 +102,7 @@
       <div class="panel-body">
         <form method="POST" action="{{ url_for('crm_set_stage', lead_id=lead.id) }}" style="display:flex;flex-direction:column;gap:4px">
           {% for s in stages %}
-          <button type="submit" name="stage" value="{{ s }}"
+          <button type="submit" name="stage" value="{{ s }}" onclick="event.preventDefault(); crmStage({{ lead.id }}, '{{ s }}').then(ok => ok && location.reload())"
             style="text-align:left;padding:6px 10px;border-radius:6px;border:1px solid {% if lead.stage==s %}{{ stage_colors[s] }}{% else %}transparent{% endif %};background:{% if lead.stage==s %}{{ stage_colors[s] }}18{% else %}transparent{% endif %};color:{% if lead.stage==s %}{{ stage_colors[s] }}{% else %}var(--muted){% endif %};cursor:pointer;font-size:13px;font-weight:{% if lead.stage==s %}600{% else %}400{% endif %}">
             {{ s }}
           </button>
@@ -526,9 +573,16 @@
       <button class="modal-close" onclick="document.getElementById('editModal').classList.remove('open')">×</button>
     </div>
     <div class="modal-body">
-      <form method="POST" action="{{ url_for('crm_edit_lead', lead_id=lead.id) }}">
+      <form method="POST" action="{{ url_for('crm_edit_lead', lead_id=lead.id) }}" id="editLeadForm" onsubmit="return editLeadGate(event)">
+        <input type="hidden" name="lost_reason"><input type="hidden" name="lost_comment">
+        <input type="hidden" name="win_confirmation"><input type="hidden" name="confirm_warning">
         <div class="gap10">
           <div><label>Firma *</label><input name="company" value="{{ lead.company }}" required></div>
+          <div><label>Typ klienta</label>
+            <select name="client_type">
+              <option value="">— wybierz —</option>
+              {% for k, v in client_types.items() %}<option value="{{ k }}" {{ 'selected' if lead.client_type == k }}>{{ v }}</option>{% endfor %}
+            </select></div>
           <div class="grid2">
             <div><label>Osoba</label><input name="contact_name" value="{{ lead.contact_name or '' }}"></div>
             <div><label>Telefon</label><input name="contact_phone" value="{{ lead.contact_phone or '' }}"></div>
@@ -614,7 +668,7 @@
 {% block scripts %}
 <script>
 function markDone(id) {
-  fetch(`/crm/api/activity/${id}/done`, {method:'POST'}).then(() => location.reload());
+  crmTaskDone(id).then(res => res && res.ok && location.reload());
 }
 function noAnswer(id) {
   fetch(`/crm/api/activity/${id}/no_answer`, {method:'POST'}).then(() => location.reload());
@@ -702,5 +756,27 @@ document.getElementById('commentForm').addEventListener('submit', e => {
     alert('Napisz komentarz albo nagraj wiadomość głosową.');
   }
 });
+</script>
+<script>
+let editGateOk = false;
+async function editLeadGate(e) {
+  const f = document.getElementById('editLeadForm');
+  if (editGateOk) return true;
+  const stage = f.querySelector('select[name="stage"]').value;
+  if (stage === {{ lead.stage|tojson }}) return true;
+  e.preventDefault();
+  const fields = await crmStageCheck({{ lead.id }}, stage, {
+    value_pln: f.querySelector('[name="value_pln"]').value,
+    event_dates: (f.querySelector('[name="event_dates"]') || {}).value,
+    client_type: f.querySelector('select[name="client_type"]').value,
+  });
+  if (fields === null) return false;
+  for (const [k, v] of Object.entries(fields)) {
+    const el = f.querySelector(`[name="${k}"]`); if (el) el.value = v;
+  }
+  editGateOk = true;
+  f.requestSubmit ? f.requestSubmit() : f.submit();
+  return false;
+}
 </script>
 {% endblock %}
