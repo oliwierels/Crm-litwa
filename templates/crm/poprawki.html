@@ -4,19 +4,22 @@
 {% block content %}
 <div class="panel" style="padding:16px 18px;max-width:900px">
   {% if msg %}<div style="margin-bottom:10px;font-weight:600">{{ msg }}</div>{% endif %}
-  <p style="margin:0 0 12px;color:var(--muted);font-size:12.5px">Ci klienci ({{ mkt.flag }} {{ mkt.name }}) dostali <b>ofertę z ceną</b>, w której był błędny link do formularza, i od tego czasu nie było z nimi kontaktu
-    (bez maili z prośbą o dane, leadów zamkniętych i tych, którzy odpisali albo z którymi rozmawialiście). Sprawdź listę — kogoś, kogo nie trzeba poprawiać, kliknij „Pomiń”.
+  <p style="margin:0 0 12px;color:var(--muted);font-size:12.5px">Do tych klientów ({{ mkt.flag }} {{ mkt.name }}) <b>naprawdę wyszedł</b> mail z błędnym linkiem — lista jest wzięta
+    z folderu <b>Wysłane</b> w Poczcie (przy każdym: kiedy, do kogo, z jakiej skrzynki i jaki temat). Kogoś, kogo nie trzeba poprawiać, kliknij „Pomiń”.
+    Klienci z ⚠️ (odpisali, był telefon, poszedł już inny mail albo lead jest zamknięty) nie idą w „Wyślij wszystkim” — tylko ręcznie.
     Poprawka to pełna oferta {{ mkt.lang_in_pl }}: krótkie przeprosiny za błędny link, cena, co robi robot (rozmowa, taniec, zdjęcia, powitanie gości), co jest w cenie
     i <b>PDF oferty w załączniku</b> — bez żadnych linków do formularzy.</p>
   {% if rows %}
-  <form method="post" action="{{ url_for('crm_badlink_fix_all') }}" onsubmit="return confirm('Wysłać poprawioną ofertę z PDF do {{ rows|selectattr('price')|list|length }} klientów?')" style="margin-bottom:12px">
-    <button class="btn btn-primary btn-sm">📨 Wyślij poprawioną ofertę wszystkim ({{ rows|selectattr('price')|list|length }})</button>
+  <form method="post" action="{{ url_for('crm_badlink_fix_all') }}" onsubmit="return confirm('Wysłać poprawioną ofertę z PDF do {{ rows|selectattr('ok')|list|length }} klientów?')" style="margin-bottom:12px">
+    <button class="btn btn-primary btn-sm">📨 Wyślij poprawioną ofertę wszystkim bez ⚠️ ({{ rows|selectattr('ok')|list|length }})</button>
   </form>
   {% for r in rows %}
   <div style="border-top:1px solid var(--border);padding:10px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px">
     <div style="flex:1;min-width:240px"><a href="{{ url_for('crm_lead_detail', lead_id=r.lead.id) }}" style="color:var(--text);font-weight:700">{{ r.lead.company }}</a>
       <span style="color:var(--muted)"> · {{ r.lead.emails|join(', ') }}</span>
-      <div style="color:var(--muted);font-size:11.5px">📨 {{ r.ev.when.strftime('%d.%m %H:%M') if r.ev.when else '' }} · {{ r.ev.line }}{% if r.ev.confirmed %} · ✅ potwierdzone w Wysłanych{% endif %}</div>
+      <div style="color:var(--muted);font-size:11.5px">📨 {{ r.ev.when.strftime('%d.%m.%y %H:%M') if r.ev.when else '' }} · do {{ r.ev.to }} · z {{ r.ev.box }} ·
+        <a href="{{ url_for('crm_mail', f='sent', m=r.ev.mail_id) }}" style="color:var(--accent)">„{{ r.ev.subject[:70] }}”</a></div>
+      {% for w in r.ev.warn %}<div style="color:var(--yellow);font-size:11.5px">⚠️ {{ w }}</div>{% endfor %}
       {% if r.price %}<div style="color:var(--green)">{{ '{:,}'.format(r.price).replace(',', ' ') }} € — <a href="{{ url_for('crm_lt_offer_pdf', lead_id=r.lead.id) }}" target="_blank" style="color:var(--accent)">podgląd PDF</a></div>
       {% else %}<div style="color:var(--yellow)">Brak {{ r.missing|join(', ') }} — napisz ręcznie</div>{% endif %}</div>
     <form method="post" action="{{ url_for('crm_badlink_skip', lead_id=r.lead.id) }}">

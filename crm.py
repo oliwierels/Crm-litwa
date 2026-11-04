@@ -8226,39 +8226,71 @@ app.jinja_env.globals.update(quote_mail_preview=quote_mail_preview)
 BADLINK_FIXED_KEY = "badlink_fixed:{}"
 
 
-def bad_link_leads(code=None, with_evidence=False):
-    """Leady rynku `code`, które dostały OFERTĘ Z CENĄ (automatyczna / ręczna wycena mailem) z błędnym linkiem
-    (adres-wzór z listy zmiennych) i nie dostały poprawki. Bez: maili z prośbą o dane, leadów zamkniętych
-    (Wygrany / Zrealizowany / Stracony), pominiętych i takich, z którymi po tym mailu był już kontakt."""
-    code = code or current_market()
-    acts = (all_markets(Activity.query.filter(Activity.lead_id.isnot(None), Activity.notes.like("💶%"),
-                                              Activity.notes.like(f"%{BAD_LINK_MARK}%")))
-            .order_by(Activity.created_at).all())
-    first = {}
-    for a in acts:
-        first.setdefault(a.lead_id, a)
+_BADLINK_ADDR_RE = re.compile(r"[\w.+'-]+@[\w-]+(?:\.[\w-]+)+")
+_badlink_cache = {}  # rynek -> (czas, wynik) — lista liczy się z treści maili, okno alarmów pyta o nią na każdej stronie
+BADLINK_DAYS = 60  # błędny link pojawił się niedawno — starszych maili nie przeszukujemy
+
+
+def _badlink_scan(code):
+    """Leady rynku `code`, do których ze skrzynki FAKTYCZNIE wyszedł mail z błędnym linkiem (adres-wzór z listy
+    zmiennych) — oferta z ceną albo prośba o dane. Źródło to folder Wysłane w Poczcie (to, co klient naprawdę dostał),
+    nie notatki w CRM. Bez leadów, które dostały już poprawkę albo zostały pominięte. Zamknięty lead albo taki, z którym
+    po tym mailu był już kontakt, zostaje na liście z ostrzeżeniem (i nie idzie w „Wyślij wszystkim”)."""
+    since = datetime.utcnow() - timedelta(days=BADLINK_DAYS)
+    mails = (all_markets(MailMessage.query.filter(MailMessage.folder == "sent", MailMessage.date >= since,
+                                                  MailMessage.body_text.like(f"%{BAD_LINK_MARK}%")))
+             .order_by(MailMessage.date).all())
+    found = {}
+    for m in mails:
+        for addr in _BADLINK_ADDR_RE.findall(f"{m.to_addrs or ''} {m.cc_addrs or ''}"):
+            addr = addr.lower()
+            lead = (all_markets(Lead.query.filter(Lead.market == code, db.or_(
+                db.func.lower(db.func.trim(Lead.contact_email)) == addr,
+                db.func.lower(db.func.trim(Lead.contact_email2)) == addr)))
+                .order_by(Lead.created_at.desc()).first())
+            if lead is not None and lead.id not in found:
+                found[lead.id] = (lead, m, addr)
     out = []
-    for lead_id, act in first.items():
-        lead = all_markets(Lead.query.filter(Lead.id == lead_id, Lead.market == code)).first()
-        if not lead or lead.stage in ("Wygrany", "Zrealizowany", "Stracony") or get_setting(BADLINK_FIXED_KEY.format(lead.id)):
+    for lead, m, addr in found.values():
+        if get_setting(BADLINK_FIXED_KEY.format(lead.id)):
             continue
-        when = act.done_at or act.created_at or datetime.min
-        later = all_markets(Activity.query.filter(
-            Activity.lead_id == lead.id, Activity.id != act.id, Activity.done.is_(True),
-            db.or_(Activity.done_at > when, Activity.created_at > when),
-            db.or_(Activity.kind.in_(("call", "email", "meeting")), Activity.notes.like("📄%"), Activity.notes.like("✉️%")),
-            db.not_(Activity.notes.like(f"%{BAD_LINK_MARK}%")))).first()
-        replied = None
+        when = m.date or datetime.min
+        warn = []
+        if lead.stage in ("Wygrany", "Zrealizowany", "Stracony"):
+            warn.append(f"lead jest już „{lead.stage}”")
         q = mail_query_for_addrs(lead.emails)
         if q is not None:
-            replied = all_markets(q.filter(MailMessage.folder == "in", MailMessage.date > when)).first()
-        if later or replied:
-            continue  # po tym mailu był już kontakt (telefon, inny mail, odpowiedź klienta) — nie poprawiamy na ślepo
-        confirmed = False
-        if q is not None:
-            confirmed = bool(all_markets(q.filter(MailMessage.folder == "sent", MailMessage.body_text.like(f"%{BAD_LINK_MARK}%"))).first())
-        out.append((lead, {"when": to_local(when) if when != datetime.min else None,
-                           "line": (act.notes or "").split("\n")[0][:160], "confirmed": confirmed}) if with_evidence else lead)
+            reply = all_markets(q.filter(MailMessage.folder == "in", MailMessage.date > when)
+                                .order_by(MailMessage.date)).first()
+            if reply is not None:
+                warn.append(f"klient odpisał {to_local(reply.date):%d.%m %H:%M}")
+            other = all_markets(q.filter(MailMessage.folder == "sent", MailMessage.date > when, MailMessage.id != m.id,
+                                         db.not_(MailMessage.body_text.like(f"%{BAD_LINK_MARK}%")))
+                                .order_by(MailMessage.date)).first()
+            if other is not None:
+                warn.append(f"po tym mailu poszedł już inny: „{(other.subject or '')[:60]}” {to_local(other.date):%d.%m %H:%M}")
+        call = all_markets(Activity.query.filter(Activity.lead_id == lead.id, Activity.done.is_(True),
+                                                 Activity.kind.in_(("call", "meeting")),
+                                                 db.or_(Activity.done_at > when, Activity.created_at > when))).first()
+        if call is not None:
+            warn.append("po tym mailu był telefon / spotkanie")
+        out.append((lead, {"when": to_local(m.date) if m.date else None, "to": addr, "box": m.mailbox,
+                           "subject": m.subject_pl or m.subject or "", "mail_id": m.id, "warn": warn}))
+    return out
+
+
+def bad_link_leads(code=None, with_evidence=False, max_age=120):
+    """Lista z _badlink_scan (z pamięci podręcznej na 2 minuty). with_evidence=True → [(lead, dowód)], inaczej [lead]."""
+    code = code or current_market()
+    hit = _badlink_cache.get(code)
+    if hit is None or time.time() - hit[0] > max_age:
+        hit = (time.time(), [(l.id, ev) for l, ev in _badlink_scan(code)])
+        _badlink_cache[code] = hit
+    out = []
+    for lead_id, ev in hit[1]:
+        lead = db.session.get(Lead, lead_id)
+        if lead is not None:
+            out.append((lead, ev) if with_evidence else lead)
     return out
 
 
@@ -8271,15 +8303,17 @@ def send_badlink_fix(lead, actor_id):
         return err
     set_setting(BADLINK_FIXED_KEY.format(lead.id), datetime.utcnow().isoformat(timespec="seconds"))
     db.session.commit()
+    _badlink_cache.clear()
     return None
 
 
 @app.route("/crm/poprawki")
 def crm_badlink_list():
     rows = []
-    for l, ev in bad_link_leads(with_evidence=True):
+    for l, ev in bad_link_leads(with_evidence=True, max_age=0):
         q = lt_quote(l, remote_budget=1)
-        rows.append({"lead": l, "price": q.get("price"), "missing": q.get("missing") or [], "ev": ev})
+        rows.append({"lead": l, "price": q.get("price"), "missing": q.get("missing") or [], "ev": ev,
+                     "ok": bool(q.get("price")) and not ev["warn"]})
     return render_template("crm/poprawki.html", rows=rows, msg=request.args.get("msg", ""))
 
 
@@ -8297,13 +8331,14 @@ def crm_badlink_skip(lead_id):
     lead = db.session.get(Lead, lead_id) or abort(404)
     set_setting(BADLINK_FIXED_KEY.format(lead.id), "pominięty " + datetime.utcnow().isoformat(timespec="seconds"))
     db.session.commit()
+    _badlink_cache.clear()
     return redirect(url_for("crm_badlink_list", msg=f"{lead.company}: pominięty — nic nie wysłano"))
 
 
 @app.route("/crm/poprawki/wszystkim", methods=["POST"])
 def crm_badlink_fix_all():
     user_id = get_current_user(request)["id"]
-    ids = [l.id for l in bad_link_leads()]
+    ids = [l.id for l, ev in bad_link_leads(with_evidence=True, max_age=0) if not ev["warn"]]  # ostrzeżone — tylko ręcznie
 
     def job():
         ok, failed = 0, []
