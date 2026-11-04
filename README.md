@@ -50,6 +50,26 @@ wystarczy dopisać parę do `lt_strings.py`.
 
 3. Settings → Networking → Generate Domain.
 
+## 🚨 Nowe leady — obsłużyć tego samego dnia
+
+Każdy nowy lead (osobno dla Litwy i Niemiec) wyskakuje w oknie, które zasłania CRM na każdej stronie, aż zostanie
+obsłużony: z okna można otworzyć leada, kliknąć „📞 Zadzwoniłem”, „📵 Nie odebrał → mail” albo „✉️ Mail z prośbą
+o dane” (Claude pisze maila w języku klienta, Ty sprawdzasz i wysyłasz), „📄 Oferta z Claude” albo „✅ Obsłużony”.
+Lead znika też sam, gdy z CRM pójdzie do niego mail, oferta, wycena albo WhatsApp, albo gdy zadanie „telefon” jest
+odhaczone. Okno można odłożyć najwyżej na 10 minut; nowy lead = sygnał dźwiękowy, licznik w tytule karty
+i (po włączeniu) powiadomienie przeglądarki. `LEAD_ALERT_DAYS` — z ilu dni wstecz brać leady przy pierwszym
+uruchomieniu (domyślnie 2).
+
+## 📋 Przegląd poczty przez Claude'a
+
+Codziennie o `MAIL_REVIEW_HOURS` (domyślnie 12 i 15, czas polski) Claude przegląda odebrane i wysłane ze wszystkich
+skrzynek rynku (ostatnie `MAIL_REVIEW_DAYS`, domyślnie 14 dni) i wypisuje sprawy, które czekają na nas:
+nieodpisane maile, prośby o umowę / spotkanie / ofertę, przypomnienia klientów, obietnice bez pokrycia.
+Od `MAIL_TASKS_SHOW_FROM` (domyślnie 16:00) sprawy pokazują się w tym samym oknie co nowe leady. „✍️ Odpowiedz
+z Claude” otwiera odpowiedź z gotowym szkicem; wysłana odpowiedź (także z Outlooka) zamyka sprawę.
+Lista i przycisk „🔍 Przejrzyj pocztę teraz” są też w Poczcie. Model: `MAIL_REVIEW_AI_MODEL`
+(domyślnie `claude-opus-5-5`), `MAIL_REVIEW=0` wyłącza przegląd.
+
 ## Poczta: ✨ Claude napisze maila
 
 W okienku odpowiedzi / nowego maila: wpisz polecenie (np. „odpisz, że 12 grudnia jest wolny, cena jak w CRM”) albo wklej

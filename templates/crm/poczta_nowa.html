@@ -29,6 +29,7 @@
 <form id="mc-form" enctype="multipart/form-data" onsubmit="return mcSend(event)">
   <input type="hidden" name="reply" value="{{ reply.id if reply else '' }}">
   <input type="hidden" name="lead" value="{{ lead.id if lead else '' }}">
+  <input type="hidden" name="task" value="{{ task.id if task else '' }}">
   <textarea name="quoted" id="mc-quoted" hidden>{{ quoted }}</textarea>
   <div class="mc-head">
     <label>Od</label>
@@ -47,7 +48,8 @@
   <div class="mc-ai">
     <div class="mc-ai-head">✨ Claude napisze maila
       <span class="mc-status">— {{ 'widzi maila, na który odpowiadasz' if reply else ('widzi przekazywanego maila' if fwd else 'opisz, co ma być w mailu') }}{{ ', wątek' if reply }}{{ ' i dane leada (cena z kalkulatora, daty, miejsce)' if lead or reply }}</span></div>
-    <textarea id="mc-ai-instr" rows="2" placeholder="{{ 'Np.: odpisz, że 12 grudnia jest wolny, cena jak w CRM, i poproś o adres sali' if reply else 'Np.: napisz do klienta, że wysyłamy umowę i prosimy o dane do faktury' }}"></textarea>
+    {% if task %}<div style="font-size:12px;margin-bottom:6px">📋 Sprawa z przeglądu poczty: <b>{{ task.title }}</b> — {{ task.reason }}</div>{% endif %}
+    <textarea id="mc-ai-instr" rows="2" placeholder="{{ 'Np.: odpisz, że 12 grudnia jest wolny, cena jak w CRM, i poproś o adres sali' if reply else 'Np.: napisz do klienta, że wysyłamy umowę i prosimy o dane do faktury' }}">{{ ai_instruction }}</textarea>
     <details id="mc-ai-paste-wrap"><summary>Wklej treść maila albo notatkę (opcjonalnie)</summary>
       <textarea id="mc-ai-paste" rows="5" placeholder="Wklej tu np. starego maila klienta — Claude odpowie na niego."></textarea></details>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
@@ -157,6 +159,7 @@ async function mcGenerate() {
     btn.disabled = false;
   }
 }
+{% if ai_auto and ai_instruction %}window.addEventListener('load', () => mcGenerate());{% endif %}
 document.getElementById('mc-ai-instr').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); mcGenerate(); } });
 function mcBack() {
   const fd = new FormData();

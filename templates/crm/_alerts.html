@@ -1,0 +1,183 @@
+{# Alarmy: nowe leady do obsłużenia DZIŚ (zawsze) + sprawy z przeglądu poczty (od godziny alerts.show_from).
+   Okno zasłania CRM, dopóki wszystko nie jest obsłużone — można je odłożyć tylko na kilka minut. #}
+{% if alerts and (alerts.leads or alerts.tasks or alerts.other) %}
+{% set n_leads = alerts.leads|length %}
+{% set n_tasks = alerts.tasks|length %}
+<style>
+.al-bar { position:relative; z-index:60; display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 16px;
+          background:#7f1d1d; color:#fff; font-size:13.5px; border-bottom:2px solid #ef4444; }
+.al-bar.al-hot { animation: al-pulse 1.6s ease-in-out infinite; }
+.al-bar.al-calm { background:#78350f; border-bottom-color:#f59e0b; }
+.al-bar a { color:#fde68a; text-decoration:underline; }
+.al-bar button { margin-left:auto; background:#fff; color:#7f1d1d; border:0; border-radius:7px; padding:6px 14px; font-weight:800; cursor:pointer; }
+@keyframes al-pulse { 0%,100% { background:#7f1d1d; } 50% { background:#dc2626; } }
+.al-overlay { position:fixed; inset:0; z-index:9500; background:rgba(5,6,10,.78); backdrop-filter:blur(3px);
+              display:flex; align-items:flex-start; justify-content:center; padding:4vh 16px; overflow:auto; }
+.al-overlay[hidden] { display:none; }
+.al-modal { width:100%; max-width:980px; background:var(--panel); border:3px solid #ef4444; border-radius:14px;
+            box-shadow:0 0 0 6px rgba(239,68,68,.18), 0 20px 60px rgba(0,0,0,.6); animation: al-ring 1.6s ease-in-out infinite; }
+@keyframes al-ring { 0%,100% { box-shadow:0 0 0 4px rgba(239,68,68,.15), 0 20px 60px rgba(0,0,0,.6); } 50% { box-shadow:0 0 0 12px rgba(239,68,68,.35), 0 20px 60px rgba(0,0,0,.6); } }
+.al-head { padding:16px 20px; border-bottom:1px solid var(--border); }
+.al-head h2 { margin:0; font-size:20px; color:#fca5a5; }
+.al-head p { margin:4px 0 0; color:var(--muted); font-size:12.5px; }
+.al-sec { padding:6px 20px 14px; }
+.al-sec h3 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:12px 0 8px; }
+.al-row { border:1px solid var(--border); border-left:4px solid #ef4444; border-radius:9px; padding:10px 12px; margin-bottom:8px; background:var(--panel2); }
+.al-row.al-old { border-left-color:#f97316; }
+.al-row.al-task { border-left-color:#f59e0b; }
+.al-row.al-task.al-urgent { border-left-color:#ef4444; }
+.al-top { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+.al-top b { font-size:15px; }
+.al-meta { color:var(--muted); font-size:12px; }
+.al-age { margin-left:auto; font-size:12px; font-weight:700; color:#fca5a5; white-space:nowrap; }
+.al-notes { font-size:12.5px; color:var(--text); margin:5px 0 7px; opacity:.85; }
+.al-acts { display:flex; gap:6px; flex-wrap:wrap; }
+.al-acts a, .al-acts button { font-size:12px; padding:6px 10px; border-radius:7px; border:1px solid var(--border); background:var(--panel);
+                               color:var(--text); text-decoration:none; cursor:pointer; font-weight:600; }
+.al-acts .al-main { background:var(--accent); border-color:var(--accent); color:#fff; }
+.al-acts .al-ok { background:#166534; border-color:#22c55e; color:#fff; }
+.al-acts [disabled] { opacity:.45; cursor:not-allowed; }
+.al-foot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:12px 20px; border-top:1px solid var(--border); font-size:12px; color:var(--muted); }
+.al-foot button { background:none; border:1px solid var(--border); color:var(--muted); border-radius:7px; padding:6px 10px; cursor:pointer; }
+</style>
+<notr id="al-bar" class="al-bar {{ 'al-hot' if n_leads else 'al-calm' }}">
+  {% if n_leads %}<span>🚨 <b>{{ n_leads }} {{ 'nowy lead czeka' if n_leads == 1 else 'nowe leady czekają' }} na obsługę</b> — trzeba je obsłużyć jeszcze dziś (telefon, mail albo oferta).</span>{% endif %}
+  {% if n_tasks %}<span>📋 <b>{{ n_tasks }} {{ 'sprawa' if n_tasks == 1 else 'spraw' }} z poczty</b> do załatwienia przed końcem dnia.</span>{% endif %}
+  {% for mc, n in alerts.other.items() %}<span>{{ all_mkts[mc].flag }} {{ all_mkts[mc].name }}: <b>{{ n }}</b> {{ 'nowy lead' if n == 1 else 'nowe leady' }} — <a href="{{ url_for('set_market', code=mc) }}">przełącz</a></span>{% endfor %}
+  {% if n_leads or n_tasks %}<button type="button" onclick="alOpen()">Obsłuż teraz</button>{% endif %}
+</notr>
+{% if n_leads or n_tasks %}
+<notr id="al-overlay" class="al-overlay" {{ 'hidden' if alerts.quiet }}>
+ <div class="al-modal">
+  <div class="al-head">
+    {% if n_leads %}<h2>🚨 {{ n_leads }} {{ 'nowy lead' if n_leads == 1 else 'nowe leady' }} — obsłuż jeszcze dziś</h2>
+    <p>Każde zapytanie obsługujemy tego samego dnia: najpierw telefon, a gdy klient nie odbiera — mail z prośbą o dane. Lead znika z tego okna, gdy wyślesz z CRM maila / ofertę albo klikniesz „Zadzwoniłem” / „Obsłużony”.</p>
+    {% else %}<h2>📋 Sprawy z poczty do załatwienia dziś</h2>
+    <p>Claude przejrzał skrzynki (odebrane i wysłane) i znalazł sprawy, które czekają na nas. Sprawa znika, gdy wyślesz odpowiedź albo klikniesz „Załatwione”.</p>{% endif %}
+  </div>
+  {% if n_leads %}
+  <div class="al-sec">
+    <h3>Nowe leady</h3>
+    {% for l in alerts.leads %}
+    {% set ask = "Napisz maila do nowego klienta: podziękuj za zapytanie o wynajem humanoidalnego robota Unitree G1 i poproś o brakujące informacje potrzebne do wyceny (data, miasto i miejsce, godziny od–do, rodzaj wydarzenia, liczba gości) — pytaj tylko o to, czego nie ma w danych leada. Jeśli w danych jest link do formularza, dodaj go." %}
+    {% set nocall = "Dzwoniliśmy do klienta w sprawie jego zapytania, ale nie odebrał. " ~ ask %}
+    <div class="al-row {{ 'al-old' if l.old }}" data-lead="{{ l.id }}">
+      <div class="al-top">
+        <b>{{ l.company }}</b>
+        <span class="al-meta">{{ l.contact }}{% if l.phone %} · 📞 <a href="tel:{{ l.phone }}" style="color:inherit">{{ l.phone }}</a>{% endif %}{% if l.email %} · ✉️ {{ l.email }}{% endif %}{% if l.source %} · {{ l.source }}{% endif %}</span>
+        <span class="al-age">{{ '⚠️ z poprzedniego dnia · ' if l.old }}wpadł {{ l.when }} ({{ l.age_h|round|int }} h temu)</span>
+      </div>
+      {% if l.notes %}<div class="al-notes">{{ l.notes }}</div>{% endif %}
+      <div class="al-acts">
+        <a class="al-main" href="{{ url_for('crm_lead_detail', lead_id=l.id) }}">Otwórz lead</a>
+        <button type="button" class="al-ok" onclick="alHandled({{ l.id }}, 'telefon', this)">📞 Zadzwoniłem — obsłużony</button>
+        <a href="{{ url_for('crm_mail_compose', lead=l.id, auto=1, ai=nocall) }}" {{ 'disabled' if not l.has_email }} title="{{ 'Brak e-maila w leadzie' if not l.has_email }}" {% if not l.has_email %}onclick="return false"{% endif %}>📵 Nie odebrał → mail</a>
+        <a href="{{ url_for('crm_mail_compose', lead=l.id, auto=1, ai=ask) }}" {{ 'disabled' if not l.has_email }} {% if not l.has_email %}onclick="return false"{% endif %}>✉️ Mail z prośbą o dane (Claude)</a>
+        <a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}#oferta-ai">📄 Oferta z Claude</a>
+        <button type="button" onclick="alHandled({{ l.id }}, 'inne', this)">✅ Obsłużony</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if n_tasks %}
+  <div class="al-sec">
+    <h3>Sprawy z poczty (przegląd Claude'a)</h3>
+    {% for t in alerts.tasks %}
+    <div class="al-row al-task {{ 'al-urgent' if t.priority == 'pilne' }}" data-task="{{ t.id }}">
+      <div class="al-top"><b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b><span class="al-meta">{{ t.counterpart }} · „{{ t.subject }}”</span><span class="al-age" style="color:#fcd34d">od {{ t.when }}</span></div>
+      <div class="al-notes">{{ t.reason }}{% if t.action %} <b>→ {{ t.action }}</b>{% endif %}</div>
+      <div class="al-acts">
+        {% if t.mail_id %}<a class="al-main" href="{{ url_for('crm_mail_compose', reply=t.mail_id, task=t.id, auto=1) }}">✍️ Odpowiedz z Claude</a>
+        <a href="{{ url_for('crm_mail', f='all', m=t.mail_id) }}">📬 Otwórz maila</a>{% endif %}
+        {% if t.lead_id %}<a href="{{ url_for('crm_lead_detail', lead_id=t.lead_id) }}">Lead</a>{% endif %}
+        <button type="button" class="al-ok" onclick="alTask({{ t.id }}, 'done', this)">✅ Załatwione</button>
+        <button type="button" onclick="alTask({{ t.id }}, 'dismiss', this)">🚫 Nie dotyczy</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="al-foot">
+    <button type="button" onclick="alSnooze()">⏰ Przypomnij za {{ alerts.snooze_min }} min</button>
+    <button type="button" onclick="alNotify()" id="al-notify-btn">🔔 Powiadomienia w przeglądarce</button>
+    <span>Okno wraca na każdej stronie, dopóki wszystko nie jest obsłużone.</span>
+  </div>
+ </div>
+</notr>
+{% endif %}
+<script>
+(function () {
+  const known = new Set({{ alerts.leads|map(attribute='id')|list|tojson }});
+  let count = {{ n_leads }} + {{ n_tasks }};
+  const baseTitle = document.title.replace(/^\(\d+\)\s*🚨\s*/, '');
+  function setTitle() { document.title = count ? '(' + count + ') 🚨 ' + baseTitle : baseTitle; }
+  setTitle();
+  window.alOpen = function () { const o = document.getElementById('al-overlay'); if (o) { o.hidden = false; o.scrollTop = 0; } };
+  function gone(sel) {
+    const row = document.querySelector(sel); if (row) row.remove();
+    count = Math.max(0, count - 1); setTitle();
+    if (!document.querySelector('#al-overlay [data-lead], #al-overlay [data-task]')) location.reload();
+  }
+  window.alHandled = function (id, how, btn) {
+    btn.disabled = true;
+    const fd = new FormData(); fd.append('how', how);
+    fetch('/crm/leads/' + id + '/obsluzony', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+      .then(r => r.json()).then(() => gone('[data-lead="' + id + '"]')).catch(() => { btn.disabled = false; });
+  };
+  window.alTask = function (id, action, btn) {
+    btn.disabled = true;
+    fetch('/crm/sprawy/' + id + '/' + action, {method: 'POST', headers: {'X-Requested-With': 'fetch'}})
+      .then(r => r.json()).then(() => gone('[data-task="' + id + '"]')).catch(() => { btn.disabled = false; });
+  };
+  window.alSnooze = function () {
+    fetch('{{ url_for('crm_alert_snooze') }}', {method: 'POST', headers: {'X-Requested-With': 'fetch'}})
+      .finally(() => { const o = document.getElementById('al-overlay'); if (o) o.hidden = true; });
+  };
+  window.alNotify = function () {
+    if (!('Notification' in window)) return;
+    Notification.requestPermission().then(p => { const b = document.getElementById('al-notify-btn'); if (b && p === 'granted') b.textContent = '🔔 Powiadomienia włączone'; });
+  };
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.35, 0.7].forEach(t => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.25, ctx.currentTime + t); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.3);
+        o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.3);
+      });
+    } catch (e) {}
+  }
+  setInterval(function () {
+    fetch('{{ url_for('crm_alerts_api') }}', {headers: {'X-Requested-With': 'fetch'}}).then(r => r.json()).then(d => {
+      const fresh = (d.leads || []).filter(id => !known.has(id));
+      if (!fresh.length) return;
+      fresh.forEach(id => known.add(id));
+      count += fresh.length; setTitle(); beep();
+      const bar = document.getElementById('al-bar');
+      if (bar) { bar.classList.add('al-hot'); bar.insertAdjacentHTML('afterbegin', '<span>🔔 <b>Wpadł nowy lead!</b> <a href="javascript:location.reload()">Pokaż</a></span>'); }
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('🚨 Nowy lead w CRM', {body: 'Obsłuż go jeszcze dziś — telefon albo mail.'});
+      }
+    }).catch(() => {});
+  }, 60000);
+})();
+</script>
+{% elif alerts %}
+<script>
+(function () {
+  const known = new Set();
+  setInterval(function () {
+    fetch('{{ url_for('crm_alerts_api') }}', {headers: {'X-Requested-With': 'fetch'}}).then(r => r.json()).then(d => {
+      if ((d.lead_count || 0) > 0 && !known.size) {
+        (d.leads || []).forEach(id => known.add(id));
+        if ('Notification' in window && Notification.permission === 'granted') new Notification('🚨 Nowy lead w CRM', {body: 'Obsłuż go jeszcze dziś.'});
+        document.title = '(' + d.lead_count + ') 🚨 ' + document.title;
+        {% if not alerts.quiet %}location.reload();{% endif %}
+      }
+    }).catch(() => {});
+  }, 60000);
+})();
+</script>
+{% endif %}

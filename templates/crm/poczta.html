@@ -54,6 +54,29 @@
 {% endblock %}
 
 {% block content %}
+{% set mtasks = mail_tasks_open() %}
+<details class="panel" id="sprawy" style="margin-bottom:12px;padding:10px 14px" {{ 'open' if request.args.get('sprawy') or (mtasks and mail_tasks_visible()) }}>
+  <summary style="cursor:pointer;font-weight:700;display:flex;gap:10px;align-items:center;flex-wrap:wrap">📋 Sprawy z przeglądu poczty ({{ mtasks|length }})
+    <span style="font-weight:400;color:var(--muted);font-size:12px">Claude przegląda odebrane i wysłane codziennie o {{ review_hours|join(':00 i ') }}:00 — okno ze sprawami wyskakuje od {{ tasks_from }}:00.</span>
+    <form method="post" action="{{ url_for('crm_mail_review_now') }}" style="margin-left:auto" onclick="event.stopPropagation()">
+      <button class="btn btn-secondary btn-sm" {{ 'disabled' if not ai_ok }}>🔍 Przejrzyj pocztę teraz</button></form>
+  </summary>
+  {% for t in mtasks %}
+  <div style="border-top:1px solid var(--border);padding:8px 0;font-size:12.5px;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+    <div style="flex:1;min-width:260px"><b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b>
+      <div style="color:var(--muted)">{{ t.counterpart }} · „{{ t.subject }}” · od {{ to_local(t.created_at).strftime('%d.%m %H:%M') }}</div>
+      <div>{{ t.reason }}{% if t.action %} <b>→ {{ t.action }}</b>{% endif %}</div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      {% if t.mail_id %}<a class="btn btn-primary btn-sm" href="{{ url_for('crm_mail_compose', reply=t.mail_id, task=t.id, auto=1) }}">✍️ Odpowiedz z Claude</a>
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('crm_mail', f='all', m=t.mail_id, sprawy=1) }}">Otwórz</a>{% endif %}
+      <form method="post" action="{{ url_for('crm_mail_task_action', tid=t.id, action='done') }}"><button class="btn btn-secondary btn-sm">✅ Załatwione</button></form>
+      <form method="post" action="{{ url_for('crm_mail_task_action', tid=t.id, action='dismiss') }}"><button class="btn btn-ghost btn-sm">🚫 Nie dotyczy</button></form>
+    </div>
+  </div>
+  {% else %}
+  <div style="color:var(--muted);font-size:12.5px;padding-top:6px">Brak otwartych spraw.</div>
+  {% endfor %}
+</details>
 <div class="pm-status">
   {% for s in status %}
   <span title="{{ s.login }}">

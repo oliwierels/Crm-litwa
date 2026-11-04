@@ -155,6 +155,9 @@ class Lead(db.Model):
     lt_mail_at = db.Column(db.DateTime, nullable=True)  # wysłany mail do litewskiego leada (prośba o dane)
     form_token = db.Column(db.String(40), nullable=True, index=True)  # link do formularza dla klienta
     form_filled_at = db.Column(db.DateTime, nullable=True)  # klient wypełnił formularz
+    handled_at = db.Column(db.DateTime, nullable=True)  # lead obsłużony (telefon / mail / oferta) — znika z alarmu
+    handled_by = db.Column(db.Integer, nullable=True)
+    handled_how = db.Column(db.String(40), nullable=True)
     # dane do faktury (zakładka „Dane do faktury” w leadzie; NIP -> reszta z Białej listy MF)
     nip = db.Column(db.String(20), nullable=True)
     billing_name = db.Column(db.String(300), nullable=True)
@@ -553,6 +556,9 @@ def ensure_schema():
         if "market" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT 'lt'")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_leads_market ON leads (market)")
+        for col, typ in (("handled_at", "TIMESTAMP NULL"), ("handled_by", "INTEGER"), ("handled_how", "VARCHAR(40)")):
+            if col not in cols:
+                conn.exec_driver_sql(f"ALTER TABLE leads ADD COLUMN {col} {typ}")
         if "pl_id" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN pl_id INTEGER")
         if "lt_mail_at" not in cols:
@@ -678,7 +684,8 @@ def _market_criteria(state):
     opts = [with_loader_criteria(Lead, lambda cls: cls.market == code, include_aliases=True),
             with_loader_criteria(MailMessage, lambda cls: cls.market == code, include_aliases=True),
             with_loader_criteria(Campaign, lambda cls: cls.market == code, include_aliases=True),
-            with_loader_criteria(InboxMessage, lambda cls: cls.market == code, include_aliases=True)]
+            with_loader_criteria(InboxMessage, lambda cls: cls.market == code, include_aliases=True),
+            with_loader_criteria(MailTask, lambda cls: cls.market == code, include_aliases=True)]
     for model in _lead_children():
         opts.append(with_loader_criteria(
             model, lambda cls: db.or_(cls.lead_id.is_(None),
@@ -7986,7 +7993,7 @@ def send_lt_mail(lead, actor_id=None, resend=False):
     db.session.add(Activity(
         lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(),
         assigned_to=actor_id or lead.assigned_to or sender["id"],
-        notes=f"🇱🇹 Mail z prośbą o dane do wyceny wysłany do {to_addr} (od: {sender['email']})\n"
+        notes=f"{markets.get(lead_market(lead))['flag']} Mail z prośbą o dane do wyceny wysłany do {to_addr} (od: {sender['email']})\n"
               f"Temat: {subject}\n---\n{body}"))
     db.session.commit()
     return None
@@ -9455,6 +9462,10 @@ def _mail_draft_context(code, reply_id=None, lead_id=None, pasted="", to=""):
                         + (" — godziny ZAŁOŻONE, nie od klienta" if q.get("assumed") else ""))
         if lead.notes:
             info.append(f"Notatki: {lead.notes[:1500]}")
+        if public_base_url():
+            link = lead_form_url(lead)  # nadaje formularzowi token przy pierwszym użyciu
+            db.session.commit()
+            info.append(f"Link do formularza dla klienta (gdy prosisz o dane do wyceny): {link}")
         notes = [a.notes for a in sorted(lead.activities, key=lambda a: a.created_at or datetime.min, reverse=True)
                  if a.kind == "note" and a.notes][:3]
         if notes:
@@ -9579,9 +9590,11 @@ def crm_mail_compose():
     if not from_box:
         mine = next((b for b in boxes if b.get("user_id") == user["id"]), None)
         from_box = (mine or (boxes[0] if boxes else {"login": ""}))["login"]
+    task = db.session.get(MailTask, request.args.get("task", type=int) or 0)
+    ai_instruction = (request.args.get("ai") or (task.reply_hint if task else "") or "")[:2000]
     return render_template(
         "crm/poczta_nowa.html", boxes=boxes, from_box=from_box, to=to, cc=cc, subject=subject, subject_pl=subject_pl,
-        quoted=quoted,
+        quoted=quoted, task=task, ai_instruction=ai_instruction, ai_auto=request.args.get("auto") == "1",
         reply=reply, fwd=fwd, lead=lead, target_lang=M()["lang"], lang_names=MAIL_LANG_NAMES,
         lang_flags=MAIL_LANG_FLAGS, signatures={b["login"]: mail_signature(b, user) for b in boxes}, ai_ok=bool(_ai_client()),
     )
@@ -9649,6 +9662,9 @@ def _mail_send_from_form(boxes, user):
                                 notes=f"✉️ Mail z CRM do {', '.join(recipients)} (od: {box['login']})\nTemat: {subject}\n---\n"
                                       f"{body.split(chr(10) + chr(10) + '>')[0][:4000]}"
                                       + (f"\n---\n🇵🇱 {body_pl[:3000]}" if body_pl else "")))
+    task = db.session.get(MailTask, f.get("task", type=int) or 0)
+    if task and task.status == "open":  # odpowiedź na sprawę z przeglądu poczty — sprawa załatwiona
+        task.status, task.done_at, task.done_by, task.done_how = "done", now, user["id"], "odpowiedź wysłana"
     db.session.commit()
     return jsonify({"ok": True, "url": url_for("crm_mail", f="sent", m=row.id), "warning": _smtp_send.last_warning})
 
@@ -9732,6 +9748,405 @@ def _server_error(e):
         pass
     app.logger.exception("Nieobsłużony błąd: %s", e)
     return _error_page(500)
+
+
+# ---------- ALARMY: nowe leady do obsłużenia DZIŚ + sprawy z poczty (przegląd Claude'a) ----------
+# Każdy nowy lead musi być obsłużony tego samego dnia (telefon, mail, oferta). Dopóki nie jest, na każdej stronie
+# CRM wyskakuje okno, które przeszkadza w pracy — znika dopiero, gdy lead jest obsłużony: sam (wysłany mail,
+# oferta, wycena, WhatsApp, zapisany telefon) albo kliknięciem „Obsłużony”. Drugi alarm: Claude codziennie
+# (MAIL_REVIEW_HOURS, domyślnie 12 i 15) przegląda pocztę i wypisuje sprawy, które czekają na nas — pokazują się
+# w oknie od MAIL_TASKS_SHOW_FROM (domyślnie 16:00), aż każda zostanie załatwiona.
+from sqlalchemy.exc import IntegrityError as _IntegrityError  # noqa: E402
+
+LEAD_ALERT_DAYS = int(os.environ.get("LEAD_ALERT_DAYS", "2") or 2)  # przy pierwszym uruchomieniu: leady z tylu dni
+LEAD_ALERT_SINCE_KEY = "lead_alert_since"
+MAIL_REVIEW_HOURS = [int(h) for h in (os.environ.get("MAIL_REVIEW_HOURS", "12,15") or "12,15").split(",")
+                     if h.strip().isdigit() and 0 <= int(h) <= 23]
+MAIL_REVIEW_DAYS = int(os.environ.get("MAIL_REVIEW_DAYS", "14") or 14)
+MAIL_TASKS_SHOW_FROM = int(os.environ.get("MAIL_TASKS_SHOW_FROM", "16") or 16)
+MAIL_REVIEW_AI_MODEL = os.environ.get("MAIL_REVIEW_AI_MODEL", "").strip() or "claude-opus-5-5"
+ALERT_SNOOZE_COOKIE = "alert_snooze"
+ALERT_SNOOZE_MIN = 10
+_HANDLED_NOTE_PREFIXES = ("📨", "📄", "✉️", "📞")
+_AUTO_SENDER = re.compile(r"(no-?reply|do-?not-?reply|newsletter|mailer-daemon|postmaster|notification|notify|bounce|"
+                          r"calendar-|invitations?@|news@|marketing@|info@mailchimp|@linkedin|@facebook|@google\.com)", re.I)
+
+
+class MailTask(db.Model):
+    """Sprawa z poczty do załatwienia (z przeglądu Claude'a): nieodpisany mail, prośba o umowę, spotkanie…"""
+    __tablename__ = "mail_tasks"
+    id = db.Column(db.Integer, primary_key=True)
+    market = db.Column(db.String(2), nullable=False, default=_default_market, index=True)
+    mail_id = db.Column(db.Integer, db.ForeignKey("mail_messages.id"), nullable=True)  # mail, na który odpowiadamy
+    thread_key = db.Column(db.String(400), index=True)
+    mailbox = db.Column(db.String(200))
+    counterpart = db.Column(db.String(300))
+    subject = db.Column(db.String(600))
+    title = db.Column(db.String(300))
+    reason = db.Column(db.Text)
+    action = db.Column(db.Text)
+    reply_hint = db.Column(db.Text)
+    priority = db.Column(db.String(20), default="normalne")
+    status = db.Column(db.String(20), nullable=False, default="open", index=True)  # open | done | dismissed
+    lead_id = db.Column(db.Integer, db.ForeignKey("leads.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    done_at = db.Column(db.DateTime)
+    done_by = db.Column(db.Integer)
+    done_how = db.Column(db.String(60))
+
+    mail = db.relationship("MailMessage")
+    lead = db.relationship("Lead")
+
+
+def _claim_once(key):
+    """Jednorazowa blokada w bazie (kilka procesów serwera — tylko jeden wykona zadanie)."""
+    try:
+        db.session.add(AppSetting(key=key[:64], value=datetime.utcnow().isoformat(timespec="seconds")))
+        db.session.commit()
+        return True
+    except _IntegrityError:
+        db.session.rollback()
+        return False
+
+
+def lead_alert_since():
+    """Od kiedy pilnujemy nowych leadów (ustawiane raz: przy pierwszym uruchomieniu — LEAD_ALERT_DAYS dni wstecz)."""
+    raw = get_setting(LEAD_ALERT_SINCE_KEY)
+    if not raw:
+        start = (datetime.utcnow() - timedelta(days=LEAD_ALERT_DAYS)).isoformat(timespec="seconds")
+        try:
+            db.session.add(AppSetting(key=LEAD_ALERT_SINCE_KEY, value=start))
+            db.session.commit()
+            raw = start
+        except _IntegrityError:
+            db.session.rollback()
+            raw = get_setting(LEAD_ALERT_SINCE_KEY) or start
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return datetime.utcnow() - timedelta(days=LEAD_ALERT_DAYS)
+
+
+def unhandled_leads(code=None):
+    """Nowe leady rynku `code` (domyślnie oglądanego), z którymi nikt się jeszcze nie skontaktował."""
+    code = code or current_market()
+    q = all_markets(Lead.query.filter(Lead.market == code, Lead.created_at >= lead_alert_since(),
+                                      Lead.handled_at.is_(None), Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
+                                      Lead.clickup_pending.isnot(True)))
+    return q.order_by(Lead.created_at).all()
+
+
+def mark_lead_handled(lead, user_id=None, how="ręcznie", note=None):
+    if lead.handled_at is None:
+        lead.handled_at, lead.handled_by, lead.handled_how = datetime.utcnow(), user_id, how[:40]
+    if note:
+        db.session.add(Activity(lead_id=lead.id, kind="call" if how == "telefon" else "note", done=True,
+                                done_at=datetime.utcnow(), assigned_to=user_id or lead.assigned_to or USERS[0]["id"],
+                                notes=note))
+
+
+@_sa_event.listens_for(_OrmSession, "after_flush")
+def _auto_handle_leads(session, _ctx):
+    """Kontakt z klientem zapisany w CRM (wysłany mail, oferta, wycena, WhatsApp, odbyty telefon) = lead obsłużony."""
+    ids = set()
+    for obj in session.new:
+        if isinstance(obj, Activity) and obj.lead_id and obj.done and (
+                obj.kind in ("call", "email", "meeting") or (obj.notes or "").startswith(_HANDLED_NOTE_PREFIXES)):
+            ids.add(obj.lead_id)
+    for obj in session.dirty:
+        if isinstance(obj, Activity) and obj.lead_id and obj.done and obj.kind in ("call", "email", "meeting"):
+            ids.add(obj.lead_id)
+    if ids:
+        session.connection().execute(
+            db.update(Lead).where(Lead.id.in_(ids), Lead.handled_at.is_(None))
+            .values(handled_at=datetime.utcnow(), handled_how="kontakt z CRM"))
+
+
+def _lead_alert_row(lead):
+    created = to_local(lead.created_at) if lead.created_at else None
+    age_h = (datetime.utcnow() - lead.created_at).total_seconds() / 3600 if lead.created_at else 0
+    return {"id": lead.id, "company": lead.company, "contact": lead.contact_name or "", "phone": lead.contact_phone or "",
+            "email": ", ".join(lead.emails), "has_email": bool(lead.emails), "source": lead.source or "",
+            "when": f"{created:%d.%m %H:%M}" if created else "", "age_h": round(age_h, 1),
+            "old": bool(created and created.date() < to_local(datetime.utcnow()).date()),
+            "notes": " ".join((lead.notes or "").split())[:220], "market": lead.market}
+
+
+def mail_tasks_open(code=None):
+    code = code or current_market()
+    return (all_markets(MailTask.query.filter(MailTask.market == code, MailTask.status == "open"))
+            .order_by(MailTask.priority.desc(), MailTask.created_at).all())
+
+
+def mail_tasks_visible():
+    return to_local(datetime.utcnow()).hour >= MAIL_TASKS_SHOW_FROM
+
+
+def alerts_state(code=None):
+    """Co pokazać w oknie alarmów: nowe leady (zawsze) i sprawy z poczty (od MAIL_TASKS_SHOW_FROM)."""
+    code = code or current_market()
+    leads = [_lead_alert_row(l) for l in unhandled_leads(code)]
+    others = {mc: len(unhandled_leads(mc)) for mc in markets.MARKETS if mc != code}
+    tasks = mail_tasks_open(code)
+    show_tasks = mail_tasks_visible()
+    return {"leads": leads, "other": {mc: n for mc, n in others.items() if n},
+            "tasks": [_mail_task_row(t) for t in tasks] if show_tasks else [], "tasks_waiting": len(tasks),
+            "show_tasks": show_tasks, "show_from": MAIL_TASKS_SHOW_FROM}
+
+
+def _mail_task_row(t):
+    return {"id": t.id, "title": t.title or t.subject or "", "reason": t.reason or "", "action": t.action or "",
+            "counterpart": t.counterpart or "", "subject": t.subject or "", "priority": t.priority or "normalne",
+            "mail_id": t.mail_id, "lead_id": t.lead_id, "when": f"{to_local(t.created_at):%d.%m %H:%M}" if t.created_at else "",
+            "reply_hint": t.reply_hint or ""}
+
+
+_ALERT_QUIET_ENDPOINTS = {"crm_mail_compose", "crm_calculator", "crm_offer_review", "crm_job", "crm_lead_detail",
+                          "crm_profile", "crm_login"}
+
+
+@app.context_processor
+def _inject_alerts():
+    if not has_request_context() or request.path.startswith(("/f/", "/static", "/mcp")) or request.endpoint in (
+            None, "lead_form", "crm_login"):
+        return {}
+    try:
+        st = alerts_state()
+    except Exception:
+        db.session.rollback()
+        return {}
+    try:
+        snooze = float(request.cookies.get(ALERT_SNOOZE_COOKIE) or 0)
+    except ValueError:
+        snooze = 0
+    st["quiet"] = request.endpoint in _ALERT_QUIET_ENDPOINTS or time.time() < snooze
+    st["snooze_min"] = ALERT_SNOOZE_MIN
+    return {"alerts": st}
+
+
+@app.route("/crm/api/alerty")
+def crm_alerts_api():
+    st = alerts_state()
+    return jsonify({"leads": [l["id"] for l in st["leads"]], "lead_count": len(st["leads"]),
+                    "task_count": len(st["tasks"]), "other": st["other"]})
+
+
+@app.route("/crm/leads/<int:lead_id>/obsluzony", methods=["POST"])
+def crm_lead_handled(lead_id):
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    user = get_current_user(request)
+    how = request.form.get("how", "inne")
+    notes = {"telefon": "📞 Zadzwoniono do klienta — lead obsłużony (panel nowych leadów)",
+             "inne": "✅ Lead obsłużony (panel nowych leadów)"}
+    extra = (request.form.get("note") or "").strip()[:1000]
+    mark_lead_handled(lead, user["id"], "telefon" if how == "telefon" else "ręcznie",
+                      note=notes.get(how, notes["inne"]) + (f"\n{extra}" if extra else ""))
+    db.session.commit()
+    if request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"ok": True})
+    return redirect(request.referrer or url_for("crm_dashboard"))
+
+
+@app.route("/crm/alarm/drzemka", methods=["POST"])
+def crm_alert_snooze():
+    resp = jsonify({"ok": True, "until": time.time() + ALERT_SNOOZE_MIN * 60})
+    resp.set_cookie(ALERT_SNOOZE_COOKIE, str(time.time() + ALERT_SNOOZE_MIN * 60), max_age=ALERT_SNOOZE_MIN * 60,
+                    samesite="Lax")
+    return resp
+
+
+# --- przegląd poczty przez Claude'a ---
+
+MAIL_REVIEW_TOOL = {
+    "name": "mail_review",
+    "description": "Sprawy z poczty, które czekają na ruch firmy 33Bots.",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "items": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "thread": {"type": "integer", "description": "Numer wątku z listy"},
+                    "title": {"type": "string", "description": "Krótko po polsku, co trzeba zrobić (np. „Wysłać umowę — Messe GmbH”)"},
+                    "reason": {"type": "string", "description": "Po polsku: dlaczego — czego klient chce / co obiecaliśmy, od kiedy czeka"},
+                    "action": {"type": "string", "description": "Po polsku: konkretny następny krok"},
+                    "reply_hint": {"type": "string", "description": "Po polsku polecenie dla Claude'a piszącego odpowiedź (co odpisać)"},
+                    "priority": {"type": "string", "enum": ["pilne", "normalne"]},
+                },
+                "required": ["thread", "title", "reason", "action", "reply_hint", "priority"]}},
+        },
+        "required": ["items"],
+    },
+}
+
+
+def _own_addresses():
+    return {b["login"] for b in mail_boxes()} | {u["email"].lower() for u in USERS if u.get("email")}
+
+
+def _is_external(addr, own):
+    addr = (addr or "").lower()
+    return bool(addr) and addr not in own and addr.rsplit("@", 1)[-1] not in OWN_DOMAINS and not _AUTO_SENDER.search(addr)
+
+
+def _review_threads(code, days=MAIL_REVIEW_DAYS, limit=40):
+    """Wątki z ostatnich dni z udziałem klienta (nie automaty, nie my) — do oceny przez Claude'a."""
+    since = datetime.utcnow() - timedelta(days=days)
+    own = _own_addresses()
+    rows = (all_markets(MailMessage.query.filter(MailMessage.market == code, MailMessage.date >= since))
+            .order_by(MailMessage.date).all())
+    threads = {}
+    for r in rows:
+        threads.setdefault(r.thread_key or r.message_id or f"id{r.id}", []).append(r)
+    handled = {t.thread_key: t for t in all_markets(MailTask.query.filter(MailTask.market == code)).all()}
+    out = []
+    for key, msgs in threads.items():
+        inbound = [m for m in msgs if m.folder == "in" and _is_external(m.from_addr, own)]
+        if not inbound:
+            continue
+        last_in = inbound[-1]
+        prev = handled.get(key)
+        if prev and (prev.status == "open" or (prev.done_at and last_in.date and last_in.date <= prev.done_at)):
+            continue  # już jest na liście albo załatwione i klient od tego czasu nic nie napisał
+        out.append((msgs[-1].folder == "in", msgs[-1].date or datetime.min, key, msgs, last_in))
+    out.sort(key=lambda x: (not x[0], -(x[1] - datetime.min).total_seconds()))
+    return out[:limit]
+
+
+def _thread_digest(i, msgs, own):
+    lines = [f"### WĄTEK {i}: {msgs[-1].subject or '(bez tematu)'}"]
+    for m in msgs[-5:]:
+        who = "KLIENT" if m.folder == "in" and _is_external(m.from_addr, own) else (
+            "MY (33Bots)" if m.folder == "sent" or (m.from_addr or "").lower() in own else "INNY")
+        fresh = poczta.split_quote(m.body_text or "")[0]
+        text = (m.body_pl if m.body_pl and m.lang not in ("pl", None) else fresh) or ""
+        lines.append(f"[{who} · {m.from_addr} · {_dt(m.date)} · {m.mailbox}]\n{' '.join(text.split())[:700]}")
+    return "\n".join(lines)
+
+
+def mail_review(code, actor_id=None):
+    """Claude przegląda pocztę rynku (odebrane i wysłane) i zapisuje sprawy, które czekają na nas. Zwraca dict."""
+    mail_tasks_autoclose(code)
+    cand = _review_threads(code)
+    if not cand:
+        return {"info": "Brak wątków do sprawdzenia", "new": 0}
+    own = _own_addresses()
+    today = to_local(datetime.utcnow())
+    system = (
+        "Jesteś asystentem firmy 33Bots (wynajem humanoidalnego robota Unitree G1 na eventy). Przeglądasz skrzynki "
+        "firmowe i szukasz spraw, które CZEKAJĄ NA RUCH 33Bots i mogą nam umknąć. Sprawa do załatwienia to np.: "
+        "klient napisał, a my nie odpisaliśmy; klient prosi o ofertę, wycenę, umowę, fakturę, spotkanie, telefon, "
+        "zdjęcia; klient przypomina się drugi raz; obiecaliśmy coś wysłać i nie widać, że wysłaliśmy; termin "
+        "wydarzenia się zbliża, a brakuje ustaleń. NIE są sprawą: spam, newslettery, reklamy i oferty sprzedaży "
+        "dla nas (np. ktoś chce nam coś sprzedać lub umówić demo swojego produktu), automatyczne powiadomienia, "
+        "zaproszenia kalendarza, odpowiedzi automatyczne, wątki, w których ostatni ruch jest po stronie klienta "
+        "(odpisaliśmy i czekamy na niego) i niczego nie obiecaliśmy. Gdy nie ma żadnej sprawy — zwróć pustą listę. "
+        f"Dziś jest {today:%Y-%m-%d %H:%M} (czas polski). Wszystkie pola pisz po polsku. „pilne” tylko gdy klient "
+        "się przypomina, termin jest bliski albo czeka dłużej niż 2 dni robocze."
+    )
+    text = "\n\n".join(_thread_digest(i, msgs, own) for i, (_a, _d, _k, msgs, _l) in enumerate(cand))
+    res = _ai_forced_tool(MAIL_REVIEW_AI_MODEL, system, text, MAIL_REVIEW_TOOL, max_tokens=8000)
+    new = 0
+    for item in res.get("items") or []:
+        try:
+            idx = int(item.get("thread"))
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= idx < len(cand):
+            continue
+        _a, _d, key, msgs, last_in = cand[idx]
+        if all_markets(MailTask.query.filter(MailTask.thread_key == key, MailTask.status == "open")).first():
+            continue
+        lead = mail_lead_for(last_in)
+        db.session.add(MailTask(
+            market=code, mail_id=last_in.id, thread_key=key, mailbox=last_in.mailbox,
+            counterpart=(f"{last_in.from_name} <{last_in.from_addr}>" if last_in.from_name else last_in.from_addr)[:300],
+            subject=(last_in.subject or "")[:600], title=str(item.get("title") or "")[:300],
+            reason=str(item.get("reason") or "")[:2000], action=str(item.get("action") or "")[:2000],
+            reply_hint=str(item.get("reply_hint") or "")[:2000],
+            priority="pilne" if item.get("priority") == "pilne" else "normalne", lead_id=lead.id if lead else None))
+        new += 1
+    db.session.commit()
+    return {"info": f"Przejrzano {len(cand)} wątków — nowe sprawy: {new}", "new": new, "url": "/crm/poczta?sprawy=1"}
+
+
+def mail_tasks_autoclose(code=None):
+    """Sprawa znika sama, gdy w wątku poszła od nas odpowiedź (z CRM albo z programu pocztowego)."""
+    q = MailTask.query.filter(MailTask.status == "open")
+    if code:
+        q = q.filter(MailTask.market == code)
+    n = 0
+    for t in all_markets(q).all():
+        if not t.thread_key:
+            continue
+        sent = (all_markets(MailMessage.query.filter(MailMessage.thread_key == t.thread_key,
+                                                     MailMessage.folder == "sent",
+                                                     MailMessage.date > (t.mail.date if t.mail and t.mail.date
+                                                                         else t.created_at)))
+                .first())
+        if sent:
+            t.status, t.done_at, t.done_how = "done", datetime.utcnow(), "odpowiedź wysłana"
+            n += 1
+    if n:
+        db.session.commit()
+    return n
+
+
+def _mail_review_scheduler():
+    time.sleep(60)
+    while True:
+        try:
+            with app.app_context():
+                if _ai_client() is not None and mail_boxes():
+                    now = to_local(datetime.utcnow())
+                    for h in MAIL_REVIEW_HOURS:
+                        if now.hour >= h:
+                            for mc in markets.MARKETS:
+                                if _claim_once(f"mrev:{mc}:{now:%Y-%m-%d}:{h}"):
+                                    try:
+                                        mail_review(mc)
+                                    except Exception:
+                                        db.session.rollback()
+                                        app.logger.exception("mail_review")
+                    mail_tasks_autoclose()
+                db.session.remove()
+        except Exception:
+            app.logger.exception("mail_review_scheduler")
+        time.sleep(300)
+
+
+if os.environ.get("MAIL_REVIEW", "1") != "0":
+    threading.Thread(target=_mail_review_scheduler, daemon=True).start()
+
+app.jinja_env.globals.update(mail_tasks_open=mail_tasks_open, mail_tasks_visible=mail_tasks_visible,
+                             review_hours=MAIL_REVIEW_HOURS, tasks_from=MAIL_TASKS_SHOW_FROM)
+
+
+@app.route("/crm/sprawy/<int:tid>/<action>", methods=["POST"])
+def crm_mail_task_action(tid, action):
+    t = db.session.get(MailTask, tid) or abort(404)
+    if action not in ("done", "dismiss"):
+        abort(404)
+    t.status = "done" if action == "done" else "dismissed"
+    t.done_at, t.done_by = datetime.utcnow(), get_current_user(request)["id"]
+    t.done_how = "załatwione" if action == "done" else "nie dotyczy"
+    if t.lead_id:
+        db.session.add(Activity(lead_id=t.lead_id, kind="note", done=True, done_at=datetime.utcnow(),
+                                assigned_to=t.done_by, notes=f"📋 Sprawa z poczty {t.done_how}: {t.title}"))
+    db.session.commit()
+    if request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"ok": True})
+    return redirect(request.referrer or url_for("crm_mail"))
+
+
+@app.route("/crm/sprawy/przeglad", methods=["POST"])
+def crm_mail_review_now():
+    if _ai_client() is None:
+        return redirect(url_for("crm_mail"))
+    code = current_market()
+    return redirect(url_for("crm_job", jid=_start_job("Claude przegląda pocztę", mail_review, code)))
 
 
 
