@@ -5976,7 +5976,7 @@ def check_recipients(text):
 
 
 def _offer_url(offer, review=False):
-    base = os.environ.get("PUBLIC_URL", "").strip().rstrip("/")
+    base = public_base_url()
     path = f"/crm/oferty/{offer.id}" if review else f"/crm/oferty/{offer.id}/{offer.filename}"
     try:
         base = base or request.url_root.rstrip("/")
@@ -7929,14 +7929,51 @@ def is_lithuanian(lead):
 _PUBLIC_BASE = {"url": ""}
 
 
+PUBLIC_BASE_KEY = "public_base_url"
+BAD_LINK_MARK = "WPISZ_ADRES"  # zostało z wzoru zmiennych — takiego adresu nigdy nie wysyłamy
+_BASE_RE = re.compile(r"^https?://(?!localhost\b|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)"
+                      r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(:\d+)?$")
+
+
+def valid_public_base(url):
+    """Czy to prawdziwy publiczny adres CRM (https://….up.railway.app), a nie wzór, localhost albo adres wewnętrzny."""
+    url = (url or "").strip().rstrip("/")
+    return bool(_BASE_RE.match(url)) and ".internal" not in url and BAD_LINK_MARK not in url.upper()
+
+
 @app.before_request
 def _remember_public_base():
-    if not _PUBLIC_BASE["url"]:
-        _PUBLIC_BASE["url"] = request.url_root.rstrip("/")
+    """Adres, pod którym ludzie otwierają CRM — do linków w mailach, gdy PUBLIC_URL nie jest ustawiony poprawnie."""
+    if _PUBLIC_BASE["url"]:
+        return
+    base = request.url_root.rstrip("/")
+    if base.startswith("http://") and base.split("/")[2].endswith((".up.railway.app", ".railway.app")):
+        base = "https://" + base[len("http://"):]
+    if valid_public_base(base):
+        _PUBLIC_BASE["url"] = base
+        try:
+            if get_setting(PUBLIC_BASE_KEY) != base:
+                set_setting(PUBLIC_BASE_KEY, base)
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
 
 
 def public_base_url():
-    return os.environ.get("PUBLIC_URL", "").strip().rstrip("/") or _PUBLIC_BASE["url"]
+    """Adres CRM do linków w mailach: poprawny PUBLIC_URL, inaczej zapamiętany adres strony; pusty = nie wysyłaj linków."""
+    env = os.environ.get("PUBLIC_URL", "").strip().rstrip("/")
+    if valid_public_base(env):
+        return env
+    if _PUBLIC_BASE["url"]:
+        return _PUBLIC_BASE["url"]
+    try:
+        saved = get_setting(PUBLIC_BASE_KEY)
+    except Exception:
+        saved = ""
+    if valid_public_base(saved):
+        _PUBLIC_BASE["url"] = saved
+        return saved
+    return ""
 
 
 def lead_form_url(lead):
@@ -8033,22 +8070,40 @@ def _when_phrase(when, code):
     return f" vom {when}" if "–" in when and "," not in when else f" am {when}"
 
 
-def lt_quote_mail_draft(lead, q, sender):
+def lt_quote_mail_draft(lead, q, sender, fixed=False):
+    """Mail z ofertą (PDF w załączniku): cena, co robot robi na wydarzeniu, co jest w cenie, zdjęcia. Bez formularzy."""
     m = markets.get(lead_market(lead))
     when = q.get("when") or ""
-    link = lead_form_url(lead) if public_base_url() else ""
     price_txt = f"{q['price']:,}".replace(",", " ")
-    when_txt = _when_phrase(when, m["code"])
     subject = m["quote_subject"] + (f" {when}" if when else "")
-    lines = [m["quote_hello"], "", m["quote_thanks"], "",
-             m["quote_price"].format(when=when_txt, time=q["time"], place=q["place"], price=price_txt), "",
-             m["quote_included"], "", m["quote_robot"], "", m["quote_photos"], OFFER_PHOTOS_URL, ""]
-    if link:
-        lines += [m["quote_fix"], link, ""]
-    lines += [m["quote_reserve"], "", m["bye"],
-              "\n".join(x for x in (sender.get("full_name") or sender.get("name"), "33Bots", sender.get("email"),
-                                    sender.get("phone")) if x)]
+    lines = [m["quote_hello"], "", m["quote_fixed"] if fixed else m["quote_thanks"], "",
+             m["quote_price"].format(when=_when_phrase(when, m["code"]), time=q["time"], place=q["place"], price=price_txt), "",
+             m["quote_does"], "", m["quote_included"], "", m["quote_photos"], OFFER_PHOTOS_URL, "",
+             m["quote_reserve"], "", m["bye"],
+             "\n".join(x for x in (sender.get("full_name") or sender.get("name"), "33Bots", sender.get("email"),
+                                   sender.get("phone")) if x)]
     return subject, "\n".join(lines)
+
+
+def auto_offer_pdf(lead, q, sender):
+    """PDF oferty (ten sam wygląd co oferty z CRM) w języku rynku leada: (dane, nazwa pliku, bajty)."""
+    m = markets.get(lead_market(lead))
+    o = m["offer_pdf"]
+    price_txt = f"{q['price']:,}".replace(",", " ") + " €"
+    when = q.get("when") or o["soon"]
+    data = offers.normalize({
+        "language": m["lang"], "client": (lead.company or "")[:80] or "33Bots", "headline": o["headline"],
+        "subtitle": o["subtitle"],
+        "cover": [{"label": o["cover"][0], "value": when[:34]}, {"label": o["cover"][1], "value": (q["place"] or "")[:34]},
+                  {"label": o["cover"][2], "value": (q["time"] or "")[:34]}],
+        "intro": o["intro"],
+        "cards": [{"label": lab, "title": title, "items": items} for lab, title, items in o["cards"]],
+        "price_title": o["price_title"], "price_sub": " · ".join(x for x in (q["place"], q.get("when")) if x)[:90],
+        "price": price_txt,
+    })
+    pdf = offers.render_offer_pdf(data, (sender.get("full_name") or sender.get("name") or "", sender.get("email") or "",
+                                         sender.get("phone") or ""))
+    return data, offers.offer_filename(data["client"]), pdf
 
 
 def lt_quote_auto_ok(q, code="lt"):
@@ -8057,7 +8112,7 @@ def lt_quote_auto_ok(q, code="lt"):
         0 <= q.get("km", 99999) <= markets.get(code)["max_km_auto"]
 
 
-def send_lt_quote_mail(lead, actor_id=None, force=False, subject=None, body=None):
+def send_lt_quote_mail(lead, actor_id=None, force=False, subject=None, body=None, fixed=False):
     """Automatyczna wycena mailem ze skrzynki rynku leada (33bots.lt / .de). Zwraca None (wysłano), LT_NO_QUOTE (brak danych —
     użyj formularza), LT_ALREADY_SENT albo opis błędu."""
     if not lead.emails:
@@ -8077,11 +8132,21 @@ def send_lt_quote_mail(lead, actor_id=None, force=False, subject=None, body=None
     if lead.lt_mail_at is None and not _claim_lt_mail(lead_id):
         return LT_ALREADY_SENT
     lead = db.session.get(Lead, lead_id)
-    draft_subject, draft_body = lt_quote_mail_draft(lead, q, sender)
+    draft_subject, draft_body = lt_quote_mail_draft(lead, q, sender, fixed=fixed)
     subject = (subject or "").strip()[:300] or draft_subject  # człowiek mógł poprawić wygenerowany mail
     body = (body or "").replace("\r\n", "\n").strip()[:10000] or draft_body
+    if BAD_LINK_MARK in body.upper() or re.search(r"https?://\S+/f/[A-Za-z0-9_-]{16,}", body):
+        return "w treści jest link do formularza — usuń go przed wysłaniem"
     to_addr = ", ".join(lead.emails)
-    err = _smtp_send(to_addr, subject, body, sender["name"], sender=sender)
+    try:
+        offer_data, pdf_name, pdf = auto_offer_pdf(lead, q, sender)
+    except Exception as e:
+        db.session.execute(db.update(Lead).where(Lead.id == lead_id, Lead.lt_mail_at.isnot(None),
+                                                 Lead.stage == "Nowy").values(lt_mail_at=None))
+        db.session.commit()
+        return f"PDF oferty się nie wygenerował: {type(e).__name__}: {e}"[:200]
+    err = _smtp_send(to_addr, subject, body, sender["name"], attachments=[(pdf_name, pdf, "application/pdf")],
+                     sender=sender)
     if err:
         db.session.execute(db.update(Lead).where(Lead.id == lead_id, Lead.lt_mail_at.isnot(None),
                                                  Lead.stage == "Nowy").values(lt_mail_at=None))
@@ -8092,9 +8157,12 @@ def send_lt_quote_mail(lead, actor_id=None, force=False, subject=None, body=None
     lead.lt_mail_at = lead.lt_mail_at or now
     lead.value_pln, lead.currency = float(q["price"]), "EUR"
     set_setting(LT_QUOTE_SENT_KEY.format(lead_id), now.isoformat(timespec="seconds"))
+    db.session.add(SentOffer(lead_id=lead_id, filename=pdf_name, pdf=pdf, to_addr=to_addr, subject=subject, body=body,
+                             price=offer_data["price"], sender_id=sender.get("id"), sent_at=now,
+                             data=json.dumps({"auto": True, "breakdown": q.get("breakdown")}, ensure_ascii=False)))
     db.session.add(Activity(
         lead_id=lead_id, kind="email", done=True, done_at=now, assigned_to=actor,
-        notes=f"💶 {'Wycena' if actor_id else 'Automatyczna wycena'} {q['price']} € wysłana do {to_addr} (od: {sender['email']})\n"
+        notes=f"💶 {'Oferta' if actor_id else 'Automatyczna oferta'} {q['price']} € (mail + PDF) wysłana do {to_addr} (od: {sender['email']})\n"
               f"Temat: {subject}\n🧮 {q['breakdown']}\n---\n{body}"))
     if lead.stage == "Nowy":
         record_stage_change(lead, "Oferta", actor)
@@ -8150,6 +8218,86 @@ def quote_mail_preview(lead, q):
 app.jinja_env.globals.update(quote_mail_preview=quote_mail_preview)
 
 
+BADLINK_FIXED_KEY = "badlink_fixed:{}"
+
+
+def bad_link_leads(code=None):
+    """Leady (rynku `code`), które dostały mail z błędnym linkiem (adres-wzór z listy zmiennych) i nie dostały poprawki."""
+    code = code or current_market()
+    ids = {r[0] for r in all_markets(db.session.query(Activity.lead_id).filter(
+        Activity.lead_id.isnot(None), Activity.notes.like(f"%{BAD_LINK_MARK}%"))).distinct()}
+    if not ids:
+        return []
+    leads = all_markets(Lead.query.filter(Lead.id.in_(ids), Lead.market == code)).order_by(Lead.created_at).all()
+    return [l for l in leads if not get_setting(BADLINK_FIXED_KEY.format(l.id))]
+
+
+def send_badlink_fix(lead, actor_id):
+    """Poprawka dla klienta z błędnym linkiem: pełna oferta z PDF (gdy da się policzyć cenę). Zwraca błąd albo None."""
+    err = send_lt_quote_mail(lead, actor_id=actor_id, force=True, fixed=True)
+    if err in (LT_NO_QUOTE, LT_ALREADY_SENT):
+        return "brak godzin albo miejsca — nie da się policzyć ceny; napisz do klienta ręcznie (✉️ Napisz)"
+    if err:
+        return err
+    set_setting(BADLINK_FIXED_KEY.format(lead.id), datetime.utcnow().isoformat(timespec="seconds"))
+    db.session.commit()
+    return None
+
+
+@app.route("/crm/poprawki")
+def crm_badlink_list():
+    leads = bad_link_leads()
+    rows = []
+    for l in leads:
+        q = lt_quote(l, remote_budget=1)
+        rows.append({"lead": l, "price": q.get("price"), "missing": q.get("missing") or []})
+    return render_template("crm/poprawki.html", rows=rows, msg=request.args.get("msg", ""))
+
+
+@app.route("/crm/poprawki/<int:lead_id>", methods=["POST"])
+def crm_badlink_fix(lead_id):
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    err = send_badlink_fix(lead, get_current_user(request)["id"])
+    if err:
+        db.session.rollback()
+    return redirect(url_for("crm_badlink_list", msg=(f"⚠️ {lead.company}: {err}" if err else f"✅ {lead.company}: poprawiona oferta z PDF wysłana")))
+
+
+@app.route("/crm/poprawki/wszystkim", methods=["POST"])
+def crm_badlink_fix_all():
+    user_id = get_current_user(request)["id"]
+    ids = [l.id for l in bad_link_leads()]
+
+    def job():
+        ok, failed = 0, []
+        for lid in ids:
+            lead = db.session.get(Lead, lid)
+            err = send_badlink_fix(lead, user_id) if lead else "brak leada"
+            if err:
+                db.session.rollback()
+                failed.append(f"{lead.company if lead else lid}: {err}")
+            else:
+                ok += 1
+        return {"info": (f"Wysłano poprawionych ofert: {ok}" + (f"; nie wyszło {len(failed)}: " + "; ".join(failed[:5])
+                                                                  if failed else ""))[:600], "url": "/crm/poprawki"}
+    return redirect(url_for("crm_job", jid=_start_job("Poprawione oferty z PDF", job)))
+
+
+@app.route("/crm/leads/<int:lead_id>/oferta-auto.pdf")
+def crm_lt_offer_pdf(lead_id):
+    """Podgląd PDF oferty, który idzie w załączniku maila z wyceną."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    q = lt_quote(lead, remote_budget=1)
+    sender = lt_quote_sender(lead) or lt_sender(lead_market(lead))
+    if not q.get("price"):
+        abort(404)
+    _data, name, pdf = auto_offer_pdf(lead, q, sender)
+    resp = make_response(pdf)
+    resp.headers["Content-Type"] = "application/pdf"
+    resp.headers["Content-Disposition"] = f"inline; filename*=UTF-8''{quote(name)}"
+    return resp
+
+
 @app.route("/crm/leads/<int:lead_id>/lt-wycena-mail", methods=["POST"])
 def crm_lt_quote_mail(lead_id):
     """Ręcznie: wyślij wycenę mailem teraz (np. gdy automat czekał na dane albo po zmianie)."""
@@ -8172,8 +8320,6 @@ def lt_auto_mail():
         set_setting(LT_SINCE_KEY, datetime.utcnow().isoformat(timespec="seconds"))
         db.session.commit()
         return 0
-    if not public_base_url():
-        return 0  # bez adresu CRM (PUBLIC_URL albo pierwsze wejście na stronę) poczekaj — link musi działać
     since_dt = datetime.fromisoformat(since)
     sent = 0
     for lead in Lead.query.filter(Lead.created_at >= since_dt, Lead.lt_mail_at.is_(None),
@@ -8187,11 +8333,11 @@ def lt_auto_mail():
         tries = int(get_setting(tries_key) or 0)
         if tries >= 3:
             continue
-        err = send_lt_quote_mail(lead) if lt_auto_quote_enabled(mc) else LT_NO_QUOTE
-        if err == LT_NO_QUOTE:  # brak godzin / miejsca — jak dotąd: mail z prośbą o dane (formularz)
-            err = send_lt_mail(lead)
-        if err == LT_ALREADY_SENT:
+        if not lt_auto_quote_enabled(mc):
             continue
+        err = send_lt_quote_mail(lead)
+        if err in (LT_NO_QUOTE, LT_ALREADY_SENT):
+            continue  # brak godzin / miejsca — nic nie wychodzi samo; lead czeka w oknie alarmu na człowieka
         if err:
             db.session.rollback()
             set_setting(tries_key, str(tries + 1))
@@ -9462,10 +9608,6 @@ def _mail_draft_context(code, reply_id=None, lead_id=None, pasted="", to=""):
                         + (" — godziny ZAŁOŻONE, nie od klienta" if q.get("assumed") else ""))
         if lead.notes:
             info.append(f"Notatki: {lead.notes[:1500]}")
-        if public_base_url():
-            link = lead_form_url(lead)  # nadaje formularzowi token przy pierwszym użyciu
-            db.session.commit()
-            info.append(f"Link do formularza dla klienta (gdy prosisz o dane do wyceny): {link}")
         notes = [a.notes for a in sorted(lead.activities, key=lambda a: a.created_at or datetime.min, reverse=True)
                  if a.kind == "note" and a.notes][:3]
         if notes:
@@ -9500,7 +9642,8 @@ def mail_ai_draft(code, instruction, pasted="", reply_id=None, lead_id=None, to=
         "Zasady: odpowiadaj konkretnie na to, o co pyta klient, i na polecenie użytkownika. Nie wymyślaj cen, dat, "
         "dostępności ani obietnic — używaj tylko tego, co jest w poleceniu albo w danych z CRM; jeśli czegoś "
         "brakuje (np. godzin, miejsca), grzecznie dopytaj. Krótkie akapity, ton ciepły i profesjonalny, bez "
-        "nagłówków i list w punktach, chyba że polecenie o nie prosi. Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
+        "nagłówków i list w punktach, chyba że polecenie o nie prosi. Nigdy nie wstawiaj linków do formularzy. "
+        "Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
     )
     ctx = _mail_draft_context(code, reply_id, lead_id, pasted, to)
     task = (f"POLECENIE UŻYTKOWNIKA: {instruction.strip() or 'Napisz odpowiedź na tego maila.'}\n\n"
@@ -9889,7 +10032,12 @@ def alerts_state(code=None):
     others = {mc: len(unhandled_leads(mc)) for mc in markets.MARKETS if mc != code}
     tasks = mail_tasks_open(code)
     show_tasks = mail_tasks_visible()
-    return {"leads": leads, "other": {mc: n for mc, n in others.items() if n},
+    try:
+        badlinks = len(bad_link_leads(code))
+    except Exception:
+        db.session.rollback()
+        badlinks = 0
+    return {"leads": leads, "other": {mc: n for mc, n in others.items() if n}, "badlinks": badlinks,
             "tasks": [_mail_task_row(t) for t in tasks] if show_tasks else [], "tasks_waiting": len(tasks),
             "show_tasks": show_tasks, "show_from": MAIL_TASKS_SHOW_FROM}
 

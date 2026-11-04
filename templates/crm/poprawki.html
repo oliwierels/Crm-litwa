@@ -1,0 +1,32 @@
+{% extends "crm/base.html" %}
+{% block title %}Poprawki – {{ crm_brand }}{% endblock %}
+{% block page_title %}🔧 Maile z błędnym linkiem — poprawione oferty{% endblock %}
+{% block content %}
+<div class="panel" style="padding:16px 18px;max-width:900px">
+  {% if msg %}<div style="margin-bottom:10px;font-weight:600">{{ msg }}</div>{% endif %}
+  <p style="margin:0 0 12px;color:var(--muted);font-size:12.5px">Ci klienci ({{ mkt.flag }} {{ mkt.name }}) dostali mail z wyceną, w którym był błędny link do formularza.
+    Poprawka to pełna oferta {{ mkt.lang_in_pl }}: krótkie przeprosiny za błędny link, cena, co robi robot (rozmowa, taniec, zdjęcia, powitanie gości), co jest w cenie
+    i <b>PDF oferty w załączniku</b> — bez żadnych linków do formularzy.</p>
+  {% if rows %}
+  <form method="post" action="{{ url_for('crm_badlink_fix_all') }}" onsubmit="return confirm('Wysłać poprawioną ofertę z PDF do {{ rows|selectattr('price')|list|length }} klientów?')" style="margin-bottom:12px">
+    <button class="btn btn-primary btn-sm">📨 Wyślij poprawioną ofertę wszystkim ({{ rows|selectattr('price')|list|length }})</button>
+  </form>
+  {% for r in rows %}
+  <div style="border-top:1px solid var(--border);padding:10px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px">
+    <div style="flex:1;min-width:240px"><a href="{{ url_for('crm_lead_detail', lead_id=r.lead.id) }}" style="color:var(--text);font-weight:700">{{ r.lead.company }}</a>
+      <span style="color:var(--muted)"> · {{ r.lead.emails|join(', ') }}</span>
+      {% if r.price %}<div style="color:var(--green)">{{ '{:,}'.format(r.price).replace(',', ' ') }} € — <a href="{{ url_for('crm_lt_offer_pdf', lead_id=r.lead.id) }}" target="_blank" style="color:var(--accent)">podgląd PDF</a></div>
+      {% else %}<div style="color:var(--yellow)">Brak {{ r.missing|join(', ') }} — napisz ręcznie</div>{% endif %}</div>
+    {% if r.price %}
+    <form method="post" action="{{ url_for('crm_badlink_fix', lead_id=r.lead.id) }}" onsubmit="this.querySelector('button').disabled = true">
+      <button class="btn btn-secondary btn-sm">📨 Wyślij poprawioną ofertę z PDF</button></form>
+    {% else %}
+    <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail_compose', lead=r.lead.id, auto=1, ai='Przeproś krótko, że w poprzednim mailu był błędny link, i poproś o brakujące informacje do wyceny (bez żadnych linków).') }}">✉️ Napisz z Claude</a>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <div style="color:var(--green)">✅ Nie ma klientów do poprawienia na tym rynku.</div>
+  {% endif %}
+</div>
+{% endblock %}

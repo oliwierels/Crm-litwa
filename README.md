@@ -35,7 +35,7 @@ wystarczy dopisać parę do `lt_strings.py`.
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (Add Reference) |
 | `SECRET_KEY` | dowolny długi losowy ciąg |
 | `CRM_PASSWORD` | hasło do CRM |
-| `PUBLIC_URL` | adres tego CRM, np. `https://crm-lt.up.railway.app` (linki w mailach do klientów) |
+| `PUBLIC_URL` | (opcjonalnie) adres tego CRM, np. `https://web-production-8c630.up.railway.app` — wartość inna niż prawdziwy adres `https://…` jest ignorowana |
 | `SMTP_HOST`, `SMTP_PORT` | serwer poczty cyber_Folks (465 albo 587) |
 | `SMTP_USER_LT`, `SMTP_PASS_LT` | `o.latek@33bots.lt` + hasło — auto-mail z formularzem |
 | `SMTP_USER_OLIWIER`, `SMTP_PASS_OLIWIER` | `o.latek@33bots.lt` + hasło — oferty i follow-upy Oliwiera |
@@ -140,12 +140,15 @@ Ar rezervuojame šią datą?
 Przy leadzie: „🚀 Wyślij przez WhatsApp” — pierwsza wiadomość idzie jako szablon; gdy klient odpisze, odpowiedź
 trafia do komentarzy leada (+ zadanie „Odpowiedz…”), a przez 24 h CRM wysyła już zwykły tekst z okienka.
 
-## Automatyczna wycena mailem (nowe leady — tylko Litwa)
+## Automatyczna oferta mailem (nowe leady — tylko Litwa)
 
-Nowy lead z godzinami i miejscem w zapytaniu (np. „iki 4 valandų”, „Miejsce wydarzenia – Šiaulių arena”) od razu
-dostaje mail z ceną (kalkulator: od granicy, nocleg, zaokrąglenie do setek od 25 €) — ze skrzynki 33bots.lt
-opiekuna leada. Lead przechodzi na „Oferta”, wartość = cena, a drugim krokiem jest follow-up mailem za 3 dni.
-Brak godzin albo miejsca → jak dotąd mail z prośbą o dane (formularz); po wypełnieniu formularza wycena wychodzi sama.
+Nowy lead z godzinami i miejscem w CRM (np. „iki 4 valandų”, „Miejsce wydarzenia – Šiaulių arena”) od razu dostaje
+normalny mail z ofertą po litewsku — cena (kalkulator: od granicy, nocleg, zaokrąglenie do setek od 25 €), co robi robot
+(powitanie gości, rozmowa na podstawie bazy wiedzy, taniec, zdjęcia), co jest w cenie, zdjęcia z realizacji —
+i **PDF oferty w załączniku** (ten sam wygląd co oferty z CRM; zapisany w „Oferty”). Bez żadnych formularzy i linków.
+Lead przechodzi na „Oferta”, wartość = cena, drugi krok: follow-up mailem za 3 dni. Brak godzin albo miejsca →
+nic nie wychodzi samo, lead czeka w oknie nowych leadów na człowieka. Niemcy: ten sam mail i PDF po niemiecku,
+ale tylko ręcznie z karty leada.
 
 | Zmienna | Znaczenie |
 |---|---|

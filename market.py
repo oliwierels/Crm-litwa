@@ -52,7 +52,14 @@ MARKETS = {
         # --- automatyczna wycena mailem ---
         "quote_subject": "33Bots – humanoidinio roboto nuomos pasiūlymas",
         "quote_hello": "Laba diena,",
-        "quote_thanks": "dėkojame už užklausą dėl humanoidinio roboto Unitree G1 nuomos!",
+        "quote_thanks": "dėkojame už užklausą dėl humanoidinio roboto Unitree G1 nuomos! Prisegame pasiūlymą PDF formatu.",
+        "quote_fixed": ("atsiprašome – ankstesniame mūsų laiške buvo klaidinga nuoroda. Siunčiame pasiūlymą dar kartą, "
+                        "šįkart su PDF priedu."),
+        "quote_does": ("Ką robotas veiks jūsų renginyje:\n"
+                       "– pasitiks svečius ir pakvies juos prie jūsų stendo ar scenos,\n"
+                       "– bendraus su svečiais ir atsakys į jų klausimus – remdamasis jūsų įmonei paruošta žinių baze,\n"
+                       "– šoks, mojuos ir pozuos bendroms nuotraukoms,\n"
+                       "– taps ryškiu renginio akcentu ir puikiu turiniu socialiniams tinklams."),
         "quote_price": "Jūsų renginiui{when} ({time}, {place}) roboto nuomos kaina – {price} € be PVM.",
         "quote_included": "Į kainą įskaičiuota:\n– atvykimas ir roboto paruošimas vietoje,\n"
                           "– asmeninis operatorius visą renginio laiką,\n"
@@ -60,7 +67,25 @@ MARKETS = {
         "quote_robot": "Robotas pasitiks svečius, bendraus remdamasis paruošta žinių baze, šoks ir pozuos nuotraukoms.",
         "quote_photos": "Nuotraukos iš mūsų renginių:",
         "quote_fix": "Jei renginio detalės kitokios (data, laikas, vieta), patikslinkite jas čia – kainą atnaujinsime:",
-        "quote_reserve": "Ar rezervuojame šią datą? Užtenka atsakyti į šį laišką.\nPasiūlymas galioja 14 dienų.",
+        "quote_reserve": ("Ar rezervuojame šią datą? Užtenka atsakyti į šį laišką – mielai atsakysiu ir į visus "
+                          "klausimus.\nPasiūlymas galioja 14 dienų."),
+        "offer_pdf": {
+            "headline": "Humanoidinis robotas",
+            "subtitle": "Unitree G1 jūsų renginyje – pasitinka svečius, bendrauja, šoka ir pozuoja nuotraukoms.",
+            "cover": ("DATA", "VIETA", "LAIKAS"), "soon": "Pagal susitarimą",
+            "intro": ("Unitree G1 – ryškiausias jūsų renginio akcentas: pasitinka svečius, bendrauja remdamasis jūsų "
+                      "įmonei paruošta žinių baze, šoka ir pozuoja nuotraukoms. Visą laiką robotą aptarnauja mūsų "
+                      "operatorius."),
+            "cards": [("ROBOTO VAIDMUO", "Ką robotas darys", [
+                "Pasitiks svečius prie stendo ar scenos",
+                "Bendraus ir atsakys į klausimus apie jūsų įmonę",
+                "Šoks ir pozuos bendroms nuotraukoms"]),
+                ("PASIRUOŠIMAS", "Kaip pasiruošiame", [
+                    "Pritaikome roboto asmenybę ir žinias",
+                    "Atvykstame iš anksto ir viską paruošiame",
+                    "Operatorius ir techninė pagalba vietoje"])],
+            "price_title": "Roboto nuoma su operatoriumi",
+        },
         "bye": "Pagarbiai,",
         # --- wiadomość na WhatsApp / Viber ---
         "msg_hello": "Laba diena!",
@@ -129,7 +154,16 @@ MARKETS = {
         "ask_bye": "Mit freundlichen Grüßen",
         "quote_subject": "33Bots – Angebot: Vermietung des humanoiden Roboters",
         "quote_hello": "Guten Tag,",
-        "quote_thanks": "vielen Dank für Ihre Anfrage zur Vermietung des humanoiden Roboters Unitree G1!",
+        "quote_thanks": ("vielen Dank für Ihre Anfrage zur Vermietung des humanoiden Roboters Unitree G1! "
+                         "Anbei erhalten Sie unser Angebot als PDF."),
+        "quote_fixed": ("bitte entschuldigen Sie – in unserer vorherigen E-Mail war ein fehlerhafter Link. Wir senden "
+                        "Ihnen das Angebot hiermit erneut, diesmal mit PDF im Anhang."),
+        "quote_does": ("Was der Roboter auf Ihrer Veranstaltung macht:\n"
+                       "– er begrüßt Ihre Gäste und lädt sie an Ihren Stand oder auf Ihre Bühne ein,\n"
+                       "– er unterhält sich mit den Gästen und beantwortet ihre Fragen – auf Basis einer für Ihr "
+                       "Unternehmen vorbereiteten Wissensdatenbank,\n"
+                       "– er tanzt, winkt und posiert für gemeinsame Fotos,\n"
+                       "– er ist ein echter Blickfang und liefert starke Inhalte für Social Media."),
         "quote_price": "Für Ihre Veranstaltung{when} ({time}, {place}) beträgt der Mietpreis {price} € netto.",
         "quote_included": "Im Preis enthalten:\n– Anreise und Aufbau des Roboters vor Ort,\n"
                           "– ein eigener Operator während der gesamten Veranstaltung,\n"
@@ -140,8 +174,25 @@ MARKETS = {
         "quote_photos": "Fotos von unseren Veranstaltungen:",
         "quote_fix": "Falls die Details abweichen (Datum, Uhrzeit, Ort), können Sie sie hier korrigieren – "
                      "wir passen den Preis an:",
-        "quote_reserve": "Sollen wir den Termin für Sie reservieren? Antworten Sie einfach auf diese E-Mail.\n"
-                         "Das Angebot ist 14 Tage gültig.",
+        "quote_reserve": ("Sollen wir den Termin für Sie reservieren? Antworten Sie einfach auf diese E-Mail – gerne "
+                          "beantworte ich auch alle Ihre Fragen.\nDas Angebot ist 14 Tage gültig."),
+        "offer_pdf": {
+            "headline": "Humanoider Roboter",
+            "subtitle": "Unitree G1 auf Ihrer Veranstaltung – begrüßt Gäste, unterhält sich, tanzt und posiert für Fotos.",
+            "cover": ("TERMIN", "ORT", "ZEIT"), "soon": "Nach Absprache",
+            "intro": ("Der Unitree G1 ist das Highlight Ihrer Veranstaltung: Er begrüßt Gäste, unterhält sich auf Basis "
+                      "einer für Ihr Unternehmen vorbereiteten Wissensdatenbank, tanzt und posiert für Fotos. Unser "
+                      "Operator betreut ihn die ganze Zeit."),
+            "cards": [("ROLLE DES ROBOTERS", "Was der Roboter macht", [
+                "Begrüßt Gäste am Stand oder auf der Bühne",
+                "Beantwortet Fragen zu Ihrem Unternehmen",
+                "Tanzt und posiert für gemeinsame Fotos"]),
+                ("VORBEREITUNG", "So bereiten wir uns vor", [
+                    "Persönlichkeit und Wissen angepasst",
+                    "Rechtzeitige Anreise und Aufbau vor Ort",
+                    "Operator und technischer Support vor Ort"])],
+            "price_title": "Robotervermietung mit Operator",
+        },
         "bye": "Mit freundlichen Grüßen",
         "msg_hello": "Guten Tag!",
         "msg_price": "Vielen Dank für Ihre Anfrage. Die Vermietung des humanoiden Roboters Unitree G1 für Ihre "
