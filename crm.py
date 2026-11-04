@@ -430,6 +430,41 @@ class InboxMessage(db.Model):
     lead = db.relationship("Lead")
 
 
+class MailMessage(db.Model):
+    """Mail ze skrzynki firmowej (Odebrane albo Wysłane) — zakładka Poczta. Tłumaczenie na polski
+    trzymamy obok oryginału, żeby każdy mail tłumaczyć tylko raz."""
+    __tablename__ = "mail_messages"
+    __table_args__ = (db.UniqueConstraint("mailbox", "folder", "uidvalidity", "uid", name="uq_mail_uid"),)
+    id = db.Column(db.Integer, primary_key=True)
+    mailbox = db.Column(db.String(200), index=True, nullable=False)
+    folder = db.Column(db.String(10), nullable=False)  # in | sent
+    uid = db.Column(db.Integer, nullable=True)  # None = wysłany z CRM, czeka na kopię z Wysłanych
+    uidvalidity = db.Column(db.String(40), nullable=True)
+    message_id = db.Column(db.String(400), index=True)
+    in_reply_to = db.Column(db.String(400))
+    refs = db.Column(db.Text)
+    thread_key = db.Column(db.String(400), index=True)
+    from_addr = db.Column(db.String(300))
+    from_name = db.Column(db.String(300))
+    to_addrs = db.Column(db.Text)
+    to_names = db.Column(db.Text)
+    cc_addrs = db.Column(db.Text)
+    addrs = db.Column(db.Text)  # " a@x.lt b@y.lt " — szukanie po adresie leada
+    subject = db.Column(db.String(500))
+    date = db.Column(db.DateTime, index=True)
+    body_text = db.Column(db.Text)
+    snippet = db.Column(db.String(300))
+    attachments = db.Column(db.Text)  # JSON [{n, name, type, size}]
+    truncated = db.Column(db.Boolean, default=False)
+    lang = db.Column(db.String(8))
+    subject_pl = db.Column(db.String(600))
+    body_pl = db.Column(db.Text)
+    translated_at = db.Column(db.DateTime)
+    translate_error = db.Column(db.String(300))
+    seen = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class GeoCache(db.Model):
     """Zapamiętane współrzędne miejsc spoza wbudowanej listy miast (pytamy OpenStreetMap raz)."""
     __tablename__ = "geo_cache"
@@ -5590,6 +5625,8 @@ def _mailbox_for(user):
 
     Najpierw osobna skrzynka osoby: SMTP_PASS_<IMIĘ> (np. SMTP_PASS_OLIWIER, SMTP_PASS_BARTEK),
     login = jej adres z USERS albo SMTP_USER_<IMIĘ>. Bez niej — wspólna SMTP_USER / SMTP_PASS."""
+    if (user or {}).get("login") and (user or {}).get("pwd"):
+        return user["login"], user["pwd"]
     key = re.sub(r"[^A-Z0-9]", "_", (user or {}).get("name", "").upper())
     pwd = os.environ.get(f"SMTP_PASS_{key}", "").strip() if key else ""
     if pwd:
@@ -5649,7 +5686,7 @@ def _imap_save_sent(raw_msg, login, pwd, host=None):
     return None
 
 
-def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=None, headers=None):
+def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=None, headers=None, cc=None):
     """Wysyła jeden mail przez SMTP (te same zmienne co raport dzienny + skrzynki osób).
     attachments: lista (nazwa_pliku, bajty, mime) — np. PDF oferty.
     sender: użytkownik z USERS — mail wychodzi z jego skrzynki, jeśli jest skonfigurowana.
@@ -5682,6 +5719,9 @@ def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=Non
     if not recipients:
         return f"niepoprawny adres odbiorcy: {to_addr or '(pusty)'}"
     msg["To"] = ", ".join(recipients)
+    cc = [a for a in email_list(*(cc or [])) if a not in recipients]
+    if cc:
+        msg["Cc"] = ", ".join(cc)
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=login.split("@")[-1])
     _smtp_send.last_msgid = msg["Message-ID"]  # Customer Journey rozpoznaje po nim odpowiedzi klienta
@@ -5692,12 +5732,12 @@ def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=Non
         if port == 465:
             with smtplib.SMTP_SSL(host, port, timeout=30) as s:
                 s.login(login, pwd)
-                s.sendmail(login, recipients, raw)
+                s.sendmail(login, recipients + cc, raw)
         else:
             with smtplib.SMTP(host, port, timeout=30) as s:
                 s.starttls()
                 s.login(login, pwd)
-                s.sendmail(login, recipients, raw)
+                s.sendmail(login, recipients + cc, raw)
     except (smtplib.SMTPException, OSError) as e:
         return f"wysyłka nie powiodła się: {type(e).__name__}"
     _smtp_send.last_warning = _imap_save_sent(
@@ -8484,6 +8524,623 @@ def _notify_form_filled(lead_id, summary):
                 db.session.remove()
     threading.Thread(target=run, daemon=True).start()
 
+
+
+# ---------- POCZTA: skrzynki firmowe w CRM + tłumaczenie na żywo ----------
+# Zakładka „Poczta”: Odebrane i Wysłane wszystkich skrzynek rynku (domyślnie o.latek@ i kontakt@33bots.lt),
+# razem z archiwum. CRM synchronizuje je w tle do tabeli mail_messages (tylko odczyt IMAP), każdy mail
+# pokazuje obok oryginału po polsku (Claude, tłumaczenie zapisane w bazie) i pozwala pisać maile po polsku
+# z tłumaczeniem na język klienta — wysyłka z wybranej skrzynki, z kopią w Wysłanych.
+import poczta  # noqa: E402
+
+MAIL_TARGET_LANG = os.environ.get("MARKET_LANG", "lt").strip().lower() or "lt"
+MAIL_LANG_NAMES = {"pl": "polski", "lt": "litewski", "de": "niemiecki", "en": "angielski"}
+MAIL_LANG_FLAGS = {"pl": "🇵🇱", "lt": "🇱🇹", "de": "🇩🇪", "en": "🇬🇧"}
+MAIL_DEFAULT_BOXES = {"lt": "o.latek@33bots.lt,kontakt@33bots.lt", "de": "o.latek@33bots.de,kontakt@33bots.de"}
+MAIL_SYNC_SECONDS = int(os.environ.get("MAIL_SYNC_SECONDS", "120") or 120)
+MAIL_BATCH = int(os.environ.get("MAIL_SYNC_BATCH", "300") or 300)
+MAIL_TRANSLATE_MODEL = os.environ.get("TRANSLATE_AI_MODEL", "").strip() or INBOX_AI_MODEL
+MAIL_AUTO_TRANSLATE_DAYS = int(os.environ.get("MAIL_AUTO_TRANSLATE_DAYS", "30") or 30)
+_mail_sync_lock = threading.Lock()
+
+
+def _env_pairs():
+    """(login, hasło) ze wszystkich znanych zmiennych skrzynek w Railway."""
+    pairs = []
+    env = os.environ
+    for k, v in env.items():
+        for pre_user, pre_pass in (("SMTP_USER_", "SMTP_PASS_"), ("IMAP_USER_", "IMAP_PASS_"), ("MAIL_USER_", "MAIL_PASS_")):
+            if k.startswith(pre_user) and v.strip():
+                pwd = env.get(pre_pass + k[len(pre_user):], "").strip()
+                if pwd:
+                    pairs.append((v.strip().lower(), pwd))
+    for u, p in (("INBOX_IMAP_USER", "INBOX_IMAP_PASS"), ("SMTP_USER", "SMTP_PASS")):
+        if env.get(u, "").strip() and env.get(p, "").strip():
+            pairs.append((env[u].strip().lower(), env[p].strip()))
+    return pairs
+
+
+def mail_boxes():
+    """Skrzynki zakładki Poczta: [{login, pwd, host, port, smtp_host, smtp_port, label, key}].
+    Lista: MAILBOXES (po przecinku) albo domyślna rynku; hasło z pasującej zmiennej (SMTP_/IMAP_/MAIL_USER_X +
+    _PASS_X, INBOX_IMAP_*), a gdy brak — MAIL_PASSWORD (wspólne hasło)."""
+    raw = os.environ.get("MAILBOXES", "").strip() or MAIL_DEFAULT_BOXES.get(MAIL_TARGET_LANG, "")
+    pairs = dict(reversed(_env_pairs()))
+    common = os.environ.get("MAIL_PASSWORD", "").strip()
+    host = os.environ.get("IMAP_HOST", "").strip() or os.environ.get("SMTP_HOST", "").strip()
+    out = []
+    for login in [x.strip().lower() for x in raw.split(",") if x.strip()]:
+        pwd = pairs.get(login) or common
+        key = re.sub(r"[^A-Z0-9]", "_", login.split("@")[0].upper() + "_" + login.split("@")[-1].split(".")[-1].upper())
+        owner = next((u for u in USERS if (u.get("email") or "").lower() == login), None)
+        local = login.split("@")[0]
+        label = (owner.get("full_name") if owner else None) or (
+            "Oliwier Latek" if local.startswith("o.latek") else "33Bots" if local in ("kontakt", "info", "hi") else login)
+        out.append({"login": login, "pwd": pwd, "key": key, "label": label,
+                    "host": os.environ.get(f"IMAP_HOST_{key}", "").strip() or host,
+                    "port": int(os.environ.get(f"IMAP_PORT_{key}", "").strip() or os.environ.get("IMAP_PORT", 993)),
+                    "user_id": owner["id"] if owner else None})
+    return out
+
+
+def mail_box(login):
+    return next((b for b in mail_boxes() if b["login"] == (login or "").lower()), None)
+
+
+def _mail_state_key(login, folder):
+    return f"mailsync:{login}:{folder}"[:64]
+
+
+def _mail_state(login, folder):
+    try:
+        return json.loads(get_setting(_mail_state_key(login, folder)) or "{}")
+    except ValueError:
+        return {}
+
+
+def _mail_set_state(login, folder, **kw):
+    st = _mail_state(login, folder)
+    st.update(kw)
+    set_setting(_mail_state_key(login, folder), json.dumps(st, default=str)[:2000])
+
+
+def _mail_store(box, kind, uidvalidity, uid, data, archive=False):
+    """Zapisuje jeden mail. Wysłany z CRM (uid=None, ten sam Message-ID) dostaje tylko uid z Wysłanych."""
+    if data["message_id"]:
+        pending = MailMessage.query.filter_by(mailbox=box["login"], folder=kind, uid=None,
+                                              message_id=data["message_id"]).first()
+        if pending:
+            pending.uid, pending.uidvalidity = uid, uidvalidity
+            return pending
+    if MailMessage.query.filter_by(mailbox=box["login"], folder=kind, uidvalidity=uidvalidity, uid=uid).first():
+        return None
+    old_mail = archive and data["date"] and data["date"] < datetime.utcnow() - timedelta(days=2)
+    row = MailMessage(mailbox=box["login"], folder=kind, uid=uid, uidvalidity=uidvalidity,
+                      seen=bool(kind == "sent" or old_mail),  # archiwum nie świeci się jako nowe
+                      **{k: v for k, v in data.items() if k not in ("attachments", "truncated")})
+    row.attachments = json.dumps(data["attachments"], ensure_ascii=False)
+    row.truncated = data["truncated"]
+    lang = poczta.detect_lang(f"{data['subject']}\n{data['body_text'][:3000]}")
+    row.lang = lang or None
+    if lang == "pl":  # po polsku — tłumaczenie niepotrzebne
+        row.subject_pl, row.body_pl, row.translated_at = row.subject, None, datetime.utcnow()
+    db.session.add(row)
+    return row
+
+
+def mail_sync_box(box, max_per_folder=MAIL_BATCH):
+    """Jedna porcja synchronizacji skrzynki (najstarsze nieściągnięte najpierw — archiwum dochodzi stopniowo).
+    Zwraca dict {nowe, zostało, błąd}."""
+    res = {"new": 0, "left": 0, "error": ""}
+    if not (box["pwd"] and box["host"]):
+        res["error"] = "brak hasła w Railway (MAIL_PASSWORD albo SMTP_/IMAP_PASS dla tej skrzynki)"
+        return res
+    try:
+        im = poczta.connect(box["host"], box["port"], box["login"], box["pwd"])
+    except poczta.MailboxError as e:
+        res["error"] = str(e)
+        return res
+    try:
+        folders = [("in", "INBOX")]
+        sent = poczta.sent_folder(im, os.environ.get("IMAP_SENT_FOLDER", "").strip())
+        if sent:
+            folders.append(("sent", sent))
+        for kind, fname in folders:
+            try:
+                validity = poczta.select(im, fname)
+            except poczta.MailboxError as e:
+                res["error"] = str(e)
+                continue
+            st = _mail_state(box["login"], kind)
+            last = int(st.get("last_uid") or 0) if st.get("uidvalidity") == validity else 0
+            archive = bool(st.get("archive", True)) if last else True  # pierwsze pobieranie = archiwum
+            uids = poczta.uids_after(im, last)
+            batch = uids[:max_per_folder]
+            res["left"] += max(0, len(uids) - len(batch))
+            for i in range(0, len(batch), 25):
+                chunk = batch[i:i + 25]
+                for uid, raw, big in poczta.fetch_batch(im, chunk):
+                    try:
+                        data = poczta.parse(raw, truncated=big)
+                    except Exception:
+                        continue
+                    if _mail_store(box, kind, validity, uid, data, archive=archive) is not None:
+                        res["new"] += 1
+                _mail_set_state(box["login"], kind, uidvalidity=validity, last_uid=chunk[-1],
+                                total=int(st.get("total") or 0) + len(chunk))
+                st = _mail_state(box["login"], kind)
+                db.session.commit()
+            _mail_set_state(box["login"], kind, uidvalidity=validity, left=max(0, len(uids) - len(batch)),
+                            synced_at=datetime.utcnow().isoformat(timespec="seconds"), error="",
+                            archive=len(uids) > len(batch))  # archiwum skończone = kolejne maile są „nowe”
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        res["error"] = f"{type(e).__name__}: {str(e)[:150]}"
+    finally:
+        poczta.close(im)
+    for kind in ("in", "sent"):
+        if res["error"]:
+            _mail_set_state(box["login"], kind, error=res["error"])
+    db.session.commit()
+    return res
+
+
+def mail_sync_all():
+    if not _mail_sync_lock.acquire(blocking=False):
+        return {}
+    try:
+        return {b["login"]: mail_sync_box(b) for b in mail_boxes()}
+    finally:
+        _mail_sync_lock.release()
+
+
+# --- tłumaczenie ---
+
+MAIL_TRANSLATE_TOOL = {
+    "name": "translation",
+    "description": "Tłumaczenie maila.",
+    "input_schema": {"type": "object", "properties": {
+        "source_lang": {"type": "string", "description": "Kod języka oryginału: lt, de, en, pl, ru, lv…"},
+        "subject": {"type": "string", "description": "Temat po przetłumaczeniu"},
+        "body": {"type": "string", "description": "Treść po przetłumaczeniu"},
+    }, "required": ["source_lang", "subject", "body"]},
+}
+
+
+def ai_translate(subject, body, target="pl", tone_hint=""):
+    """(język źródłowy, temat, treść) przetłumaczone na `target` przez Claude. Rzuca wyjątek przy błędzie."""
+    name = {"pl": "polski", "lt": "litewski", "de": "niemiecki", "en": "angielski"}.get(target, target)
+    system = (f"Jesteś tłumaczem korespondencji firmy 33Bots (wynajem humanoidalnych robotów Unitree G1 na eventy). "
+              f"Tłumacz wiernie na język {name}: zachowaj akapity, listy, nazwiska, adresy, numery, kwoty, daty i linki "
+              f"bez zmian. Nie dodawaj komentarzy ani wyjaśnień. Gdy tekst już jest w języku docelowym, przepisz go bez zmian."
+              + (f" {tone_hint}" if tone_hint else ""))
+    args = _ai_forced_tool(MAIL_TRANSLATE_MODEL, system, f"TEMAT:\n{subject or ''}\n\nTREŚĆ:\n{body or ''}",
+                           MAIL_TRANSLATE_TOOL, max_tokens=8000)
+    return (str(args.get("source_lang") or "")[:8].lower(), str(args.get("subject") or "")[:600],
+            str(args.get("body") or ""))
+
+
+def mail_translate(row, force=False):
+    """Tłumaczy mail na polski (nowa część; cytowaną historię zostawia w oryginale). Zwraca błąd albo None."""
+    if row.translated_at and not force:
+        return None
+    fresh, _quoted = poczta.split_quote(row.body_text or "")
+    try:
+        lang, subj, body = ai_translate(row.subject or "", fresh[:12000], "pl")
+    except Exception as e:
+        row.translate_error = f"{type(e).__name__}: {str(e)[:200]}"
+        db.session.commit()
+        return row.translate_error
+    row.lang = lang or row.lang
+    row.subject_pl, row.body_pl = subj, body
+    row.translated_at, row.translate_error = datetime.utcnow(), None
+    db.session.commit()
+    return None
+
+
+MAIL_SUBJECTS_TOOL = {
+    "name": "subjects",
+    "description": "Przetłumaczone tematy maili.",
+    "input_schema": {"type": "object", "properties": {"items": {"type": "array", "items": {
+        "type": "object", "properties": {"id": {"type": "integer"}, "subject": {"type": "string"}},
+        "required": ["id", "subject"]}}}, "required": ["items"]},
+}
+
+
+def mail_translate_subjects(rows):
+    """Tłumaczy na polski tematy wielu maili jednym zapytaniem (lista w Poczcie)."""
+    todo = [r for r in rows if not r.subject_pl and (r.subject or "").strip()]
+    if not todo:
+        return {}
+    listing = "\n".join(f"{r.id}: {r.subject}" for r in todo[:40])
+    args = _ai_forced_tool(MAIL_TRANSLATE_MODEL,
+                           "Przetłumacz tematy maili na polski. Zachowaj prefiksy Re:/Fwd:, nazwy firm i numery. "
+                           "Temat już po polsku przepisz bez zmian.", listing, MAIL_SUBJECTS_TOOL, max_tokens=4000)
+    got = {}
+    for item in args.get("items") or []:
+        try:
+            rid = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        got[rid] = str(item.get("subject") or "")[:600]
+    for r in todo:
+        if r.id in got:
+            r.subject_pl = got[r.id]
+    db.session.commit()
+    return got
+
+
+def mail_auto_translate(limit=15):
+    """W tle: tłumaczy świeże maile od klientów (ostatnie MAIL_AUTO_TRANSLATE_DAYS dni) zanim ktoś je otworzy."""
+    if not _ai_client():
+        return 0
+    since = datetime.utcnow() - timedelta(days=MAIL_AUTO_TRANSLATE_DAYS)
+    rows = (MailMessage.query.filter(MailMessage.translated_at.is_(None), MailMessage.translate_error.is_(None),
+                                     MailMessage.date >= since)
+            .order_by(MailMessage.date.desc()).limit(limit).all())
+    for r in rows:
+        mail_translate(r)
+    return len(rows)
+
+
+def _mail_scheduler():
+    time.sleep(20)
+    while True:
+        try:
+            with app.app_context():
+                if mail_boxes():
+                    mail_sync_all()
+                    mail_auto_translate()
+                db.session.remove()
+        except Exception:
+            app.logger.exception("mail_sync")
+        time.sleep(MAIL_SYNC_SECONDS)
+
+
+if os.environ.get("MAIL_SYNC", "1") != "0":
+    threading.Thread(target=_mail_scheduler, daemon=True).start()
+
+
+# --- powiązanie z leadami ---
+
+def mail_query_for_addrs(addrs):
+    addrs = [a.strip().lower() for a in addrs if a and "@" in a]
+    if not addrs:
+        return None
+    return MailMessage.query.filter(db.or_(*[MailMessage.addrs.like(f"% {a} %") for a in addrs]))
+
+
+def mail_lead_for(row):
+    """Lead, z którym związany jest mail (adres klienta w Od/Do/DW)."""
+    own = {b["login"] for b in mail_boxes()} | {(u.get("email") or "").lower() for u in USERS}
+    for addr in (row.addrs or "").split():
+        if addr in own or addr.split("@")[-1] in OWN_DOMAINS:
+            continue
+        lead = Lead.query.filter(db.or_(db.func.lower(Lead.contact_email) == addr,
+                                        db.func.lower(Lead.contact_email2) == addr)).order_by(Lead.created_at.desc()).first()
+        if lead:
+            return lead
+    return None
+
+
+def mail_unseen_count():
+    try:
+        return MailMessage.query.filter(MailMessage.folder == "in", MailMessage.seen.isnot(True),
+                                        MailMessage.date >= datetime.utcnow() - timedelta(days=30)).count()
+    except Exception:
+        db.session.rollback()
+        return 0
+
+
+def _mail_json(row):
+    return json.loads(row.attachments or "[]")
+
+
+def mail_signature(box, user=None):
+    """Podpis: właściciel skrzynki osobistej, a przy wspólnej (kontakt@) — osoba, która pisze."""
+    owner = USERS_BY_ID.get(box.get("user_id")) if box.get("user_id") else None
+    if box["login"].startswith("o.latek"):
+        owner = owner or USERS_BY_ID.get(1)
+    owner = owner or user
+    name = (owner or {}).get("full_name") or box["label"]
+    phone = (owner or {}).get("phone") or ""
+    bye = {"lt": "Pagarbiai,", "de": "Mit freundlichen Grüßen", "en": "Best regards,", "pl": "Pozdrawiam,"}
+    return "\n".join(x for x in (bye.get(MAIL_TARGET_LANG, "Pozdrawiam,"), name, "33Bots", box["login"], phone) if x)
+
+
+# --- trasy ---
+
+@app.route("/crm/poczta")
+def crm_mail():
+    box = request.args.get("box", "").strip().lower()
+    folder = request.args.get("f", "in")
+    q = request.args.get("q", "").strip()
+    lead_id = request.args.get("lead", type=int)
+    page = max(1, request.args.get("p", type=int) or 1)
+    query = MailMessage.query
+    if box:
+        query = query.filter(MailMessage.mailbox == box)
+    if folder in ("in", "sent"):
+        query = query.filter(MailMessage.folder == folder)
+    lead = db.session.get(Lead, lead_id) if lead_id else None
+    if lead:
+        addrs = [a.lower() for a in lead.emails]
+        query = query.filter(db.or_(*[MailMessage.addrs.like(f"% {a} %") for a in addrs])) if addrs else query.filter(db.false())
+    if q:
+        like = f"%{q}%"
+        query = query.filter(db.or_(MailMessage.subject.ilike(like), MailMessage.subject_pl.ilike(like),
+                                    MailMessage.addrs.ilike(like), MailMessage.from_name.ilike(like),
+                                    MailMessage.body_text.ilike(like), MailMessage.body_pl.ilike(like)))
+    total = query.count()
+    rows = query.order_by(MailMessage.date.desc().nullslast(), MailMessage.id.desc()).offset((page - 1) * 50).limit(50).all()
+    sel = db.session.get(MailMessage, request.args.get("m", type=int) or 0)
+    thread, sel_lead, atts = [], None, []
+    if sel:
+        if not sel.seen:
+            sel.seen = True
+            db.session.commit()
+        if sel.thread_key:
+            thread = (MailMessage.query.filter(MailMessage.thread_key == sel.thread_key, MailMessage.id != sel.id)
+                      .order_by(MailMessage.date).limit(30).all())
+        sel_lead = mail_lead_for(sel)
+        atts = _mail_json(sel)
+    status = []
+    for b in mail_boxes():
+        sti, sts = _mail_state(b["login"], "in"), _mail_state(b["login"], "sent")
+        status.append({"login": b["login"], "label": b["label"], "ready": bool(b["pwd"] and b["host"]),
+                       "count": MailMessage.query.filter_by(mailbox=b["login"]).count(),
+                       "left": int(sti.get("left") or 0) + int(sts.get("left") or 0),
+                       "synced_at": sti.get("synced_at") or "", "error": sti.get("error") or sts.get("error") or ""})
+    fresh, quoted = poczta.split_quote(sel.body_text or "") if sel else ("", "")
+    return render_template(
+        "crm/poczta.html", rows=rows, sel=sel, thread=thread, sel_lead=sel_lead, atts=atts, fresh=fresh, quoted=quoted,
+        box=box, folder=folder, q=q, page=page, total=total, pages=max(1, (total + 49) // 50), lead=lead,
+        status=status, lang_names=MAIL_LANG_NAMES, lang_flags=MAIL_LANG_FLAGS, target_lang=MAIL_TARGET_LANG,
+        ai_ok=bool(_ai_client()), syncing=_mail_sync_lock.locked(),
+    )
+
+
+@app.route("/crm/poczta/sync", methods=["POST"])
+def crm_mail_sync():
+    def run():
+        with app.app_context():
+            try:
+                mail_sync_all()
+                mail_auto_translate()
+            finally:
+                db.session.remove()
+    if not _mail_sync_lock.locked():
+        threading.Thread(target=run, daemon=True).start()
+        time.sleep(2)
+    return redirect(request.referrer or url_for("crm_mail"))
+
+
+@app.route("/crm/poczta/<int:mid>/tlumacz", methods=["POST"])
+def crm_mail_translate(mid):
+    row = db.session.get(MailMessage, mid) or abort(404)
+    err = mail_translate(row, force=request.form.get("force") == "1")
+    if err:
+        return jsonify({"error": f"Tłumaczenie nie wyszło: {err}"}), 502
+    return jsonify({"ok": True, "lang": row.lang, "subject": row.subject_pl or row.subject,
+                    "body": row.body_pl if row.body_pl is not None else poczta.split_quote(row.body_text or "")[0]})
+
+
+@app.route("/crm/poczta/tematy", methods=["POST"])
+def crm_mail_translate_subjects():
+    ids = [int(x) for x in (request.form.get("ids") or "").split(",") if x.isdigit()][:40]
+    rows = MailMessage.query.filter(MailMessage.id.in_(ids)).all() if ids else []
+    try:
+        got = mail_translate_subjects(rows)
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}"}), 502
+    return jsonify({"ok": True, "subjects": {str(k): v for k, v in got.items()}})
+
+
+@app.route("/crm/poczta/<int:mid>/zalacznik/<int:n>")
+def crm_mail_attachment(mid, n):
+    row = db.session.get(MailMessage, mid) or abort(404)
+    box = mail_box(row.mailbox)
+    if not box or row.uid is None:
+        abort(404)
+    try:
+        im = poczta.connect(box["host"], box["port"], box["login"], box["pwd"])
+    except poczta.MailboxError:
+        abort(502)
+    try:
+        fname = "INBOX" if row.folder == "in" else poczta.sent_folder(im, os.environ.get("IMAP_SENT_FOLDER", "").strip())
+        validity = poczta.select(im, fname)
+        if validity != row.uidvalidity:
+            abort(404)
+        raw = poczta.fetch_raw(im, row.uid)
+    finally:
+        poczta.close(im)
+    got = poczta.attachment_bytes(raw, n) if raw else None
+    if not got:
+        abort(404)
+    name, mime, data = got
+    resp = make_response(data)
+    resp.headers["Content-Type"] = mime or "application/octet-stream"
+    inline = mime in ("application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp")
+    resp.headers["Content-Disposition"] = f"{'inline' if inline else 'attachment'}; filename*=UTF-8''{quote(name)}"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "sandbox"
+    return resp
+
+
+@app.route("/crm/poczta/<int:mid>/nowy-lead", methods=["POST"])
+def crm_mail_new_lead(mid):
+    """Nowy lead z maila (np. zapytanie, które przyszło prosto na skrzynkę)."""
+    row = db.session.get(MailMessage, mid) or abort(404)
+    existing = mail_lead_for(row)
+    if existing:
+        return redirect(url_for("crm_lead_detail", lead_id=existing.id))
+    addr = row.from_addr if row.folder == "in" else (row.to_addrs or "").split(",")[0].strip()
+    domain = addr.split("@")[-1] if addr else ""
+    company = row.from_name if row.folder == "in" and row.from_name else (domain.split(".")[0].capitalize() if domain else "Lead z maila")
+    user = get_current_user(request)
+    lead = Lead(company=company[:200], contact_name=(row.from_name or "")[:200] if row.folder == "in" else "",
+                contact_email=addr, stage="Nowy", assigned_to=user["id"], currency="EUR", source="Mail",
+                notes=f"Z maila „{row.subject or ''}” ({row.date:%Y-%m-%d} )".replace(" )", ")") if row.date else "")
+    db.session.add(lead)
+    db.session.flush()
+    db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage="Nowy", changed_by=user["id"]))
+    db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(), assigned_to=user["id"],
+                            notes=f"📬 Mail od {row.from_addr}: {row.subject or ''}\n---\n{(row.body_text or '')[:3000]}"
+                                  + (f"\n---\n🇵🇱 {row.body_pl[:3000]}" if row.body_pl else "")))
+    db.session.commit()
+    return redirect(url_for("crm_lead_detail", lead_id=lead.id))
+
+
+@app.route("/crm/poczta/przetlumacz", methods=["POST"])
+def crm_mail_translate_draft():
+    """Tłumaczenie szkicu w okienku pisania: polski → język klienta (albo odwrotnie: to=pl)."""
+    target = request.form.get("to", MAIL_TARGET_LANG)
+    if target not in MAIL_LANG_NAMES:
+        target = MAIL_TARGET_LANG
+    subject = (request.form.get("subject") or "")[:500]
+    body = (request.form.get("body") or "")[:12000]
+    if not (subject.strip() or body.strip()):
+        return jsonify({"ok": True, "subject": "", "body": ""})
+    tone = ("To mail firmy do klienta: grzeczny, profesjonalny, naturalny język biznesowy jak u native speakera "
+            "(w litewskim forma grzecznościowa „Jūs”, w niemieckim „Sie”).") if target != "pl" else ""
+    try:
+        _lang, subj, text = ai_translate(subject, body, target, tone_hint=tone)
+    except Exception as e:
+        return jsonify({"error": f"Tłumaczenie nie wyszło: {type(e).__name__}"}), 502
+    return jsonify({"ok": True, "subject": subj, "body": text})
+
+
+def _quote_for_reply(row):
+    when = f"{to_local(row.date):%Y-%m-%d %H:%M}" if row.date else ""
+    who = f"{row.from_name} <{row.from_addr}>" if row.from_name else row.from_addr
+    intro = {"lt": f"{when}, {who} rašė:", "de": f"Am {when} schrieb {who}:", "en": f"On {when}, {who} wrote:",
+             "pl": f"{when}, {who} napisał(a):"}.get(MAIL_TARGET_LANG, f"{when}, {who}:")
+    body = "\n".join("> " + line for line in (row.body_text or "").split("\n")[:200])
+    return f"\n\n{intro}\n{body}"
+
+
+@app.route("/crm/poczta/nowa", methods=["GET", "POST"])
+def crm_mail_compose():
+    boxes = [b for b in mail_boxes() if b["pwd"]]
+    user = get_current_user(request)
+    if request.method == "POST":
+        return _mail_send_from_form(boxes, user)
+    reply = db.session.get(MailMessage, request.args.get("reply", type=int) or 0)
+    fwd = db.session.get(MailMessage, request.args.get("fwd", type=int) or 0)
+    lead = db.session.get(Lead, request.args.get("lead", type=int) or 0)
+    to, cc, subject, subject_pl, quoted, from_box = request.args.get("to", ""), "", "", "", "", ""
+    if reply:
+        from_box = reply.mailbox
+        if reply.folder == "in":
+            to = reply.from_addr
+        else:
+            to = reply.to_addrs or ""
+        if request.args.get("all") == "1":
+            own = {b["login"] for b in mail_boxes()}
+            others = [a for a in ((reply.to_addrs or "") + "," + (reply.cc_addrs or "")).split(",")
+                      if a.strip() and a.strip() not in own and a.strip() != to]
+            cc = ", ".join(dict.fromkeys(a.strip() for a in others))
+        s = reply.subject or ""
+        subject = s if re.match(r"(?i)^(re|aw|ats)\s*:", s) else f"Re: {s}"
+        sp = reply.subject_pl or s
+        subject_pl = sp if re.match(r"(?i)^(re|aw|ats)\s*:", sp) else f"Re: {sp}"
+        quoted = _quote_for_reply(reply)
+        lead = lead or mail_lead_for(reply)
+    elif fwd:
+        from_box = fwd.mailbox
+        s = fwd.subject or ""
+        subject = s if re.match(r"(?i)^(fwd?|wg|pers)\s*:", s) else f"Fwd: {s}"
+        subject_pl = f"Fwd: {fwd.subject_pl or s}"
+        quoted = _quote_for_reply(fwd)
+    elif lead:
+        to = to or ", ".join(lead.emails)
+    if not from_box:
+        mine = next((b for b in boxes if b.get("user_id") == user["id"]), None)
+        from_box = (mine or (boxes[0] if boxes else {"login": ""}))["login"]
+    return render_template(
+        "crm/poczta_nowa.html", boxes=boxes, from_box=from_box, to=to, cc=cc, subject=subject, subject_pl=subject_pl,
+        quoted=quoted,
+        reply=reply, fwd=fwd, lead=lead, target_lang=MAIL_TARGET_LANG, lang_names=MAIL_LANG_NAMES,
+        lang_flags=MAIL_LANG_FLAGS, signatures={b["login"]: mail_signature(b, user) for b in boxes}, ai_ok=bool(_ai_client()),
+    )
+
+
+def _mail_send_from_form(boxes, user):
+    f = request.form
+    box = next((b for b in boxes if b["login"] == (f.get("from") or "").lower()), None)
+    if not box:
+        return jsonify({"error": "Wybierz skrzynkę nadawcy (brak hasła tej skrzynki w Railway)."}), 400
+    recipients, bad = check_recipients(f.get("to"))
+    if bad:
+        return jsonify({"error": bad}), 400
+    cc = []
+    if (f.get("cc") or "").strip():
+        cc, bad = check_recipients(f.get("cc"))
+        if bad:
+            return jsonify({"error": bad}), 400
+    subject = (f.get("subject_out") or f.get("subject") or "").strip()[:300]
+    body = (f.get("body_out") or "").replace("\r\n", "\n").strip()
+    if not subject or not body:
+        return jsonify({"error": "Uzupełnij temat i treść (w języku klienta — kliknij „Przetłumacz”)."}), 400
+    if f.get("signature") == "1":
+        body = body.rstrip() + "\n\n" + mail_signature(box, user)
+    body += (f.get("quoted") or "").replace("\r\n", "\n")[:60000]
+    files = []
+    total = 0
+    for up in request.files.getlist("files"):
+        if not up or not up.filename:
+            continue
+        data = up.read()
+        total += len(data)
+        if total > 15 * 1024 * 1024:
+            return jsonify({"error": "Załączniki razem ponad 15 MB."}), 400
+        files.append((journey.safe_filename(up.filename), data, up.mimetype or "application/octet-stream"))
+    reply = db.session.get(MailMessage, f.get("reply", type=int) or 0)
+    headers = {}
+    if reply and reply.message_id:
+        headers["In-Reply-To"] = reply.message_id
+        headers["References"] = ((reply.refs or "") + " " + reply.message_id).strip()[-3000:]
+    owner = USERS_BY_ID.get(box.get("user_id")) or {}
+    sender = {"name": box["key"], "login": box["login"], "pwd": box["pwd"], "id": user["id"],
+              "full_name": owner.get("full_name") or box["label"], "email": box["login"]}
+    err = _smtp_send(recipients, subject, body, box["label"], attachments=files or None,
+                     sender=sender, headers=headers, cc=cc)
+    if err:
+        return jsonify({"error": f"Mail nie wyszedł: {err}"}), 502
+    now = datetime.utcnow()
+    msg_id = _smtp_send.last_msgid or ""
+    body_pl = (f.get("body") or "").strip()
+    row = MailMessage(mailbox=box["login"], folder="sent", uid=None, message_id=msg_id[:400],
+                      in_reply_to=headers.get("In-Reply-To"), refs=headers.get("References"),
+                      thread_key=(reply.thread_key if reply else msg_id)[:400], from_addr=box["login"],
+                      from_name=sender["full_name"], to_addrs=", ".join(recipients), to_names=", ".join(recipients),
+                      cc_addrs=", ".join(cc), addrs=" " + " ".join(sorted(set([box["login"]] + recipients + cc))) + " ",
+                      subject=subject, date=now, body_text=body[:poczta.BODY_LIMIT], snippet=re.sub(r"\s+", " ", body)[:300],
+                      attachments=json.dumps([{"n": i, "name": n, "type": m, "size": len(d)} for i, (n, d, m) in enumerate(files)]),
+                      lang=MAIL_TARGET_LANG, subject_pl=(f.get("subject") or subject)[:600],
+                      body_pl=body_pl or None, translated_at=now, seen=True)
+    db.session.add(row)
+    db.session.flush()
+    lead = db.session.get(Lead, f.get("lead", type=int) or 0) or mail_lead_for(row)
+    if lead:
+        db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=now, assigned_to=user["id"],
+                                notes=f"✉️ Mail z CRM do {', '.join(recipients)} (od: {box['login']})\nTemat: {subject}\n---\n"
+                                      f"{body.split(chr(10) + chr(10) + '>')[0][:4000]}"
+                                      + (f"\n---\n🇵🇱 {body_pl[:3000]}" if body_pl else "")))
+    db.session.commit()
+    return jsonify({"ok": True, "url": url_for("crm_mail", f="sent", m=row.id), "warning": _smtp_send.last_warning})
+
+
+def lead_mails(lead, limit=15):
+    q = mail_query_for_addrs(lead.emails) if lead else None
+    if q is None:
+        return []
+    return q.order_by(MailMessage.date.desc().nullslast()).limit(limit).all()
+
+
+app.jinja_env.globals.update(mail_unseen_count=mail_unseen_count, mail_boxes=mail_boxes, lead_mails=lead_mails,
+                             mail_lang_flags=MAIL_LANG_FLAGS)
 
 
 # ---------- STRONY BŁĘDÓW (ładne zamiast gołego „Not Found”) ----------

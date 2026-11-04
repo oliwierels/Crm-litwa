@@ -243,6 +243,7 @@ tr:hover td { background: var(--panel2); }
   {# grupy menu: (id, nazwa, [(adres, aktywna, ikona, etykieta, licznik, kolor licznika, opis licznika)]) #}
   {% set nav_groups = [
     ('sales', 'Sales', [
+      (url_for('crm_mail'), (ep or '').startswith('crm_mail'), 'envelope', 'Poczta', mail_unseen_count(), 'var(--accent)', 'Nowe maile od klientów (ostatnie 30 dni)'),
       (url_for('crm_leads') ~ '?view=kanban', ep in ['crm_leads', 'crm_lead_detail'] and view == 'kanban', 'kanban', 'Kanban', 0, '', ''),
       (url_for('crm_leads') ~ '?view=list', ep == 'crm_leads' and view == 'list', 'list-ul', 'Lista leadów', 0, '', ''),
       (url_for('crm_offers'), ep in ['crm_offers', 'crm_offer_review'], 'file-earmark-pdf', 'Oferty', offer_drafts_count or 0, 'var(--yellow)', 'Oferty czekające na sprawdzenie i wysyłkę'),

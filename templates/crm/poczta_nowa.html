@@ -1,0 +1,128 @@
+{% extends "crm/base.html" %}
+{% block title %}Nowy mail – 33bots CRM{% endblock %}
+{% block page_title %}<a href="{{ url_for('crm_mail') }}" style="color:var(--muted);font-weight:400;text-decoration:none">📬 Poczta</a> / {{ 'Odpowiedź' if reply else ('Przekazanie' if fwd else 'Nowy mail') }}{% endblock %}
+
+{% block extra_head %}
+<style>
+.mc-grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+.mc-col { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; min-width:0; }
+.mc-col h4 { margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); display:flex; align-items:center; gap:8px; }
+.mc-col textarea { width:100%; min-height:300px; font-size:13px; line-height:1.55; resize:vertical; }
+.mc-out { background:color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.mc-head { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; margin-bottom:14px; display:grid; grid-template-columns: 80px 1fr; gap:8px 10px; align-items:center; font-size:12.5px; }
+.mc-head label { color:var(--muted); }
+.mc-sig { white-space:pre-wrap; font-size:12px; color:var(--muted); border-top:1px dashed var(--border); margin-top:8px; padding-top:6px; }
+.mc-status { font-size:11.5px; color:var(--muted); }
+@media (max-width: 900px) { .mc-grid { grid-template-columns: 1fr; } .mc-head { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not boxes %}
+<div class="panel" style="padding:20px">⚠️ Nie ma skrzynki, z której można wysłać — ustaw w Railway <code>MAIL_PASSWORD</code> (wspólne hasło skrzynek) albo hasła poszczególnych skrzynek.</div>
+{% else %}
+<form id="mc-form" enctype="multipart/form-data" onsubmit="return mcSend(event)">
+  <input type="hidden" name="reply" value="{{ reply.id if reply else '' }}">
+  <input type="hidden" name="lead" value="{{ lead.id if lead else '' }}">
+  <textarea name="quoted" id="mc-quoted" hidden>{{ quoted }}</textarea>
+  <div class="mc-head">
+    <label>Od</label>
+    <select name="from" id="mc-from" onchange="mcSig()">
+      {% for b in boxes %}<option value="{{ b.login }}" {{ 'selected' if b.login == from_box }}>{{ b.label }} &lt;{{ b.login }}&gt;</option>{% endfor %}
+    </select>
+    <label>Do</label>
+    <input type="text" name="to" value="{{ to }}" placeholder="adres@klienta.lt, drugi@adres.lt" required>
+    <label>DW</label>
+    <input type="text" name="cc" value="{{ cc }}" placeholder="(opcjonalnie)">
+    <label>Załączniki</label>
+    <input type="file" name="files" multiple>
+    {% if lead %}<label>Lead</label><a href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}" style="color:var(--accent)">{{ lead.company }}</a>{% endif %}
+  </div>
+
+  <div class="mc-grid">
+    <div class="mc-col">
+      <h4>🇵🇱 Piszesz po polsku</h4>
+      <input type="text" name="subject" id="mc-subj" value="{{ subject_pl }}" placeholder="Temat po polsku" style="width:100%;margin-bottom:8px">
+      <textarea name="body" id="mc-body" placeholder="Napisz treść po polsku — obok sama pojawi się wersja dla klienta.&#10;&#10;Np.: Dzień dobry, dziękujemy za wiadomość. Termin 12 grudnia jest wolny…"></textarea>
+      <div class="mc-status">Tłumaczenie robi się samo chwilę po tym, jak przestaniesz pisać. Podpis dodaje się sam na końcu.</div>
+    </div>
+    <div class="mc-col mc-out">
+      <h4>{{ lang_flags.get(target_lang, '') }} Klient dostanie ({{ lang_names.get(target_lang, target_lang) }})
+        <button type="button" class="btn btn-secondary btn-sm" onclick="mcTranslate()" style="margin-left:auto">Przetłumacz →</button></h4>
+      <input type="text" name="subject_out" id="mc-subj-out" value="{{ subject if reply or fwd else '' }}" placeholder="Temat w języku klienta" style="width:100%;margin-bottom:8px" required>
+      <textarea name="body_out" id="mc-body-out" placeholder="Tu pojawi się tłumaczenie — możesz je poprawić albo pisać od razu w języku klienta." required></textarea>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin-top:6px;color:var(--text)"><input type="checkbox" name="signature" value="1" checked onchange="mcSig()"> Dodaj podpis</label>
+      <notr class="mc-sig" id="mc-sig" style="display:block"></notr>
+      {% if quoted %}<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--accent);font-size:12px">Cytowana wiadomość (dołączy się pod spodem)</summary><notr class="mc-sig" style="display:block">{{ quoted }}</notr></details>{% endif %}
+      <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="mcBack()" title="Sprawdź, co znaczy tekst po prawej (np. po Twoich poprawkach)">↩ Sprawdź po polsku</button>
+        <span class="mc-status" id="mc-back"></span>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;margin-top:14px">
+    <button class="btn btn-primary" id="mc-send">📨 Wyślij</button>
+    <span id="mc-msg" class="mc-status"></span>
+  </div>
+</form>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const MC_SIGS = {{ signatures|tojson }};
+const MC_AI = {{ 'true' if ai_ok else 'false' }};
+function mcSig() {
+  const on = document.querySelector('input[name=signature]').checked;
+  const el = document.getElementById('mc-sig');
+  el.textContent = on ? (MC_SIGS[document.getElementById('mc-from').value] || '') : '';
+}
+mcSig();
+let mcTimer = null, mcSeq = 0, mcTouched = false;
+document.getElementById('mc-body-out').addEventListener('input', () => { mcTouched = true; });
+['mc-body', 'mc-subj'].forEach(id => document.getElementById(id).addEventListener('input', () => {
+  clearTimeout(mcTimer);
+  mcTimer = setTimeout(() => { if (!mcTouched) mcTranslate(); }, 1400);
+}));
+function mcTranslate() {
+  if (!MC_AI) { document.getElementById('mc-msg').textContent = 'Tłumaczenie wyłączone (brak ANTHROPIC_API_KEY) — pisz od razu po prawej.'; return; }
+  const subj = document.getElementById('mc-subj').value, body = document.getElementById('mc-body').value;
+  if (!subj.trim() && !body.trim()) return;
+  const seq = ++mcSeq;
+  document.getElementById('mc-msg').textContent = '⏳ Tłumaczę…';
+  const fd = new FormData(); fd.append('subject', subj); fd.append('body', body); fd.append('to', '{{ target_lang }}');
+  fetch('{{ url_for('crm_mail_translate_draft') }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+    .then(r => r.json()).then(d => {
+      if (seq !== mcSeq) return;
+      if (d.error) { document.getElementById('mc-msg').textContent = '⚠️ ' + d.error; return; }
+      {% if not (reply or fwd) %}if (d.subject) document.getElementById('mc-subj-out').value = d.subject;{% endif %}
+      document.getElementById('mc-body-out').value = d.body;
+      mcTouched = false;
+      document.getElementById('mc-msg').textContent = '✅ Przetłumaczono — sprawdź i wyślij';
+    }).catch(() => { document.getElementById('mc-msg').textContent = '⚠️ Błąd połączenia — kliknij „Przetłumacz”.'; });
+}
+function mcBack() {
+  const fd = new FormData();
+  fd.append('subject', document.getElementById('mc-subj-out').value);
+  fd.append('body', document.getElementById('mc-body-out').value); fd.append('to', 'pl');
+  const out = document.getElementById('mc-back');
+  out.textContent = '⏳…';
+  fetch('{{ url_for('crm_mail_translate_draft') }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+    .then(r => r.json()).then(d => { out.textContent = d.error ? '⚠️ ' + d.error : ('🇵🇱 ' + (d.body || '')); out.style.whiteSpace = 'pre-wrap'; })
+    .catch(() => { out.textContent = '⚠️ Błąd połączenia'; });
+}
+function mcSend(ev) {
+  ev.preventDefault();
+  const btn = document.getElementById('mc-send'), msg = document.getElementById('mc-msg');
+  if (!document.getElementById('mc-body-out').value.trim()) { msg.textContent = '⚠️ Brak treści w języku klienta — kliknij „Przetłumacz”.'; return false; }
+  if (!confirm('Wysłać mail do: ' + document.querySelector('input[name=to]').value + '?')) return false;
+  btn.disabled = true; msg.textContent = 'Wysyłam…';
+  fetch('{{ url_for('crm_mail_compose') }}', {method: 'POST', body: new FormData(document.getElementById('mc-form')), headers: {'X-Requested-With': 'fetch'}})
+    .then(r => r.json()).then(d => {
+      if (d.ok) { msg.textContent = '✅ Wysłano' + (d.warning ? ' — ' + d.warning : ''); setTimeout(() => location.href = d.url, 900); }
+      else { msg.textContent = '⚠️ ' + (d.error || 'nie wyszło'); btn.disabled = false; }
+    }).catch(() => { msg.textContent = '⚠️ Błąd połączenia — spróbuj jeszcze raz.'; btn.disabled = false; });
+  return false;
+}
+</script>
+{% endblock %}

@@ -56,7 +56,8 @@ def tr(text, phrases=True):
 
 # --- HTML ---
 
-_SKIP_BLOCK = re.compile(r"(<textarea\b.*?</textarea>|<style\b.*?</style>|<script\b.*?</script>)", re.S | re.I)
+_SKIP_BLOCK = re.compile(r"(<textarea\b.*?</textarea>|<style\b.*?</style>|<script\b.*?</script>|<notr\b.*?</notr>)",
+                         re.S | re.I)
 _TEXT_NODE = re.compile(r">([^<>]+)<")
 _ATTR = re.compile(r'(\s(?:title|placeholder|aria-label|alt|data-confirm|data-title|data-label)=")([^"]*)(")', re.I)
 _HANDLER = re.compile(r'(\son(?:click|submit|change)=")([^"]*)(")', re.I)
@@ -116,8 +117,8 @@ def translate_html(html):
         elif low.startswith("<textarea"):
             head_end = part.find(">") + 1
             out.append(_html_chunk(part[:head_end]) + part[head_end:])
-        elif low.startswith("<style"):
-            out.append(part)
+        elif low.startswith("<style") or low.startswith("<notr"):
+            out.append(part)  # <notr>: treść maili i dane klientów — słownik interfejsu ich nie rusza
         else:
             out.append(_html_chunk(part))
     return "".join(out).replace('<html lang="pl">', '<html lang="lt">', 1)

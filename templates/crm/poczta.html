@@ -1,0 +1,220 @@
+{% extends "crm/base.html" %}
+{% block title %}Poczta – 33bots CRM{% endblock %}
+{% block page_title %}📬 Poczta{% if lead %} · {{ lead.company }}{% endif %}{% endblock %}
+
+{% block topbar_actions %}
+<form method="get" style="display:flex;gap:8px;align-items:center">
+  {% if box %}<input type="hidden" name="box" value="{{ box }}">{% endif %}
+  <input type="hidden" name="f" value="{{ folder }}">
+  {% if lead %}<input type="hidden" name="lead" value="{{ lead.id }}">{% endif %}
+  <input name="q" value="{{ q }}" style="width:200px" placeholder="Szukaj w mailach (też po polsku)…">
+  <button class="btn btn-secondary btn-sm">Szukaj</button>
+</form>
+<form method="post" action="{{ url_for('crm_mail_sync') }}">
+  <button class="btn btn-secondary btn-sm" title="Pobierz nowe maile ze skrzynek teraz (CRM robi to sam co 2 minuty)" {{ 'disabled' if syncing }}>🔄 {{ 'Pobieram…' if syncing else 'Sprawdź teraz' }}</button>
+</form>
+<a class="btn btn-primary btn-sm" href="{{ url_for('crm_mail_compose', lead=lead.id if lead else none) }}">✉️ Nowy mail</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.pm-status { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; font-size:11.5px; }
+.pm-status span { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:5px 9px; color:var(--muted); }
+.pm-tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.pm-grid { display:grid; grid-template-columns: minmax(300px, 400px) minmax(0, 1fr); gap:12px; align-items:start; }
+.pm-list { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.pm-row { display:block; padding:9px 12px; border-bottom:1px solid var(--border); text-decoration:none; color:var(--text); }
+.pm-row:hover { background:var(--panel2); }
+.pm-row.on { background:color-mix(in srgb, var(--accent) 14%, transparent); }
+.pm-row .top { display:flex; gap:6px; align-items:baseline; font-size:12px; }
+.pm-row .who { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.pm-row.unseen .who::before { content:"● "; color:var(--accent); }
+.pm-row .when { color:var(--muted); font-size:11px; white-space:nowrap; }
+.pm-row .subj { font-size:12.5px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pm-row .orig { font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pm-read { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; min-height:300px; }
+.pm-head h2 { font-size:17px; margin:0 0 2px; }
+.pm-meta { font-size:12px; color:var(--muted); line-height:1.6; margin:6px 0 10px; }
+.pm-actions { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+.pm-cols { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+.pm-col { border:1px solid var(--border); border-radius:10px; padding:10px 12px; min-width:0; }
+.pm-col h4 { margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.pm-body { white-space:pre-wrap; word-wrap:break-word; font-size:13px; line-height:1.55; }
+.pm-pl { background:color-mix(in srgb, var(--green) 6%, transparent); }
+.pm-att a { display:inline-block; margin:0 6px 6px 0; padding:4px 9px; border:1px solid var(--border); border-radius:8px; font-size:12px; color:var(--text); text-decoration:none; }
+.pm-thread a { display:block; font-size:12px; padding:4px 0; color:var(--accent); text-decoration:none; }
+.pm-empty { color:var(--muted); padding:30px; text-align:center; }
+@media (max-width: 980px) {
+  .pm-grid { grid-template-columns: 1fr; }
+  .pm-cols { grid-template-columns: 1fr; }
+  {% if sel %}.pm-list-wrap { display:none; }{% endif %}
+}
+@media (min-width: 981px) { .pm-back { display:none; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="pm-status">
+  {% for s in status %}
+  <span title="{{ s.login }}">
+    {{ '✅' if s.ready and not s.error else '⚠️' }} <b style="color:var(--text)">{{ s.login }}</b> · {{ s.count }} maili
+    {% if s.left %} · archiwum: jeszcze {{ s.left }} do pobrania{% endif %}
+    {% if s.synced_at %} · {{ s.synced_at[11:16] }} UTC{% endif %}
+    {% if not s.ready %} · <span style="color:var(--yellow);border:0;padding:0">brak hasła w Railway (MAIL_PASSWORD)</span>{% endif %}
+    {% if s.error %} · <span style="color:var(--red);border:0;padding:0">{{ s.error }}</span>{% endif %}
+  </span>
+  {% else %}
+  <span>Brak skrzynek — ustaw MAILBOXES i MAIL_PASSWORD w Railway.</span>
+  {% endfor %}
+  {% if not ai_ok %}<span style="color:var(--yellow)">Tłumaczenie wyłączone — brak ANTHROPIC_API_KEY</span>{% endif %}
+</div>
+
+<div class="pm-tabs">
+  {% set base = {'q': q or none, 'lead': lead.id if lead else none} %}
+  <a class="btn btn-sm {{ 'btn-primary' if not box else 'btn-secondary' }}" href="{{ url_for('crm_mail', f=folder, **base) }}">Wszystkie skrzynki</a>
+  {% for s in status %}
+  <a class="btn btn-sm {{ 'btn-primary' if box == s.login else 'btn-secondary' }}" href="{{ url_for('crm_mail', box=s.login, f=folder, **base) }}">{{ s.login }}</a>
+  {% endfor %}
+  <span style="width:12px"></span>
+  {% for key, label in [('in', '⬇ Odebrane'), ('sent', '⬆ Wysłane'), ('all', 'Wszystkie')] %}
+  <a class="btn btn-sm {{ 'btn-primary' if folder == key else 'btn-secondary' }}" href="{{ url_for('crm_mail', box=box or none, f=key, **base) }}">{{ label }}</a>
+  {% endfor %}
+  {% if lead %}<a class="btn btn-sm btn-ghost" href="{{ url_for('crm_mail', box=box or none, f=folder) }}">✕ tylko {{ lead.company }}</a>{% endif %}
+</div>
+
+<div class="pm-grid">
+  <div class="pm-list-wrap">
+    <div class="pm-list">
+      {% for r in rows %}
+      {% set nice = r.subject_pl or r.subject or '(bez tematu)' %}
+      <a class="pm-row {{ 'on' if sel and sel.id == r.id }} {{ 'unseen' if not r.seen and r.folder == 'in' }}"
+         href="{{ url_for('crm_mail', box=box or none, f=folder, q=q or none, lead=lead.id if lead else none, p=page if page > 1 else none, m=r.id) }}"
+         data-id="{{ r.id }}" {% if not r.subject_pl and r.lang != 'pl' and r.subject %}data-needs="1"{% endif %}>
+        <div class="top">
+          <span title="{{ 'Odebrany' if r.folder == 'in' else 'Wysłany' }}">{{ '⬇' if r.folder == 'in' else '⬆' }}</span>
+          <notr class="who">{{ (r.from_name or r.from_addr) if r.folder == 'in' else ('Do: ' ~ (r.to_addrs or '')) }}</notr>
+          {% if r.lang and r.lang != 'pl' %}<span>{{ lang_flags.get(r.lang, r.lang) }}</span>{% endif %}
+          {% if r.attachments and r.attachments != '[]' %}<span>📎</span>{% endif %}
+          <span class="when">{{ to_local(r.date).strftime('%d.%m.%y %H:%M') if r.date else '' }}</span>
+        </div>
+        <notr class="subj" style="display:block">{{ nice }}</notr>
+        {% if r.subject_pl and r.subject and r.subject_pl != r.subject %}<notr class="orig" style="display:block">{{ r.subject }}</notr>{% endif %}
+      </a>
+      {% else %}
+      <div class="pm-empty">Brak maili{% if q %} dla „{{ q }}”{% endif %}.{% if not status|selectattr('count')|list %} Pierwsze pobieranie skrzynek trwa — odśwież za chwilę.{% endif %}</div>
+      {% endfor %}
+    </div>
+    {% if pages > 1 %}
+    <div style="display:flex;gap:6px;margin-top:8px;font-size:12px;align-items:center">
+      {% if page > 1 %}<a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail', box=box or none, f=folder, q=q or none, lead=lead.id if lead else none, p=page - 1) }}">‹</a>{% endif %}
+      <span style="color:var(--muted)">{{ page }} / {{ pages }} · {{ total }} maili</span>
+      {% if page < pages %}<a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail', box=box or none, f=folder, q=q or none, lead=lead.id if lead else none, p=page + 1) }}">›</a>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="pm-read">
+    {% if sel %}
+      <a class="pm-back btn btn-ghost btn-sm" href="{{ url_for('crm_mail', box=box or none, f=folder, q=q or none, lead=lead.id if lead else none, p=page if page > 1 else none) }}">← lista</a>
+      <div class="pm-head">
+        <notr><h2 id="pm-subj-pl">{{ sel.subject_pl or sel.subject or '(bez tematu)' }}</h2></notr>
+        {% if sel.subject_pl and sel.subject and sel.subject_pl != sel.subject %}<notr style="font-size:12px;color:var(--muted);display:block">{{ sel.subject }}</notr>{% endif %}
+      </div>
+      <div class="pm-meta">
+        <notr>
+        <b>Od:</b> {{ sel.from_name }} &lt;{{ sel.from_addr }}&gt;<br>
+        <b>Do:</b> {{ sel.to_names or sel.to_addrs }}{% if sel.cc_addrs %}<br><b>DW:</b> {{ sel.cc_addrs }}{% endif %}<br>
+        </notr>
+        <b>Data:</b> {{ to_local(sel.date).strftime('%d.%m.%Y %H:%M') if sel.date else '—' }} ·
+        {{ 'Odebrane' if sel.folder == 'in' else 'Wysłane' }} · {{ sel.mailbox }}
+        {% if sel.lang %} · język: {{ lang_flags.get(sel.lang, '') }} {{ lang_names.get(sel.lang, sel.lang) }}{% endif %}
+      </div>
+      <div class="pm-actions">
+        <a class="btn btn-primary btn-sm" href="{{ url_for('crm_mail_compose', reply=sel.id) }}">↩ Odpowiedz</a>
+        {% if sel.cc_addrs or (sel.to_addrs and ',' in sel.to_addrs) %}<a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail_compose', reply=sel.id, all=1) }}">↩ Odpowiedz wszystkim</a>{% endif %}
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail_compose', fwd=sel.id) }}">➡ Przekaż</a>
+        {% if sel_lead %}
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_lead_detail', lead_id=sel_lead.id) }}">👤 {{ sel_lead.company }}</a>
+        {% else %}
+          <form method="post" action="{{ url_for('crm_mail_new_lead', mid=sel.id) }}" onsubmit="return confirm('Utworzyć nowego leada z tego maila?')">
+            <button class="btn btn-secondary btn-sm">➕ Nowy lead z maila</button>
+          </form>
+        {% endif %}
+        {% if ai_ok and sel.lang != 'pl' %}<button type="button" class="btn btn-ghost btn-sm" onclick="pmTranslate(true)">🔁 Przetłumacz ponownie</button>{% endif %}
+      </div>
+
+      {% if atts %}
+      <div class="pm-att">
+        {% for a in atts %}<a href="{{ url_for('crm_mail_attachment', mid=sel.id, n=a.n) }}" target="_blank" rel="noopener">📎 <notr>{{ a.name }}</notr> <span style="color:var(--muted)">({{ (a.size / 1024)|round|int }} kB)</span></a>{% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="pm-cols" {% if sel.lang == 'pl' %}style="grid-template-columns:1fr"{% endif %}>
+        <div class="pm-col">
+          <h4>{{ 'Treść' if sel.lang == 'pl' else 'Oryginał ' ~ lang_flags.get(sel.lang or '', '') }}</h4>
+          <notr class="pm-body" style="display:block">{{ fresh or '(pusta treść)' }}</notr>
+          {% if quoted %}<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--accent);font-size:12px">Wcześniejsza korespondencja (cytat)</summary>
+            <notr class="pm-body" style="display:block;color:var(--muted);margin-top:6px">{{ quoted }}</notr></details>{% endif %}
+        </div>
+        {% if sel.lang != 'pl' %}
+        <div class="pm-col pm-pl">
+          <h4>🇵🇱 Po polsku</h4>
+          <notr class="pm-body" id="pm-body-pl" style="display:block">{% if sel.body_pl is not none %}{{ sel.body_pl }}{% elif not ai_ok %}(tłumaczenie wyłączone — brak ANTHROPIC_API_KEY){% else %}⏳ Tłumaczę…{% endif %}</notr>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if thread %}
+      <div class="pm-thread" style="margin-top:14px">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px">Wątek ({{ thread|length + 1 }})</div>
+        {% for t in thread %}
+        <a href="{{ url_for('crm_mail', box=box or none, f='all', m=t.id) }}">{{ '⬇' if t.folder == 'in' else '⬆' }} {{ to_local(t.date).strftime('%d.%m %H:%M') if t.date else '' }} · <notr>{{ t.subject_pl or t.subject }}</notr></a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% else %}
+      <div class="pm-empty">Wybierz mail z listy.<br><br>Każdy mail od klienta widać w oryginale i obok po polsku — tłumaczenie robi się samo.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// tematy na liście po polsku (tłumaczą się partiami, raz — potem są w bazie)
+(function () {
+  const rows = [...document.querySelectorAll('.pm-row[data-needs="1"]')];
+  if (!rows.length || {{ 'false' if not ai_ok else 'true' }} === false) return;
+  const fd = new FormData();
+  fd.append('ids', rows.map(r => r.dataset.id).join(','));
+  fetch('{{ url_for('crm_mail_translate_subjects') }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+    .then(r => r.json()).then(d => {
+      if (!d.subjects) return;
+      rows.forEach(r => {
+        const s = d.subjects[r.dataset.id];
+        if (!s) return;
+        const el = r.querySelector('.subj');
+        const orig = el.textContent;
+        el.textContent = s;
+        if (orig && orig !== s && !r.querySelector('.orig')) {
+          const o = document.createElement('notr'); o.className = 'orig'; o.style.display = 'block'; o.textContent = orig; el.after(o);
+        }
+      });
+    }).catch(() => {});
+})();
+{% if sel and sel.lang != 'pl' and ai_ok %}
+function pmTranslate(force) {
+  const el = document.getElementById('pm-body-pl');
+  el.textContent = '⏳ Tłumaczę…';
+  const fd = new FormData(); if (force) fd.append('force', '1');
+  fetch('{{ url_for('crm_mail_translate', mid=sel.id) }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+    .then(r => r.json()).then(d => {
+      if (d.error) { el.textContent = '⚠️ ' + d.error; return; }
+      el.textContent = d.body || '';
+      if (d.subject) document.getElementById('pm-subj-pl').textContent = d.subject;
+    }).catch(() => { el.textContent = '⚠️ Błąd połączenia — kliknij „Przetłumacz ponownie”.'; });
+}
+{% if sel.body_pl is none %}pmTranslate(false);{% endif %}
+{% endif %}
+</script>
+{% endblock %}
