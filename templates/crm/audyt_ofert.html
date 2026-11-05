@@ -5,11 +5,14 @@
 <div class="panel" style="padding:14px 16px;max-width:1100px">
   <p style="margin:0 0 10px;color:var(--muted);font-size:12.5px">Aktywne leady (Nowy / Oferta), do których w ostatnich {{ days }} dniach poszła oferta.
     Każdy powinien mieć zaplanowany drugi krok: <b>w Polsce telefon</b>, <b>na Litwie i w Niemczech follow-up mailem</b>.
-    Dodanie kroku tworzy tylko zadanie w CRM — nic nie wychodzi do klienta.</p>
-  {% set missing = rows|rejectattr('had_step')|list %}
+    Lead, z którym po ofercie był już kontakt (follow-up, telefon, SMS, WhatsApp, mail z Poczty albo odpowiedź klienta),
+    drugiego kroku nie dostaje. Dodanie kroku tworzy tylko zadanie w CRM — nic nie wychodzi do klienta.</p>
+  {% set missing = rows|rejectattr('had_step')|rejectattr('contact')|list %}
+  {% set contacted = rows|rejectattr('had_step')|selectattr('contact')|list %}
   <div class="row" style="gap:10px;align-items:center;margin-bottom:10px">
     <b style="color:{{ 'var(--red)' if missing else 'var(--green)' }}">{{ missing|length }} bez drugiego kroku</b>
-    <span style="color:var(--muted)">· {{ rows|length - missing|length }} z zaplanowanym krokiem</span>
+    <span style="color:var(--muted)">· {{ rows|length - missing|length - contacted|length }} z zaplanowanym krokiem
+      · {{ contacted|length }} z kontaktem po ofercie</span>
     {% if missing %}<form method="post" style="margin-left:auto"><button class="btn btn-primary btn-sm">➕ Dodaj brakujące drugie kroki ({{ missing|length }})</button></form>{% endif %}
   </div>
   <table>
@@ -17,7 +20,7 @@
     {% for r in rows %}
     <tr><td><a href="{{ url_for('crm_lead_detail', lead_id=r.id) }}">{{ r.company }}</a>{% if r.market and r.market != 'pl' %} <span style="color:var(--muted)">{{ r.market|upper }}</span>{% endif %}</td>
       <td>{{ r.stage }}</td><td>{{ r.offer_at }}</td><td>{{ r.owner }}</td>
-      <td>{% if r.had_step %}✅ {{ r.next or 'zaplanowany' }}{% else %}<b style="color:var(--red)">brak</b>{% endif %}</td></tr>
+      <td>{% if r.had_step %}✅ {{ r.next or 'zaplanowany' }}{% elif r.contact %}<span style="color:var(--muted)">📨 kontakt po ofercie: {{ r.contact }}</span>{% else %}<b style="color:var(--red)">brak</b>{% endif %}</td></tr>
     {% else %}<tr><td colspan="5" style="color:var(--muted)">Brak ofert z ostatnich {{ days }} dni.</td></tr>{% endfor %}
   </table>
   {% if last.rows %}
@@ -25,6 +28,10 @@
   <h3 style="font-size:14px;margin:16px 0 6px">Ostatni audyt ({{ last.at }}): dodano {{ added|length }} drugich kroków</h3>
   {% if added %}<table><tr><th>Lead</th><th>Oferta</th><th>Dodano</th></tr>
     {% for r in added %}<tr><td><a href="{{ url_for('crm_lead_detail', lead_id=r.id) }}">{{ r.company }}</a></td><td>{{ r.offer_at }}</td><td>{{ r.added }}</td></tr>{% endfor %}</table>{% endif %}
+  {% set removed = last.rows|selectattr('removed')|list %}
+  {% if removed %}<p style="margin:10px 0 6px;color:var(--muted);font-size:12.5px">Cofnięte ({{ removed|length }}) — zadanie z audytu usunięte, bo po ofercie był już kontakt:</p>
+  <table><tr><th>Lead</th><th>Oferta</th><th>Powód</th></tr>
+    {% for r in removed %}<tr><td><a href="{{ url_for('crm_lead_detail', lead_id=r.id) }}">{{ r.company }}</a></td><td>{{ r.offer_at }}</td><td>{{ r.removed }}</td></tr>{% endfor %}</table>{% endif %}
   {% endif %}
 </div>
 {% endblock %}

@@ -1203,6 +1203,7 @@ def _realize_scheduler():
                 if os.environ.get("SALES_AUTOMATION", "1") != "0":
                     sales_automation_pass()
                 run_offer_audit_once()
+                cleanup_offer_audit_steps()
                 db.session.remove()
         except Exception:
             pass
@@ -3298,6 +3299,8 @@ OFFER_AUDIT_DAYS = 45
 OFFER_AUDIT_KEY = "offer_steps_audit_v1"
 OFFER_AUDIT_REPORT_KEY = "offer_steps_audit_report"
 FOLLOWUP_STEP_PREFIX = "✉️ Drugi krok: follow-up"
+OFFER_AUDIT_CLEANUP_KEY = "offer_steps_audit_cleanup_v1"
+OFFER_CONTACT_GRACE = timedelta(hours=2)  # sam mail z ofertą (i jego kopia w Wysłanych) to jeszcze nie kontakt po ofercie
 
 
 def _audit_leads_query():
@@ -3329,32 +3332,129 @@ def add_offer_second_step(lead, offer_at, actor_id=None):
     return act
 
 
+def contact_after_offer(lead, offer_at):
+    """Ostatni kontakt z klientem po ofercie: follow-up (z CRM albo z Poczty), telefon (też nieodebrany), SMS,
+    WhatsApp, spotkanie, mail do klienta albo jego odpowiedź. Zwraca (kiedy, co) albo None — po ofercie nic się nie działo."""
+    if not offer_at:
+        return None
+    after = offer_at + OFFER_CONTACT_GRACE
+    kinds = {"call": "telefon", "sms": "SMS", "online": "spotkanie online", "meeting": "spotkanie", "email": "mail"}
+    found = []
+    for a in lead.activities:
+        notes = a.notes or ""
+        for c in getattr(a, "comments", []) or []:
+            if (c.text or "").startswith("📵") and c.created_at and c.created_at > after:
+                found.append((c.created_at, "telefon (nie odebrał)"))
+        when = a.done_at or a.created_at
+        if not a.done or not when or when <= after or notes.startswith(("📄", "💶")):
+            continue  # zadanie otwarte, sprzed oferty albo sama oferta
+        if notes.startswith("📨"):
+            label = "follow-up mailem"
+        elif notes.startswith("💬"):
+            label = "WhatsApp / komunikator"
+        elif notes.startswith("✉️ Mail z CRM"):
+            label = "mail z CRM"
+        elif a.kind in kinds or a.outcome or notes.startswith(("📞", "📵")):
+            label = kinds.get(a.kind, "telefon")
+        else:
+            continue  # zwykła notatka (zmiana etapu, import itd.) to nie kontakt
+        found.append((when, label))
+    try:  # Poczta: mail do klienta (follow-up wysłany poza CRM) albo odpowiedź klienta
+        q = mail_query_for_addrs(lead.emails)
+        if q is not None:
+            for folder, label in (("sent", "mail do klienta"), ("in", "odpowiedź klienta")):
+                m = q.filter(MailMessage.folder == folder, MailMessage.date > after).order_by(MailMessage.date.desc()).first()
+                if m is not None and m.date:
+                    found.append((m.date, label))
+    except Exception:
+        db.session.rollback()
+    return max(found, key=lambda x: x[0]) if found else None
+
+
+def _contact_text(contact):
+    return f"{contact[1]} {to_local(contact[0]):%d.%m}" if contact else ""
+
+
 def audit_offer_second_steps(days=OFFER_AUDIT_DAYS, apply=False, actor_id=None):
     """Audyt ofert z ostatnich `days` dni: aktywne leady (Nowy / Oferta) po ofercie bez żadnego otwartego zadania.
-    apply=True dodaje brakujący drugi krok (tylko zadanie w CRM — nic nie wysyła). Zwraca listę wierszy raportu."""
+    Lead, z którym po ofercie już był kontakt (follow-up, telefon, SMS, WhatsApp, mail z Poczty, odpowiedź klienta),
+    drugiego kroku nie dostaje — w raporcie ma „kontakt po ofercie”. apply=True dodaje brakujący drugi krok pozostałym
+    (tylko zadanie w CRM — nic nie wysyła). Zwraca listę wierszy raportu."""
     since = datetime.utcnow() - timedelta(days=days)
-    rows = []
+    rows, todo = [], []
     for lead in _audit_leads_query().filter(Lead.stage.in_(ACTIVE_STAGES), Lead.clickup_pending.isnot(True),
                                             own_leads()).all():
         at = last_offer_at(lead)
         if not at or at < since:
             continue
         open_tasks = [a for a in lead.activities if not a.done and a.kind != "note"]
+        contact = None if open_tasks else contact_after_offer(lead, at)
+        nxt = min((a.due_date for a in open_tasks if a.due_date), default=None)
         row = {"id": lead.id, "company": lead.company, "stage": lead.stage, "market": getattr(lead, "market", "pl"),
                "offer_at": f"{to_local(at):%Y-%m-%d %H:%M}",
                "owner": USERS_BY_ID.get(lead.assigned_to, {}).get("name", ""),
-               "next": (min((a.due_date for a in open_tasks if a.due_date), default=None) or None),
-               "had_step": bool(open_tasks), "added": ""}
-        if not open_tasks and apply:
+               "next": f"{nxt:%d.%m}" if nxt else "",
+               "had_step": bool(open_tasks), "contact": _contact_text(contact), "added": ""}
+        if not open_tasks and not contact:
+            todo.append((lead, at, row))
+        rows.append(row)
+    if apply:  # dopiero po przejrzeniu wszystkich leadów — sprawdzanie Poczty niczego nie cofa
+        for lead, at, row in todo:
             act = add_offer_second_step(lead, at, actor_id)
             if act is not None:
                 row["added"] = f"{'telefon' if act.kind == 'call' else 'follow-up mailem'} na {act.due_date:%d.%m}"
-        row["next"] = f"{row['next']:%d.%m}" if row["next"] else ""
-        rows.append(row)
-    if apply:
         db.session.commit()
-    rows.sort(key=lambda r: (r["had_step"], r["offer_at"]), reverse=False)
+    rows.sort(key=lambda r: (r["had_step"] or bool(r["contact"]), r["offer_at"]))
     return rows
+
+
+def _is_offer_audit_step(a):
+    """Zadanie, które dodaje audyt ofert: automatyczny telefon po ofercie (PL) albo follow-up mailem (LT/DE)."""
+    notes = a.notes or ""
+    if a.kind == "email":
+        return notes.startswith(FOLLOWUP_STEP_PREFIX)
+    return a.kind == "call" and notes.startswith(AUTO_CALL_PREFIX) and (
+        "po ofercie wysłanej" in notes or sales_rules.CONFIRM_CALL_PREFIX in notes)
+
+
+def cleanup_offer_audit_steps():
+    """Jednorazowo: pierwszy audyt ofert dodawał drugi krok także leadom, z którymi po ofercie był już kontakt
+    (follow-up, telefon, mail). Takie zadania — dodane przez ten audyt i nieruszone — usuwamy; raport to opisuje."""
+    if get_setting(OFFER_AUDIT_CLEANUP_KEY) or not get_setting(OFFER_AUDIT_KEY):
+        return None
+    if not _claim_once(OFFER_AUDIT_CLEANUP_KEY + "_lock"):
+        return None
+    try:
+        ran = datetime.fromisoformat(get_setting(OFFER_AUDIT_KEY))
+    except (TypeError, ValueError):
+        ran = None
+    try:
+        report = json.loads(get_setting(OFFER_AUDIT_REPORT_KEY) or "{}")
+    except ValueError:
+        report = {}
+    found = []  # najpierw tylko sprawdzamy (Poczta), dopiero potem usuwamy
+    for row in report.get("rows", []) if ran else []:
+        lead = db.session.get(Lead, row.get("id")) if row.get("added") else None
+        contact = contact_after_offer(lead, last_offer_at(lead)) if lead is not None else None
+        if contact:
+            found.append((row, lead, contact))
+    removed = []
+    for row, lead, contact in found:
+        tasks = Activity.query.filter(Activity.lead_id == lead.id, Activity.done.isnot(True),
+                                      Activity.created_at >= ran - timedelta(minutes=30),
+                                      Activity.created_at <= ran + timedelta(minutes=5)).all()
+        tasks = [a for a in tasks if _is_offer_audit_step(a) and not a.outcome and not a.comments]
+        for a in tasks:
+            db.session.delete(a)
+        if tasks:
+            row["removed"] = f"usunięty — po ofercie był już kontakt: {_contact_text(contact)}"
+            row["added"] = ""
+            removed.append(lead.id)
+    if removed:
+        set_setting(OFFER_AUDIT_REPORT_KEY, json.dumps(report, ensure_ascii=False, default=str)[:200000])
+    set_setting(OFFER_AUDIT_CLEANUP_KEY, f"{len(removed)} @ {datetime.utcnow():%Y-%m-%d %H:%M}")
+    db.session.commit()
+    return removed
 
 
 def run_offer_audit_once():
@@ -7578,8 +7678,10 @@ def _assistant_execute(name, inp, user):
         except ValueError:
             last = {}
         rows = audit_offer_second_steps(apply=False)
-        return _json.dumps({"current": rows, "missing": sum(1 for r in rows if not r["had_step"]),
-                            "last_audit": {"at": last.get("at"), "added": [r for r in last.get("rows", []) if r.get("added")]}},
+        return _json.dumps({"current": rows, "missing": sum(1 for r in rows if not r["had_step"] and not r.get("contact")),
+                            "contact_after_offer": sum(1 for r in rows if not r["had_step"] and r.get("contact")),
+                            "last_audit": {"at": last.get("at"), "added": [r for r in last.get("rows", []) if r.get("added")],
+                                           "removed": [r for r in last.get("rows", []) if r.get("removed")]}},
                            ensure_ascii=False, default=str), None
 
     if name == "sales_performance":

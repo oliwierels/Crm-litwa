@@ -56,6 +56,12 @@
 {% endfor %}
 {% endmacro %}
 
+{# „Przypomnij” przed terminem automatycznego przypomnienia — zawsze pod ręką, gdy umowa / prośba o bazę poszła
+   (szary: nie liczy się do „Do zrobienia”; CRM tylko przygotuje szkic maila do akceptu) #}
+{% macro early_reminder(v, kind) %}
+<button type="button" class="btn btn-secondary btn-sm jr-boxbtn" onclick="event.stopPropagation(); openJourneyMail({{ v.lead.id }}, '{{ kind }}')" title="Termin przypomnienia jeszcze nie minął — możesz przypomnieć wcześniej. CRM przygotuje maila, sprawdzisz go przed wysłaniem">Przypomnij</button>
+{% endmacro %}
+
 {# Szare pole na każdej karcie i w leadzie: umowa i baza wiedzy — status jednym kliknięciem (zielony = jest,
    żółty = czekamy, czerwony = brak) i plik od klienta. Lead sprzed Customer Journey: z pytaniem i „Zapisz”. #}
 {% macro state_box(v, back, files) %}
@@ -85,6 +91,9 @@
         {% endif %}
       </div>
       {{ box_buttons(v, mails, ('umowa', 'umowa_przypomnienie')) }}
+      {% if j.contract_status == 'wyslana' and not archived and not mails|selectattr(2, 'equalto', 'umowa_przypomnienie')|list %}
+      {{ early_reminder(v, 'umowa_przypomnienie') }}
+      {% endif %}
     </div>
     <div>
       <label>Baza wiedzy
@@ -104,6 +113,9 @@
         {% endif %}
       </div>
       {{ box_buttons(v, mails, ('baza', 'baza_przypomnienie')) }}
+      {% if j.kb_status == 'wyslana' and not archived and not mails|selectattr(2, 'equalto', 'baza_przypomnienie')|list %}
+      {{ early_reminder(v, 'baza_przypomnienie') }}
+      {% endif %}
     </div>
   </div>
   {% if review %}<button class="btn btn-primary btn-sm" style="margin-top:8px">Zapisz</button>{% endif %}

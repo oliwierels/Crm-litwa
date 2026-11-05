@@ -89,6 +89,8 @@ Przyjęte według propozycji z briefu. Zmiana decyzji to zmiana stałej w `sales
 8. **Codziennie od 16:00 CRM pyta na każdym komputerze: „Czy ktoś do Ciebie oddzwaniał?”** Wpisujemy numer — rozmowa zapisuje się przy leadzie (i zeruje nieodebrane próby) — albo „Nikt nie oddzwaniał”.
 9. **Daty:** nie da się zapisać daty sprzed 2025 r. Przy zakresie powyżej 14 dni CRM ostrzega.
 10. **Raporty → Skuteczność** pokazuje wynik miesiąca na tle celów z prognozą, skuteczność typów i osób, powody strat, czas reakcji, anulacje i duże leady bez następnego kroku. **Porządki w danych** to lista do poprawy. **Dostarczalność** to stan SPF, DKIM i DMARC.
+11. **Raporty → Audyt ofert:** każda oferta z ostatnich 45 dni ma mieć drugi krok (follow-up mailem). Lead, z którym po ofercie był już kontakt (follow-up, telefon, SMS, WhatsApp, mail z Poczty albo odpowiedź klienta), drugiego kroku nie dostaje — w raporcie ma „kontakt po ofercie”.
+12. **Customer Journey:** „Przypomnij” przy umowie i bazie wiedzy jest dostępne od razu po wysłaniu (szary przycisk). Po terminie przypomnienia przycisk robi się niebieski i trafia do „Do zrobienia”. Zawsze to tylko szkic maila do akceptu.
 
 ## Pytanie „Czy ktoś oddzwaniał?”
 
