@@ -1202,6 +1202,7 @@ def _realize_scheduler():
                 auto_merge_duplicates()
                 if os.environ.get("SALES_AUTOMATION", "1") != "0":
                     sales_automation_pass()
+                run_offer_audit_once()
                 db.session.remove()
         except Exception:
             pass
@@ -3290,6 +3291,106 @@ def crm_version():
     sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")
     return jsonify({"commit": sha[:7] or "nieznany", "branch": os.environ.get("RAILWAY_GIT_BRANCH", ""),
                     "deployment": os.environ.get("RAILWAY_DEPLOYMENT_ID", "")})
+
+
+# ---------- AUDYT OFERT: DRUGI KROK PO OFERCIE ----------
+OFFER_AUDIT_DAYS = 45
+OFFER_AUDIT_KEY = "offer_steps_audit_v1"
+OFFER_AUDIT_REPORT_KEY = "offer_steps_audit_report"
+FOLLOWUP_STEP_PREFIX = "✉️ Drugi krok: follow-up"
+
+
+def _audit_leads_query():
+    return all_markets(Lead.query)  # obie rynki (LT i DE) — także z zadania w tle
+
+
+def last_offer_at(lead):
+    """Kiedy poszła ostatnia oferta: oferta wysłana z CRM, notatka o ofercie (📄 / 💶) albo wejście na etap Oferta."""
+    times = [o.sent_at for o in SentOffer.query.filter(SentOffer.lead_id == lead.id, SentOffer.sent_at.isnot(None)).all()]
+    times += [a.done_at or a.created_at for a in lead.activities
+              if a.done and (a.notes or "").startswith(("📄", "💶"))]
+    times += [h.changed_at for h in lead.stage_history if h.to_stage == "Oferta" and h.changed_at]
+    times = [t for t in times if t]
+    return max(times) if times else None
+
+
+def add_offer_second_step(lead, offer_at, actor_id=None):
+    """Brakujący drugi krok po ofercie: w CRM PL telefon, w CRM LT/DE follow-up mailem. Zwraca zadanie albo None."""
+    sent_on = to_local(offer_at).date() if offer_at else to_local(datetime.utcnow()).date()
+    if offer_second_step_kind(lead) == "call":
+        return ensure_followup_call(lead, sent_on=sent_on)
+    today = to_local(datetime.utcnow()).date()
+    due = max(sales_rules.next_work_day(sent_on, 3), today)
+    act = Activity(lead_id=lead.id, kind="email", assigned_to=lead.assigned_to or actor_id or USERS[0]["id"],
+                   due_date=datetime.combine(due, datetime.min.time()),
+                   notes=f"{FOLLOWUP_STEP_PREFIX} po ofercie z {sent_on:%d.%m} — kliknij „Follow-up”, CRM przygotuje "
+                         "mail w języku klienta (sprawdzasz i wysyłasz).")
+    db.session.add(act)
+    return act
+
+
+def audit_offer_second_steps(days=OFFER_AUDIT_DAYS, apply=False, actor_id=None):
+    """Audyt ofert z ostatnich `days` dni: aktywne leady (Nowy / Oferta) po ofercie bez żadnego otwartego zadania.
+    apply=True dodaje brakujący drugi krok (tylko zadanie w CRM — nic nie wysyła). Zwraca listę wierszy raportu."""
+    since = datetime.utcnow() - timedelta(days=days)
+    rows = []
+    for lead in _audit_leads_query().filter(Lead.stage.in_(ACTIVE_STAGES), Lead.clickup_pending.isnot(True),
+                                            own_leads()).all():
+        at = last_offer_at(lead)
+        if not at or at < since:
+            continue
+        open_tasks = [a for a in lead.activities if not a.done and a.kind != "note"]
+        row = {"id": lead.id, "company": lead.company, "stage": lead.stage, "market": getattr(lead, "market", "pl"),
+               "offer_at": f"{to_local(at):%Y-%m-%d %H:%M}",
+               "owner": USERS_BY_ID.get(lead.assigned_to, {}).get("name", ""),
+               "next": (min((a.due_date for a in open_tasks if a.due_date), default=None) or None),
+               "had_step": bool(open_tasks), "added": ""}
+        if not open_tasks and apply:
+            act = add_offer_second_step(lead, at, actor_id)
+            if act is not None:
+                row["added"] = f"{'telefon' if act.kind == 'call' else 'follow-up mailem'} na {act.due_date:%d.%m}"
+        row["next"] = f"{row['next']:%d.%m}" if row["next"] else ""
+        rows.append(row)
+    if apply:
+        db.session.commit()
+    rows.sort(key=lambda r: (r["had_step"], r["offer_at"]), reverse=False)
+    return rows
+
+
+def run_offer_audit_once():
+    """Jednorazowo po wdrożeniu (w tle): audyt ofert z dodaniem brakujących drugich kroków; raport w ustawieniach."""
+    if get_setting(OFFER_AUDIT_KEY) or not _claim_once(OFFER_AUDIT_KEY + "_lock"):
+        return None
+    rows = audit_offer_second_steps(apply=True)
+    set_setting(OFFER_AUDIT_REPORT_KEY, json.dumps({"at": f"{to_local(datetime.utcnow()):%Y-%m-%d %H:%M}", "rows": rows},
+                                                   ensure_ascii=False, default=str)[:200000])
+    set_setting(OFFER_AUDIT_KEY, datetime.utcnow().isoformat(timespec="seconds"))
+    db.session.commit()
+    return rows
+
+
+@app.route("/crm/audyt-ofert", methods=["GET", "POST"])
+def crm_offer_audit():
+    if request.method == "POST":
+        rows = audit_offer_second_steps(days=request.form.get("dni", OFFER_AUDIT_DAYS, type=int) or OFFER_AUDIT_DAYS,
+                                        apply=True, actor_id=get_current_user(request)["id"])
+        set_setting(OFFER_AUDIT_REPORT_KEY, json.dumps({"at": f"{to_local(datetime.utcnow()):%Y-%m-%d %H:%M}", "rows": rows},
+                                                       ensure_ascii=False, default=str)[:200000])
+        db.session.commit()
+        return redirect(url_for("crm_offer_audit"))
+    try:
+        last = json.loads(get_setting(OFFER_AUDIT_REPORT_KEY) or "{}")
+    except ValueError:
+        last = {}
+    code = current_market()  # strona pokazuje oglądany rynek (LT albo DE)
+    last["rows"] = [r for r in last.get("rows", []) if r.get("market") == code]
+    return render_template("crm/audyt_ofert.html", last=last, days=OFFER_AUDIT_DAYS,
+                           rows=[r for r in audit_offer_second_steps(apply=False) if r["market"] == code])
+
+
+def offer_second_step_kind(lead):
+    """Drugi krok po ofercie w CRM LT/DE: follow-up mailem (CRM przygotuje go w języku klienta)."""
+    return "email"
 
 
 @app.route("/crm/skutecznosc", methods=["GET", "POST"])
@@ -6631,6 +6732,13 @@ ASSISTANT_TOOLS = [
             "required": []},
     },
     {
+        "name": "offer_audit",
+        "description": "Audyt ofert (Raporty → Audyt ofert): aktywne leady (Nowy/Oferta), do których w ostatnich 45 dniach poszła "
+                       "oferta, z informacją, czy mają zaplanowany drugi krok (w PL telefon, w LT/DE follow-up mailem), oraz "
+                       "raport ostatniego audytu (co zostało dodane). Tylko odczyt.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "closed_leads",
         "description": "Leady zamknięte (Wygrany/Stracony) w danym miesiącu — jak w tabeli 'Ostatnie 12 miesięcy' w Statystykach: "
                        "wg OBECNEGO etapu leada i daty, kiedy na niego trafił (lead wygrany, a potem oznaczony jako Stracony, "
@@ -7463,6 +7571,16 @@ def _assistant_execute(name, inp, user):
             "won": won, "lost": lost, "changed_after_win": list(changed.values()),
             "note": "wg obecnego etapu leada i daty, kiedy na niego trafił",
         }, ensure_ascii=False), None
+
+    if name == "offer_audit":
+        try:
+            last = json.loads(get_setting(OFFER_AUDIT_REPORT_KEY) or "{}")
+        except ValueError:
+            last = {}
+        rows = audit_offer_second_steps(apply=False)
+        return _json.dumps({"current": rows, "missing": sum(1 for r in rows if not r["had_step"]),
+                            "last_audit": {"at": last.get("at"), "added": [r for r in last.get("rows", []) if r.get("added")]}},
+                           ensure_ascii=False, default=str), None
 
     if name == "sales_performance":
         p = build_sales_panel(max(30, min(int(inp.get("period_days") or 90), 365)))
