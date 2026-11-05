@@ -4558,7 +4558,9 @@ def crm_offer_review(oid):
                     return redirect(url_for("crm_offer_review", oid=offer.id, wyslano=1))
     return render_template(
         "crm/offer_review.html", offer=offer, error=error, warning=warning, changes=changes,
-        sender=USERS_BY_ID.get(offer.sender_id, {}), opts=_offer_options(offer),
+        sender=market_sender(USERS_BY_ID.get(offer.sender_id) or user,  # skrzynka rynku leada (33bots.de / .lt)
+                             lead_market(db.session.get(Lead, offer.lead_id) if offer.lead_id else None)),
+        opts=_offer_options(offer),
         offer_val=offer_value(offer),
         just_sent=bool(request.args.get("wyslano")) or (offer.sent_at and request.method == "POST"),
     )
@@ -9544,11 +9546,16 @@ def lt_quote(lead, remote_budget=1):
     if not opt:
         return {"missing": [f"km do „{place}” (wpisz w kalkulatorze)"], "place": place}
     q = opt["quote"]
-    price = pricing.round_price(q["total"])
+    price = calc_price = pricing.round_price(q["total"])
     if start is not None:
         time_txt = f"{pricing.fmt_hour(start)}–{pricing.fmt_hour(end)}"
     else:
         time_txt = f"{pricing.fmt_num(tier)} {m['hours_unit']}"
+    ov = quote_override(lead)  # cena / godziny poprawione ręcznie w leadzie — mail i PDF biorą je zamiast kalkulatora
+    if ov.get("price"):
+        price = int(ov["price"])
+    if ov.get("time"):
+        time_txt = ov["time"]
     price_txt = f"{price:,}".replace(",", " ")
     when = _lt_dates_text(lead)
     message = lt_offer_message(lead, when, time_txt, place, price_txt, code=code)
@@ -9558,6 +9565,7 @@ def lt_quote(lead, remote_budget=1):
     return {
         "template_params": template_params, "phone_digits": digits, "market": code,
         "price": price, "exact": q["total"], "hours": tier, "duration": dur, "time": time_txt, "place": place,
+        "override": bool(ov), "calc_price": calc_price,
         "hours_src": hours_src, "assumed": hours_src == "założone", "departure": opt["label"],
         "km": int(round(opt["km"])), "days": days, "when": when, "over8": dur > max(pricing.HOUR_FACTORS),
         "breakdown": pricing.describe(q, opt["label"], res["place"] or place), "message": message,
@@ -9566,6 +9574,39 @@ def lt_quote(lead, remote_budget=1):
         "calc_url": url_for("crm_calculator", lead=lead.id, cel=place, h=tier,
                             od=pricing.fmt_hour(start) if start is not None else None, dni=days),
     }
+
+
+QUOTE_OVERRIDE_KEY = "quote_override:{}"
+
+
+def quote_override(lead):
+    """Ręczna cena / godziny oferty leada (panel „Cena” w leadzie): {"price": int, "time": str} albo {}."""
+    try:
+        return json.loads(get_setting(QUOTE_OVERRIDE_KEY.format(lead.id)) or "{}") if lead and lead.id else {}
+    except ValueError:
+        return {}
+
+
+@app.route("/crm/leads/<int:lead_id>/oferta-edycja", methods=["POST"])
+def crm_quote_override(lead_id):
+    """Zmiana ceny i godzin w automatycznej ofercie (mail + PDF przeliczają się same). Pusta cena = z kalkulatora."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    raw = re.sub(r"[^\d]", "", request.form.get("price") or "")
+    time_txt = (request.form.get("time") or "").strip()[:60]
+    data = {}
+    if raw and 100 <= int(raw) <= 500000:
+        data["price"] = int(raw)
+    if time_txt:
+        data["time"] = time_txt
+    set_setting(QUOTE_OVERRIDE_KEY.format(lead.id), json.dumps(data) if data else "")
+    if data:
+        db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(),
+                                assigned_to=get_current_user(request)["id"],
+                                notes="✏️ Oferta poprawiona ręcznie: " + ", ".join(
+                                    x for x in ((f"cena {data['price']} € netto" if data.get("price") else ""),
+                                                (f"czas {data['time']}" if data.get("time") else "")) if x)))
+    db.session.commit()
+    return redirect(url_for("crm_lead_detail", lead_id=lead.id) + "#lt-price")
 
 
 @app.route("/crm/leads/<int:lead_id>/lt-cena", methods=["POST"])

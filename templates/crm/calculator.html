@@ -146,8 +146,10 @@
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
             <button type="button" class="btn btn-primary btn-sm" onclick="kcCopy()">📋 Kopiuj wiadomość</button>
             {% if wa_digits %}
+            {% if mkt.get('messengers', true) %}
             <button type="button" class="btn btn-sm" style="background:#25D366;color:#06210f;font-weight:700" onclick="kcCopy(); window.open('https://wa.me/{{ wa_digits }}?text=' + encodeURIComponent(document.getElementById('kc-msg').value), '_blank')">WhatsApp</button>
             <a class="btn btn-sm" style="background:#7360F2;color:#fff;font-weight:700" href="viber://chat?number=%2B{{ wa_digits }}" onclick="kcCopy()">Viber</a>
+            {% endif %}
             {% endif %}
             <span id="kc-msg-info" class="kc-sub"></span>
           </div>

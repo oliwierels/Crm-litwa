@@ -24,6 +24,7 @@ MARKETS = {
         "hours_unit": "val.", "date_style": "iso",
         "auto_quote_default": "1",
         "auto_send": True,  # Litwa: nowy lead od razu dostaje mail (wycena albo prośba o dane)
+        "messengers": True,  # WhatsApp / Viber z leada i kalkulatora
         "whatsapp_lang": "lt",
         # --- formularz dla klienta (/f/…) ---
         "form": {
@@ -125,6 +126,7 @@ MARKETS = {
         "hours_unit": "Std.", "date_style": "dots",
         "auto_quote_default": "0",
         "auto_send": False,  # Niemcy: NIC nie wychodzi do klienta automatycznie — CRM generuje, człowiek wysyła
+        "messengers": False,  # Niemcy: bez WhatsApp / Viber — oferta tylko mailem
         "whatsapp_lang": "de",
         "form": {
             "title": "33Bots – Angaben zur Veranstaltung",
