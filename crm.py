@@ -528,6 +528,7 @@ class MailMessage(db.Model):
     body_pl = db.Column(db.Text)
     translated_at = db.Column(db.DateTime)
     translate_error = db.Column(db.String(300))
+    quoted_pl = db.Column(db.Text)  # tłumaczenie cytowanej historii (robione przy pierwszym rozwinięciu)
     seen = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -553,6 +554,9 @@ def ensure_schema():
                 conn.exec_driver_sql("ALTER TABLE mail_messages ADD COLUMN market VARCHAR(2)")
                 conn.exec_driver_sql("UPDATE mail_messages SET market = 'de' WHERE mailbox LIKE '%.de'")
                 conn.exec_driver_sql("UPDATE mail_messages SET market = 'lt' WHERE market IS NULL")
+        if "quoted_pl" not in mcols:
+            with db.engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE mail_messages ADD COLUMN quoted_pl TEXT")
     if "inbox_messages" in insp.get_table_names():
         icols = [col["name"] for col in insp.get_columns("inbox_messages")]
         with db.engine.begin() as conn:
@@ -10610,8 +10614,10 @@ def crm_mail():
                        "left": int(sti.get("left") or 0) + int(sts.get("left") or 0),
                        "synced_at": sti.get("synced_at") or "", "error": sti.get("error") or sts.get("error") or ""})
     fresh, quoted = poczta.split_quote(sel.body_text or "") if sel else ("", "")
+    quoted_lang = poczta.detect_lang(quoted) if quoted else ""
     return render_template(
         "crm/poczta.html", rows=rows, sel=sel, thread=thread, sel_lead=sel_lead, atts=atts, fresh=fresh, quoted=quoted,
+        quoted_tr=bool(quoted) and quoted_lang != "pl",
         box=box, folder=folder, q=q, page=page, total=total, pages=max(1, (total + 49) // 50), lead=lead,
         status=status, lang_names=MAIL_LANG_NAMES, lang_flags=MAIL_LANG_FLAGS, target_lang=M()["lang"],
         ai_ok=bool(_ai_client()), syncing=_mail_sync_lock.locked(),
@@ -10641,6 +10647,30 @@ def crm_mail_translate(mid):
         return jsonify({"error": f"Tłumaczenie nie wyszło: {err}"}), 502
     return jsonify({"ok": True, "lang": row.lang, "subject": row.subject_pl or row.subject,
                     "body": row.body_pl if row.body_pl is not None else poczta.split_quote(row.body_text or "")[0]})
+
+
+QUOTED_TRANSLATE_MAX = 12000  # tyle znaków historii tłumaczymy (dłuższa — początek, z dopiskiem)
+
+
+@app.route("/crm/poczta/<int:mid>/tlumacz-cytat", methods=["POST"])
+def crm_mail_translate_quoted(mid):
+    """Tłumaczenie wcześniejszej korespondencji (cytatu) na polski — przy pierwszym rozwinięciu, potem z bazy."""
+    row = db.session.get(MailMessage, mid) or abort(404)
+    _fresh, quoted = poczta.split_quote(row.body_text or "")
+    if not quoted.strip():
+        return jsonify({"ok": True, "body": ""})
+    if row.quoted_pl and request.form.get("force") != "1":
+        return jsonify({"ok": True, "body": row.quoted_pl})
+    part = quoted[:QUOTED_TRANSLATE_MAX]
+    try:
+        _lang, _subj, body = ai_translate_checked("", part, "pl")
+    except Exception as e:
+        return jsonify({"error": f"Tłumaczenie nie wyszło: {type(e).__name__}: {str(e)[:160]}"}), 502
+    if len(quoted) > QUOTED_TRANSLATE_MAX:
+        body += "\n\n[… dalsza część historii bez tłumaczenia — jest w oryginale obok]"
+    row.quoted_pl = body
+    db.session.commit()
+    return jsonify({"ok": True, "body": body})
 
 
 @app.route("/crm/poczta/tematy", methods=["POST"])

@@ -176,8 +176,6 @@
         <div class="pm-col">
           <h4>{{ 'Treść' if sel.lang == 'pl' else 'Oryginał ' ~ lang_flags.get(sel.lang or '', '') }}</h4>
           <notr class="pm-body" style="display:block">{{ fresh or '(pusta treść)' }}</notr>
-          {% if quoted %}<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--accent);font-size:12px">Wcześniejsza korespondencja (cytat)</summary>
-            <notr class="pm-body" style="display:block;color:var(--muted);margin-top:6px">{{ quoted }}</notr></details>{% endif %}
         </div>
         {% if sel.lang != 'pl' %}
         <div class="pm-col pm-pl">
@@ -186,6 +184,20 @@
         </div>
         {% endif %}
       </div>
+      {% if quoted %}
+      <details id="pm-quoted" style="margin-top:8px" {% if quoted_tr and ai_ok %}ontoggle="if (this.open) pmQuotedPl(false)"{% endif %}>
+        <summary style="cursor:pointer;color:var(--accent);font-size:12px">Wcześniejsza korespondencja (cytat){{ ' — z tłumaczeniem' if quoted_tr }}</summary>
+        <div class="pm-cols" style="margin-top:6px;{{ '' if quoted_tr else 'grid-template-columns:1fr' }}">
+          <div class="pm-col"><notr class="pm-body" style="display:block;color:var(--muted)">{{ quoted }}</notr></div>
+          {% if quoted_tr %}
+          <div class="pm-col pm-pl">
+            <h4>🇵🇱 Po polsku {% if ai_ok %}<a href="#" onclick="pmQuotedPl(true); return false" style="font-size:11px;font-weight:400;color:var(--accent)">przetłumacz ponownie</a>{% endif %}</h4>
+            <notr class="pm-body" id="pm-quoted-pl" style="display:block">{% if sel.quoted_pl %}{{ sel.quoted_pl }}{% elif not ai_ok %}(tłumaczenie wyłączone — brak ANTHROPIC_API_KEY){% else %}⏳ Tłumaczę po rozwinięciu…{% endif %}</notr>
+          </div>
+          {% endif %}
+        </div>
+      </details>
+      {% endif %}
 
       {% if thread %}
       <div class="pm-thread" style="margin-top:14px">
@@ -225,6 +237,21 @@
       });
     }).catch(() => {});
 })();
+{% if sel and quoted_tr and ai_ok %}
+let pmQuotedBusy = false, pmQuotedDone = {{ 'true' if sel.quoted_pl else 'false' }};
+function pmQuotedPl(force) {
+  if (pmQuotedBusy || (pmQuotedDone && !force)) return;
+  const el = document.getElementById('pm-quoted-pl');
+  pmQuotedBusy = true; el.textContent = '⏳ Tłumaczę historię…';
+  const fd = new FormData(); if (force) fd.append('force', '1');
+  fetch('{{ url_for('crm_mail_translate_quoted', mid=sel.id) }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+    .then(r => r.json()).then(d => {
+      pmQuotedBusy = false;
+      if (d.error) { el.textContent = '⚠️ ' + d.error; return; }
+      el.textContent = d.body || ''; pmQuotedDone = true;
+    }).catch(() => { pmQuotedBusy = false; el.textContent = '⚠️ Błąd połączenia — kliknij „przetłumacz ponownie”.'; });
+}
+{% endif %}
 {% if sel and sel.lang != 'pl' and ai_ok %}
 function pmTranslate(force) {
   const el = document.getElementById('pm-body-pl');
