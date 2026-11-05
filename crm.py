@@ -2556,7 +2556,7 @@ def sales_automation_pass():
         owner = USERS_BY_ID.get(lead.assigned_to) or USERS[0]
         subject, body = sales_rules.private_draft(lead.company, lead.contact_name, private_price_text(lead), lead.location,
                                                   [d.event_date for d in lead.event_days], owner.get("full_name", ""),
-                                                  owner.get("phone", ""))
+                                                  mail_phone(owner.get("phone", ""), lead_market(lead)))
         db.session.add(Activity(lead_id=lead.id, kind="email", due_date=today0, assigned_to=owner["id"],
                                 notes=f"{sales_rules.PRIVATE_DRAFT_PREFIX} — szkic gotowy, NIC nie poszło do klienta. "
                                       f"Sprawdź i wyślij: Poczta → „Otwórz szkic”.\nTemat: {subject}\n---\n{body}"))
@@ -2776,7 +2776,8 @@ def followup_draft(lead, sender, lang=None):
     else:
         subject = t["subject"].format(company=lead.company)
         first = t["first"].format(when=when)
-    signature = "\n".join(x for x in (sender["full_name"], "33Bots", sender["email"], sender["phone"]) if x)
+    signature = "\n".join(x for x in (sender["full_name"], "33Bots", sender["email"],
+                                       mail_phone(sender["phone"], lead_market(lead))) if x)
     body = f"{t['hello']}\n\n{first}\n\n{t['help']}\n\n{t['bye']}\n{signature}"
     return subject, body
 
@@ -6746,6 +6747,33 @@ def _imap_save_sent(raw_msg, login, pwd, host=None):
     return None
 
 
+def mail_phone(phone, code):
+    """Telefon do podpisu maila na rynku `code`. Niemcy: bez polskiego numeru (telefon jest tylko w PDF oferty);
+    niemiecki numer można ustawić w Railway: MAIL_PHONE_DE."""
+    code = code if code in markets.MARKETS else "lt"
+    if markets.get(code).get("mail_phone", True):
+        return phone or ""
+    return os.environ.get(f"MAIL_PHONE_{code.upper()}", "").strip()
+
+
+_PL_PHONE_LINE = re.compile(r"^[ \t]*(?:(?:tel|telefon|phone|mobil|handy|mob)\.?[ \t]*:?[ \t]*)?(?:\+|00)48[\d \t-]{9,14}[ \t]*$",
+                            re.I | re.M)
+
+
+def strip_pl_phone(body, sender):
+    """Zabezpieczenie: z maili wysyłanych ze skrzynek rynku bez telefonu (33bots.de) znikają linie z samym polskim
+    numerem (+48 …) — np. z podpisu dopisanego przez Claude albo z szablonu."""
+    email = ((sender or {}).get("email") or (sender or {}).get("login") or "").lower()
+    code = next((c for c in markets.MARKETS if email.endswith("@" + markets.get(c)["domain"])), None)
+    if not code or markets.get(code).get("mail_phone", True) or not body:
+        return body
+    out = _PL_PHONE_LINE.sub("", body)
+    own = re.sub(r"\D", "", (sender or {}).get("phone") or "")
+    if len(own) >= 9:
+        out = "\n".join(l for l in out.split("\n") if re.sub(r"\D", "", l) != own or not l.strip())
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
 def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=None, headers=None, cc=None):
     """Wysyła jeden mail przez SMTP (te same zmienne co raport dzienny + skrzynki osób).
     attachments: lista (nazwa_pliku, bajty, mime) — np. PDF oferty.
@@ -6763,6 +6791,7 @@ def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=Non
         return "SMTP nieskonfigurowany — ustaw SMTP_HOST oraz SMTP_PASS_<IMIĘ> (albo SMTP_USER/SMTP_PASS) w Railway (web → Variables)"
     port = int((os.environ.get(f"SMTP_PORT_{skey}", "").strip() if skey else "") or os.environ.get("SMTP_PORT", 587))
     display = (sender or {}).get("full_name") or sender_name
+    body = strip_pl_phone(body, dict(sender or {}, email=(sender or {}).get("email") or login))
     if attachments:
         msg = MIMEMultipart()
         msg.attach(MIMEText(body, "plain", "utf-8"))
@@ -8374,7 +8403,11 @@ def generate_offer_with_ai(lead_id, instruction, sender_id, actor_id, previous_i
             ctx += ["", "POPRZEDNIA WERSJA (popraw ją zgodnie z uwagami, resztę zostaw):",
                     f"Do: {prev.to_addr}\nTemat: {prev.subject}\nTreść maila:\n{prev.body}",
                     f"Dane PDF: {json.dumps(_offer_options(prev).get('offer'), ensure_ascii=False)}"]
+    mcode = lead_market(lead)
     ctx += ["", f"NADAWCA i kontakt w ofercie: {sender['full_name']}, {sender['email']}, {sender['phone']}",
+            *([] if mail_phone(sender["phone"], mcode) == sender["phone"] else
+              [f"PODPIS MAILA: bez numeru telefonu{(' — użyj ' + mail_phone(sender['phone'], mcode)) if mail_phone(sender['phone'], mcode) else ''}"
+               " (telefon jest tylko w PDF oferty)."]),
             "", "POLECENIE UŻYTKOWNIKA:", instruction.strip() or "Przygotuj ofertę na podstawie zapytania."]
     base_prompt = "\n".join(ctx)
     prompt, res = base_prompt, {}
@@ -8931,7 +8964,8 @@ def lt_mail_draft(lead):
     link = lead_form_url(lead)
     form = m["ask_form"].format(link=link) if link else m["ask_noform"]
     body = (m["ask_hello"] + form + m["ask_list"] + m["ask_bye"] + "\n"
-            f"{sender['full_name']}\n33Bots\n{sender['email']}" + (f"\n{sender['phone']}" if sender["phone"] else ""))
+            f"{sender['full_name']}\n33Bots\n{sender['email']}" + (f"\n{mail_phone(sender['phone'], code)}"
+                                                                      if mail_phone(sender["phone"], code) else ""))
     return sender, m["ask_subject"], body
 
 
@@ -9022,7 +9056,7 @@ def lt_quote_mail_draft(lead, q, sender, fixed=False):
              m["quote_does"], "", m["quote_included"], "", m["quote_photos"], OFFER_PHOTOS_URL, "",
              m["quote_reserve"], "", m["bye"],
              "\n".join(x for x in (sender.get("full_name") or sender.get("name"), "33Bots", sender.get("email"),
-                                   sender.get("phone")) if x)]
+                                   mail_phone(sender.get("phone"), m["code"])) if x)]
     return subject, "\n".join(lines)
 
 
@@ -10528,7 +10562,7 @@ def mail_signature(box, user=None):
         owner = owner or USERS_BY_ID.get(1)
     owner = owner or user
     name = (owner or {}).get("full_name") or box["label"]
-    phone = (owner or {}).get("phone") or ""
+    phone = mail_phone((owner or {}).get("phone") or "", box.get("market"))
     return "\n".join(x for x in (markets.get(box.get("market"))["bye"], name, "33Bots", box["login"], phone) if x)
 
 
