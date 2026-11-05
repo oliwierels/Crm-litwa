@@ -34,3 +34,17 @@ Awaryjne wyłączenie bramek bez cofania kodu: zmienna `STAGE_GATES=0` w Railway
 Bez nowych kolumn poza powyższymi — nowe wskaźniki liczą się z istniejących danych (historia etapów, zadania,
 `handled_at`, oferty). Ustawienia (cele, kurs EUR) są w tabeli `app_settings` (klucze `sales_targets`, `fx_EUR`);
 cofnięcie: `DELETE FROM app_settings WHERE key IN ('sales_targets', 'fx_EUR', 'fx_EUR_date');`.
+
+## Sprawy z poczty: sprawdzanie, czy już załatwione
+
+Dwie nowe kolumny w `mail_tasks` (dodawane przy starcie przez `ensure_schema`):
+`checked_at` (kiedy agent sprawdził sprawę w poczcie i CRM) i `check_note` (co znalazł).
+Cofnięcie:
+
+```sql
+ALTER TABLE mail_tasks DROP COLUMN checked_at, DROP COLUMN check_note;
+```
+
+Sprawy zamknięte przez agenta mają `done_how = 'zrobione — widać w poczcie'`; przywrócenie wszystkich naraz:
+`UPDATE mail_tasks SET status = 'open', done_at = NULL, done_how = 'przywrócona ręcznie' WHERE done_how = 'zrobione — widać w poczcie';`
+

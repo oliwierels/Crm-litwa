@@ -201,7 +201,7 @@ def _copy_lead(conn, meta, db, M, row, actor_id, code="lt"):
 def _delete_in_pl(conn, meta, pl_id, clickup_task_id, code="lt"):
     """Usuwa leada w PL tak jak przycisk „Usuń” w polskim CRM i blokuje ponowny import z ClickUp."""
     t = meta.tables
-    for name in ("inbox_messages", "campaign_recipients", "sent_offers", "contract_requests"):
+    for name in ("inbox_messages", "campaign_recipients", "sent_offers", "contract_requests", "mail_tasks"):
         if name in t and "lead_id" in t[name].c:
             conn.execute(update(t[name]).where(t[name].c.lead_id == pl_id).values(lead_id=None))
     if "journey_mails" in t:

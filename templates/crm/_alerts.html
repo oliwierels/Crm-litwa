@@ -89,10 +89,11 @@
     <div class="al-row al-task {{ 'al-urgent' if t.priority == 'pilne' }}" data-task="{{ t.id }}">
       <div class="al-top"><b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b><span class="al-meta">{{ t.counterpart }} · „{{ t.subject }}”</span><span class="al-age" style="color:#fcd34d">od {{ t.when }}</span></div>
       <div class="al-notes">{{ t.reason }}{% if t.action %} <b>→ {{ t.action }}</b>{% endif %}</div>
+      {% if t.check_note %}<div class="al-notes" style="opacity:.75">🔎 Sprawdzone w poczcie: {{ t.check_note }}</div>{% endif %}
       <div class="al-acts">
         {% if t.mail_id %}<a class="al-main" href="{{ url_for('crm_mail_compose', reply=t.mail_id, task=t.id, auto=1) }}">✍️ Odpowiedz z Claude</a>
         <a href="{{ url_for('crm_mail', f='all', m=t.mail_id) }}">📬 Otwórz maila</a>{% endif %}
-        {% if t.lead_id %}<a href="{{ url_for('crm_lead_detail', lead_id=t.lead_id) }}">Lead</a>{% endif %}
+        <a href="{{ url_for('crm_mail_task_lead', tid=t.id) }}" title="{{ 'Lead tego klienta' if t.lead_id else 'Brak leada — otworzy maila, z którego można go utworzyć' }}">👤 Otwórz lead</a>
         <button type="button" class="al-ok" onclick="alTask({{ t.id }}, 'done', this)">✅ Załatwione</button>
         <button type="button" onclick="alTask({{ t.id }}, 'dismiss', this)">🚫 Nie dotyczy</button>
       </div>

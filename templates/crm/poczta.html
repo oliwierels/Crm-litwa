@@ -58,17 +58,22 @@
 <details class="panel" id="sprawy" style="margin-bottom:12px;padding:10px 14px" {{ 'open' if request.args.get('sprawy') or (mtasks and mail_tasks_visible()) }}>
   <summary style="cursor:pointer;font-weight:700;display:flex;gap:10px;align-items:center;flex-wrap:wrap">📋 Sprawy z przeglądu poczty ({{ mtasks|length }})
     <span style="font-weight:400;color:var(--muted);font-size:12px">Claude przegląda odebrane i wysłane codziennie o {{ review_hours|join(':00 i ') }}:00 — okno ze sprawami wyskakuje od {{ tasks_from }}:00.</span>
-    <form method="post" action="{{ url_for('crm_mail_review_now') }}" style="margin-left:auto" onclick="event.stopPropagation()">
+    <form method="post" action="{{ url_for('crm_mail_tasks_verify') }}" style="margin-left:auto" onclick="event.stopPropagation()">
+      <button class="btn btn-secondary btn-sm" {{ 'disabled' if not ai_ok }} title="Claude szuka w poczcie (wszystkie skrzynki i wątki z klientem) i w CRM, czy sprawa nie jest już zrobiona — zrobione zamyka z dowodem. Nic nie wysyła.">🔎 Sprawdź w poczcie, co już zrobione</button></form>
+    <form method="post" action="{{ url_for('crm_mail_review_now') }}" onclick="event.stopPropagation()">
       <button class="btn btn-secondary btn-sm" {{ 'disabled' if not ai_ok }}>🔍 Przejrzyj pocztę teraz</button></form>
   </summary>
+  <div style="color:var(--muted);font-size:12px;margin:6px 0 2px">Każdą sprawę Claude sprawdza w poczcie i CRM, zanim trafi na listę (i potem co godzinę, gdy coś się zmieni) — to, co już zrobione (np. oferta poszła osobnym mailem), zamyka sam.</div>
   {% for t in mtasks %}
   <div style="border-top:1px solid var(--border);padding:8px 0;font-size:12.5px;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
     <div style="flex:1;min-width:260px"><b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b>
       <div style="color:var(--muted)">{{ t.counterpart }} · „{{ t.subject }}” · od {{ to_local(t.created_at).strftime('%d.%m %H:%M') }}</div>
-      <div>{{ t.reason }}{% if t.action %} <b>→ {{ t.action }}</b>{% endif %}</div></div>
+      <div>{{ t.reason }}{% if t.action %} <b>→ {{ t.action }}</b>{% endif %}</div>
+      {% if t.check_note %}<div style="color:var(--muted);font-size:12px">🔎 Sprawdzone w poczcie{% if t.checked_at %} {{ to_local(t.checked_at).strftime('%d.%m %H:%M') }}{% endif %}: {{ t.check_note }}</div>{% endif %}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       {% if t.mail_id %}<a class="btn btn-primary btn-sm" href="{{ url_for('crm_mail_compose', reply=t.mail_id, task=t.id, auto=1) }}">✍️ Odpowiedz z Claude</a>
       <a class="btn btn-ghost btn-sm" href="{{ url_for('crm_mail', f='all', m=t.mail_id, sprawy=1) }}">Otwórz</a>{% endif %}
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('crm_mail_task_lead', tid=t.id) }}">👤 Otwórz lead</a>
       <form method="post" action="{{ url_for('crm_mail_task_action', tid=t.id, action='done') }}"><button class="btn btn-secondary btn-sm">✅ Załatwione</button></form>
       <form method="post" action="{{ url_for('crm_mail_task_action', tid=t.id, action='dismiss') }}"><button class="btn btn-ghost btn-sm">🚫 Nie dotyczy</button></form>
     </div>
@@ -76,7 +81,20 @@
   {% else %}
   <div style="color:var(--muted);font-size:12.5px;padding-top:6px">Brak otwartych spraw.</div>
   {% endfor %}
+  {% set auto_closed = mail_tasks_autoclosed() %}
+  {% if auto_closed %}
+  <details style="margin-top:10px;font-size:12.5px"><summary style="cursor:pointer;color:var(--muted)">✅ Zamknięte po sprawdzeniu poczty — ostatnie 7 dni ({{ auto_closed|length }})</summary>
+    {% for t in auto_closed %}
+    <div style="border-top:1px solid var(--border);padding:6px 0;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px"><b>{{ t.title }}</b> <span style="color:var(--muted)">· {{ t.counterpart }} · zamknięta {{ to_local(t.done_at).strftime('%d.%m %H:%M') }}</span>
+        <div style="color:var(--muted)">🔎 {{ t.check_note }}</div></div>
+      <form method="post" action="{{ url_for('crm_mail_task_action', tid=t.id, action='reopen') }}"><button class="btn btn-ghost btn-sm" title="Agent się pomylił — sprawa wraca na listę">↩️ Przywróć</button></form>
+    </div>
+    {% endfor %}
+  </details>
+  {% endif %}
 </details>
+{% if request.args.get('brak_leada') %}<div class="panel" style="margin-bottom:12px;padding:10px 14px;font-size:12.5px;border-color:var(--yellow)">👤 Ta sprawa nie ma leada w CRM — możesz go utworzyć przyciskiem „➕ Nowy lead z maila” przy mailu.</div>{% endif %}
 <div class="pm-status">
   {% for s in status %}
   <span title="{{ s.login }}">
