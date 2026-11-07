@@ -256,7 +256,7 @@ def copy_payload(lead, code):
         "rental_days": lead.rental_days, "location": lead.location, "event_date": lead.event_date,
         "event_end_date": lead.event_end_date, "contract_signed": bool(lead.contract_signed),
         "assigned_to": lead.assigned_to, "source": COPY_SOURCES[code], "notes": info,
-        # kwota do panelu skuteczności w CRM PL (statystyki i przychody PL kopii nie liczą)
+        # kwota do zestawień wygranych w CRM PL (dashboard, statystyki, panel skuteczności, MCP) — jedyna wspólna agregacja
         "value_pln": value, "currency": lead.currency or "EUR",
         "client_type": getattr(lead, "client_type", None), "country": code.upper(),
         "billing_country": (lead.billing_country or code.upper())[:2],
