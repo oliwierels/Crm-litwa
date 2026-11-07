@@ -7,7 +7,7 @@ przycisk „Usuń leada” w polskim CRM (maile, oferty i formularze zostają w 
 """
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import MetaData, create_engine, delete, insert, inspect, select, update
 
@@ -235,8 +235,9 @@ def _mark_copy_in_pl(conn, meta, pl_id, row, code):
     conn.execute(update(leads).where(leads.c.id == pl_id).values(**values))
 
 
-def copy_payload(lead, code):
-    """Pola kopii w polskim CRM (to, czego potrzebuje logistyka) + dni wynajmu. Zwraca (pola, dni, odcisk)."""
+def copy_payload(lead, code, closed_at=None):
+    """Pola kopii w polskim CRM (to, czego potrzebuje logistyka) + dni wynajmu. Zwraca (pola, dni, odcisk).
+    closed_at (data wygranej w CRM LT/DE) wchodzi do odcisku — poprawiona tam „Wygrany dnia” odświeża kopię."""
     flag = COPY_FLAGS[code]
     company = lead.company or ""
     stage = lead.stage if lead.stage in WON + ("Stracony",) else "Stracony"  # cofnięty z wygranej — znika z logistyki
@@ -264,8 +265,34 @@ def copy_payload(lead, code):
     days = [(d.event_date, d.location) for d in lead.event_days]
     import hashlib
     import json
-    mark = hashlib.sha1(json.dumps([fields, days], default=str, sort_keys=True).encode()).hexdigest()
+    mark = hashlib.sha1(json.dumps([fields, days, closed_at], default=str, sort_keys=True).encode()).hexdigest()
     return fields, days, mark
+
+
+def _sync_closed_at(conn, hist, pl_id, closed_at):
+    """Data wygranej kopii w PL = data wygranej w CRM LT/DE (np. poprawiona tam „Wygrany dnia”) — od niej zależy
+    miesiąc w zestawieniach wygranych PL. Ta sama zasada co set_lead_closed_on w CRM: przesuwa wejście na wygraną,
+    a wcześniejsze i późniejsze wpisy historii zachowują kolejność. Zwraca True, gdy coś zmieniono."""
+    rows = sorted(conn.execute(select(hist.c.id, hist.c.to_stage, hist.c.changed_at).where(hist.c.lead_id == pl_id)).all(),
+                  key=lambda r: (r.changed_at or datetime.min, r.id))
+    found, in_won = None, False
+    for r in rows:
+        won = r.to_stage in WON
+        if won and not in_won:
+            found = r
+        in_won = won
+    if found is None or found.changed_at == closed_at:
+        return False
+    i = rows.index(found)
+    earlier, later = rows[:i], rows[i + 1:]
+    conn.execute(update(hist).where(hist.c.id == found.id).values(changed_at=closed_at))
+    late = [h for h in earlier if h.changed_at and h.changed_at >= closed_at]
+    for k, h in enumerate(late):
+        conn.execute(update(hist).where(hist.c.id == h.id).values(changed_at=closed_at - timedelta(minutes=len(late) - k)))
+    for k, h in enumerate(later):
+        if h.changed_at is None or h.changed_at <= closed_at:
+            conn.execute(update(hist).where(hist.c.id == h.id).values(changed_at=closed_at + timedelta(minutes=k + 1)))
+    return True
 
 
 def push_copy(eng, meta, lead, code, now=None, closed_at=None):
@@ -273,7 +300,7 @@ def push_copy(eng, meta, lead, code, now=None, closed_at=None):
     now = now or datetime.utcnow()
     t = meta.tables
     leads, days_t, hist = t["leads"], t.get("lead_event_dates"), t.get("stage_history")
-    fields, days, mark = copy_payload(lead, code)
+    fields, days, mark = copy_payload(lead, code, closed_at)
     fields = {k: v for k, v in fields.items() if k in leads.c}
     with eng.begin() as conn:
         pl_id, old_stage = lead.pl_copy_id, None
@@ -293,6 +320,8 @@ def push_copy(eng, meta, lead, code, now=None, closed_at=None):
         if hist is not None and old_stage != fields.get("stage"):
             row = {"lead_id": pl_id, "from_stage": old_stage, "to_stage": fields.get("stage"), "changed_at": closed_at or now}
             conn.execute(insert(hist).values(**{k: v for k, v in row.items() if k in hist.c}))
+        if hist is not None and closed_at and fields.get("stage") in WON:
+            _sync_closed_at(conn, hist, pl_id, closed_at)
         if days_t is not None:
             key = lambda d: (str(d[0]), d[1] or "")
             have = sorted(((r.event_date, r.location) for r in conn.execute(

@@ -10171,6 +10171,30 @@ def run_pl_move(actor_id=None, codes=None):
         _pl_move_lock.release()
 
 
+# Jednorazowa poprawka (07.11.2026): wygrane z Litwy oznaczone w CRM LT dopiero 04.11 — prawdziwa data wygranej
+# z korespondencji (Panevėžio kolegija: rezerwacja 20.01.2027 potwierdzona 23.07; Galley: potwierdzenie 30.10).
+WIN_DATE_FIX_KEY = "win_date_fix_v1"
+WIN_DATE_FIXES = (("laima.mikalajuniene@panko.lt", date(2026, 7, 23)), ("kamile@galley.lt", date(2026, 10, 30)))
+
+
+def apply_win_date_fixes():
+    """Raz: ustawia „Wygrany dnia” leadom z WIN_DATE_FIXES (tylko wygranym, po adresie klienta). Zwraca listę zmian."""
+    if get_setting(WIN_DATE_FIX_KEY) or not _claim_once(WIN_DATE_FIX_KEY + "_lock"):
+        return None
+    done = []
+    for email, day in WIN_DATE_FIXES:
+        for lead in all_markets(Lead.query.filter(db.func.lower(Lead.contact_email) == email,
+                                                  Lead.stage.in_(WON_STAGES))).all():
+            entry = _closing_entry(lead)
+            if entry is not None and entry.changed_at and to_local(entry.changed_at).date() == day:
+                continue
+            if set_lead_closed_on(lead, day) is None:  # błąd (etap / data) zwraca przed jakąkolwiek zmianą
+                done.append(f"#{lead.id} {lead.company}: wygrany {day:%d.%m.%Y}")
+    set_setting(WIN_DATE_FIX_KEY, ("; ".join(done) or "bez zmian")[:500])
+    db.session.commit()
+    return done
+
+
 def sync_won_to_pl():
     """Wygrane leady LT i DE → kopia w polskim CRM (tylko logistyka: dni, miejsca, robot, kontakt na miejscu).
     Odświeża kopię, gdy coś się zmieni (data, miejsce, etap); cofnięty z wygranej trafia tam jako Stracony.
@@ -10179,6 +10203,11 @@ def sync_won_to_pl():
         return 0, []
     done, errors = 0, []
     try:
+        try:
+            apply_win_date_fixes()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("win_date_fixes")
         eng = pl_move.engine()
         meta = pl_move._meta(eng)
         leads = all_markets(Lead.query.filter(db.or_(Lead.stage.in_(pl_move.WON), Lead.pl_copy_id.isnot(None)))
@@ -10186,10 +10215,11 @@ def sync_won_to_pl():
         for lead in leads:
             code = lead.market if lead.market in pl_move.COPY_SOURCES else "lt"
             try:
-                if lead.pl_copy_id and lead.pl_copy_hash == pl_move.copy_payload(lead, code)[2]:
-                    continue  # nic się nie zmieniło od ostatniej wysyłki
                 entry = _closing_entry(lead) if lead.stage in CLOSED_STAGES else None
-                pl_id, mark = pl_move.push_copy(eng, meta, lead, code, closed_at=entry.changed_at if entry else None)
+                closed_at = entry.changed_at if entry else None
+                if lead.pl_copy_id and lead.pl_copy_hash == pl_move.copy_payload(lead, code, closed_at)[2]:
+                    continue  # nic się nie zmieniło od ostatniej wysyłki (też data wygranej)
+                pl_id, mark = pl_move.push_copy(eng, meta, lead, code, closed_at=closed_at)
                 lead.pl_copy_id, lead.pl_copy_hash = pl_id, mark
                 db.session.commit()
                 done += 1
