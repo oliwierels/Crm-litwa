@@ -25,7 +25,7 @@ CRM stosuje je jednakowo w interfejsie, w API (`/crm/api/...`) i w narzędziach 
 | Automat | Co go uruchamia | Gdzie / konfiguracja |
 |---|---|---|
 | Lead z maila na kontakt@ (AI czyta zapytanie) | co kilka minut, skrzynka kontakt@ | `_inbox_scheduler`; zmienne `INBOX_*` |
-| Leady z ClickUp | co kilka minut | `_clickup_scheduler`; `CLICKUP_API_TOKEN`, `CLICKUP_LIST_ID` |
+| Leady z ClickUp | co kilka minut | `_clickup_scheduler`; `CLICKUP_API_TOKEN`, `CLICKUP_LIST_ID` (Litwa) i `CLICKUP_LIST_ID_DE` (Niemcy — świeże od razu na tablicę, źródło „ClickUp DE”) |
 | Telefon po ofercie (teraz: telefon potwierdzający) | wysłana oferta albo etap Oferta | `ensure_followup_call` |
 | Follow-up mailem po ofercie (zadanie) | wysłana oferta (3 dni) | `deliver_offer` |
 | Customer Journey: umowa, przypomnienia, dokumenty z maili | etap Wygrany; skan skrzynek co 5 min | `ensure_journeys`, `_journey_scheduler`; `JOURNEY_SCAN` |

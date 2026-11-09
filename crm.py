@@ -1554,8 +1554,8 @@ class ClickUpAPIError(Exception):
     pass
 
 
-def _clickup_get(path, params=None):
-    token = os.environ.get("CLICKUP_API_TOKEN", "").strip()
+def _clickup_get(path, params=None, token=None):
+    token = (token or os.environ.get("CLICKUP_API_TOKEN", "")).strip()
     headers = {"Authorization": token, "User-Agent": "33bots-LT-CRM/1.0"}
     last_err = None
     for attempt in range(3):  # chwilowe zerwanie połączenia nie powinno wywalać synchronizacji
@@ -1636,12 +1636,12 @@ def _clickup_task_to_lead(task):
     return fields
 
 
-def _clickup_fetch_all_tasks(list_id):
+def _clickup_fetch_all_tasks(list_id, token=None):
     """Pobiera wszystkie taski z listy, stronicując (API ClickUp zwraca max 100 na stronę)."""
     tasks = []
     page = 0
     while True:
-        data = _clickup_get(f"/list/{list_id}/task", params={"archived": "false", "page": page})
+        data = _clickup_get(f"/list/{list_id}/task", params={"archived": "false", "page": page}, token=token)
         page_tasks = data.get("tasks", [])
         tasks.extend(page_tasks)
         if data.get("last_page") or not page_tasks:
@@ -1658,14 +1658,201 @@ _CLICKUP_REFRESH_FIELDS = (
 )
 
 
+# ---- Niemcy: osobna lista ClickUp (formularze z reklam Meta w DE) ----
+# Ta sama lista zasila też osobny DE CRM zespołu Posevo (repo CRM-De) — tam są statusy i maile do klienta.
+# Tutaj leady trafiają do rynku Niemcy (bez maili do klienta: Niemcy mają auto_send=False) i bez okna alarmu
+# „obsłuż dziś”, bo pierwszy kontakt robi Posevo (CLICKUP_DE_ALERT=1 włącza alarm także dla nich).
+CLICKUP_DE_SOURCE = "ClickUp DE"
+CLICKUP_DE_ALERT = os.environ.get("CLICKUP_DE_ALERT", "0") == "1"
+CLICKUP_AUTO_ACCEPT_DAYS = int(os.environ.get("CLICKUP_AUTO_ACCEPT_DAYS", "7") or 7)
+CLICKUP_DE_ALIASES = {  # początek słowa w nazwie pola formularza (małe litery) → pole leada
+    "company": ["firmenname", "firma", "unternehmen", "company", "nazwa firmy"],
+    "contact_name": ["vor- und nachname", "ansprechpartner", "kontaktperson", "nachname", "vorname", "name",
+                     "imię i nazwisko", "imie i nazwisko"],
+    "contact_phone": ["telefon", "handy", "mobil", "phone", "tel"],
+    "contact_email": ["e-mail", "email", "mail"],
+    "location": ["veranstaltungsort", "ort", "stadt", "location", "lokalizacja", "miasto"],
+    "event_date": ["veranstaltungsdatum", "eventdatum", "datum", "date", "data"],
+}
+_DE_PHONE_RE = re.compile(r"(?:\+|00)\d[\d\s/()-]{7,}\d|\b0\d[\d\s/-]{6,}\d\b")
+_DE_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def clickup_de_config():
+    """(id listy, token) niemieckiej listy ClickUp albo (None, None), gdy nie ustawiono CLICKUP_LIST_ID_DE."""
+    list_id = os.environ.get("CLICKUP_LIST_ID_DE", "").strip()
+    token = (os.environ.get("CLICKUP_API_TOKEN_DE", "") or os.environ.get("CLICKUP_API_TOKEN", "")).strip()
+    return (list_id, token) if list_id and token else (None, None)
+
+
+def _clickup_cf_value(cf):
+    """Czytelna wartość pola formularza (lista rozwijana zwraca numer opcji, data — milisekundy)."""
+    value = cf.get("value")
+    if value in (None, "", []):
+        return None
+    if cf.get("type") == "drop_down":
+        for opt in (cf.get("type_config") or {}).get("options") or []:
+            if value in (opt.get("orderindex"), opt.get("id")):
+                return opt.get("name")
+    if cf.get("type") == "date":
+        try:
+            return datetime.utcfromtimestamp(int(value) / 1000)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, (list, dict)):
+        return None
+    return str(value).strip()
+
+
+def _clickup_task_to_lead_de(task):
+    """Task z niemieckiej listy (formularz Meta po niemiecku) → pola leada rynku Niemcy."""
+    fields, extra = {"source": CLICKUP_DE_SOURCE, "currency": "EUR"}, []
+    for cf in task.get("custom_fields") or []:
+        name = (cf.get("name") or "").strip()
+        value = _clickup_cf_value(cf)
+        if value in (None, ""):
+            continue
+        lname = name.lower()
+        target = next((f for f, aliases in CLICKUP_DE_ALIASES.items()
+                       if any(re.search(r"(?<![a-zäöüß])" + re.escape(a), lname) for a in aliases)), None)
+        if target == "event_date":
+            when = value if isinstance(value, datetime) else None
+            if when is None and isinstance(value, str):
+                d = parse_date(value)
+                when = datetime(d.year, d.month, d.day) if d else None
+            if when:
+                fields.setdefault("event_date", when)
+                continue
+        elif target == "contact_email" and "contact_email" in fields and "contact_email2" not in fields \
+                and str(value).strip().lower() != fields["contact_email"].lower():
+            fields["contact_email2"] = str(value)[:200]
+            continue
+        elif target and target not in fields:
+            fields[target] = str(value)[:200]
+            continue
+        extra.append(f"{name}: {value}")
+    title = (task.get("name") or "").strip()
+    if "company" not in fields:  # bez pola firmy tytuł taska jest firmą (zwykle imię i nazwisko)
+        fields["company"] = (title or "Lead z ClickUp (DE)")[:200]
+    elif title and title != fields["company"] and "contact_name" not in fields:
+        fields["contact_name"] = title[:200]
+    if "contact_name" not in fields and _looks_like_person_name(fields["company"]):
+        fields["contact_name"] = fields["company"]
+    text = (task.get("text_content") or "").strip()
+    fields["notes"] = "\n".join(([text] if text else []) + extra).strip()
+    blob = f"{title}\n{text}"
+    if "contact_phone" not in fields:
+        m = _DE_PHONE_RE.search(blob)
+        if m:
+            fields["contact_phone"] = m.group(0).strip()
+    if "contact_email" not in fields:
+        m = _DE_EMAIL_RE.search(blob)
+        if m:
+            fields["contact_email"] = m.group(0)
+    if task.get("date_created"):
+        try:
+            fields["created_at"] = datetime.utcfromtimestamp(int(task["date_created"]) / 1000)
+        except (TypeError, ValueError):
+            pass
+    due = task.get("due_date")  # termin taska = dzień zgłoszenia to nie data wydarzenia
+    if due and "event_date" not in fields:
+        try:
+            due_dt = datetime.utcfromtimestamp(int(due) / 1000)
+            if not fields.get("created_at") or to_local(due_dt).date() != to_local(fields["created_at"]).date():
+                fields["event_date"] = due_dt
+        except (TypeError, ValueError):
+            pass
+    emails = {(a.get("email") or "").lower() for a in task.get("assignees") or []}
+    fields["assigned_to"] = next((u["id"] for u in USERS if (u.get("email") or "").lower() in emails), USERS[0]["id"])
+    return fields
+
+
+def sync_clickup_de_leads():
+    """Niemiecka lista ClickUp → leady rynku Niemcy. Świeże (CLICKUP_AUTO_ACCEPT_DAYS) od razu na tablicę,
+    starsze do „Z ClickUp”. Bez duplikatów (task, telefon, e-mail). Zwraca (ok, nowe, komunikat)."""
+    list_id, token = clickup_de_config()
+    if not list_id:
+        return False, 0, "Brak CLICKUP_LIST_ID_DE (lista ClickUp z niemieckimi leadami)"
+    fresh_since = datetime.utcnow() - timedelta(days=CLICKUP_AUTO_ACCEPT_DAYS)
+    imported = linked = moved = 0
+    for task in _clickup_fetch_all_tasks(list_id, token=token):
+        task_id = task.get("id")
+        if not task_id:
+            continue
+        fields = _clickup_task_to_lead_de(task)
+        existing = all_markets(Lead.query.filter_by(clickup_task_id=task_id)).first()
+        if existing:
+            # ten sam task wpadł wcześniej z głównej listy do poczekalni — przenieś go do Niemiec
+            if existing.clickup_pending and existing.stage == "Nowy" and existing.market != "de":
+                existing.market, existing.source = "de", CLICKUP_DE_SOURCE
+                moved += 1
+            if existing.clickup_pending and (existing.created_at or datetime.utcnow()) >= fresh_since:
+                existing.clickup_pending = False
+                moved += 1
+            continue
+        if db.session.get(AppSetting, f"clickup_dup:{task_id}"[:64]):
+            continue
+        same = find_recent_duplicate(fields.get("contact_email"), fields.get("contact_phone"))
+        if same:
+            if not same.clickup_task_id:
+                same.clickup_task_id = task_id
+            else:
+                set_setting(f"clickup_dup:{task_id}"[:64], str(same.id))
+            for f in ("contact_name", "contact_email", "contact_phone", "location"):
+                if not getattr(same, f) and fields.get(f):
+                    setattr(same, f, fields[f])
+            db.session.add(Activity(
+                lead_id=same.id, kind="note", done=True, done_at=datetime.utcnow(), assigned_to=same.assigned_to or 1,
+                notes=f"🔗 Ten sam lead przyszedł też z ClickUp (lista DE) — nie dodano duplikatu.\n{fields.get('notes') or ''}".strip()))
+            linked += 1
+            continue
+        created = fields.get("created_at")
+        fresh = created is None or created >= fresh_since
+        lead = Lead(company=fields["company"], clickup_task_id=task_id, stage="Nowy", clickup_pending=not fresh,
+                    assigned_to=fields.get("assigned_to", 1), source=CLICKUP_DE_SOURCE, notes=fields.get("notes", ""),
+                    currency="EUR", market="de")
+        for f in _CLICKUP_REFRESH_FIELDS + ("contact_email2",):
+            if f in fields:
+                setattr(lead, f, fields[f])
+        db.session.add(lead)
+        if fresh:
+            db.session.flush()
+            db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage=lead.stage, changed_by=None))
+        imported += 1
+    db.session.commit()
+    return True, imported, (f"Niemcy (ClickUp DE): {imported} nowych"
+                            + (f", {linked} połączono z istniejącymi" if linked else "")
+                            + (f", {moved} przeniesiono z poczekalni" if moved else ""))
+
+
 def sync_clickup_leads():
-    """Pobiera taski z ClickUp: nowe tworzy jako leady, a te które wciąż czekają na
+    """Główna lista ClickUp (CLICKUP_LIST_ID) i — jeśli ustawiona — niemiecka (CLICKUP_LIST_ID_DE).
+    Błąd jednej listy nie zatrzymuje drugiej. Zwraca (ok, liczba_nowo_zaimportowanych, komunikat)."""
+    results = []
+    main_id = os.environ.get("CLICKUP_LIST_ID", "").strip()
+    de_id, _tok = clickup_de_config()
+    if main_id and os.environ.get("CLICKUP_API_TOKEN", "").strip() and main_id != de_id:
+        try:
+            results.append(_sync_clickup_main(main_id))
+        except ClickUpAPIError as e:
+            results.append((False, 0, f"Lista główna: {e}"))
+    if de_id:
+        try:
+            results.append(sync_clickup_de_leads())
+        except ClickUpAPIError as e:
+            db.session.rollback()
+            results.append((False, 0, f"Lista DE: {e}"))
+    if not results:
+        return False, 0, "Brak konfiguracji: ustaw CLICKUP_API_TOKEN i CLICKUP_LIST_ID (oraz CLICKUP_LIST_ID_DE dla Niemiec)"
+    if not de_id:
+        results.append((True, 0, "Niemcy: lista ClickUp niepodłączona — ustaw w Railway CLICKUP_LIST_ID_DE"))
+    return all(r[0] for r in results), sum(r[1] for r in results), "; ".join(r[2] for r in results)
+
+
+def _sync_clickup_main(list_id):
+    """Pobiera taski z głównej listy ClickUp: nowe tworzy jako leady, a te które wciąż czekają na
     akceptację (jeszcze nie w CRM) odświeża najnowszymi danymi z ClickUp — dzięki temu
-    poprawki w mapowaniu pól obejmują też już zaimportowane, ale nieprzejrzane leady.
-    Zwraca (ok, liczba_nowo_zaimportowanych, komunikat)."""
-    list_id = os.environ.get("CLICKUP_LIST_ID", "").strip()
-    if not os.environ.get("CLICKUP_API_TOKEN", "").strip() or not list_id:
-        return False, 0, "Brak konfiguracji: ustaw CLICKUP_API_TOKEN i CLICKUP_LIST_ID"
+    poprawki w mapowaniu pól obejmują też już zaimportowane, ale nieprzejrzane leady."""
 
     tasks = _clickup_fetch_all_tasks(list_id)
     imported = 0
@@ -1731,7 +1918,7 @@ def _clickup_scheduler():
         time.sleep(interval)
 
 
-if os.environ.get("CLICKUP_API_TOKEN") and os.environ.get("CLICKUP_LIST_ID"):
+if (os.environ.get("CLICKUP_API_TOKEN") and os.environ.get("CLICKUP_LIST_ID")) or clickup_de_config()[0]:
     threading.Thread(target=_clickup_scheduler, daemon=True).start()
 
 
@@ -11655,6 +11842,8 @@ def unhandled_leads(code=None):
     q = all_markets(Lead.query.filter(Lead.market == code, Lead.created_at >= lead_alert_since(),
                                       Lead.handled_at.is_(None), Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
                                       Lead.clickup_pending.isnot(True)))
+    if not CLICKUP_DE_ALERT:  # niemieckie leady z ClickUp: pierwszy kontakt robi Posevo (DE CRM)
+        q = q.filter(db.or_(Lead.source.is_(None), Lead.source != CLICKUP_DE_SOURCE))
     return q.order_by(Lead.created_at).all()
 
 
