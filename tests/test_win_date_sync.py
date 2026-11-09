@@ -57,9 +57,10 @@ def test_fix_and_sync_win_dates(app, pl_db):
     crm.db.session.commit()
 
     done, errors = crm.sync_won_to_pl()
-    assert not errors and done == 3
+    assert not errors and done >= 3  # w bazie testów mogą być też wygrane z innych testów
     for lead in (galley, laima, grey):
         crm.db.session.refresh(lead)
+        assert lead.pl_copy_id
     assert crm.to_local(crm._closing_entry(galley).changed_at).date() == date(2026, 10, 30)
     assert crm.to_local(crm._closing_entry(laima).changed_at).date() == date(2026, 7, 23)
     assert crm._closing_entry(grey).changed_at == datetime(2026, 11, 7, 16, 0)  # GREY bez zmian — wygrany w listopadzie
