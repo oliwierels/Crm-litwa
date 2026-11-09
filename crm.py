@@ -1659,11 +1659,11 @@ _CLICKUP_REFRESH_FIELDS = (
 
 
 # ---- Niemcy: osobna lista ClickUp (formularze z reklam Meta w DE) ----
-# Ta sama lista zasila też osobny DE CRM zespołu Posevo (repo CRM-De) — tam są statusy i maile do klienta.
-# Tutaj leady trafiają do rynku Niemcy (bez maili do klienta: Niemcy mają auto_send=False) i bez okna alarmu
-# „obsłuż dziś”, bo pierwszy kontakt robi Posevo (CLICKUP_DE_ALERT=1 włącza alarm także dla nich).
+# CRM czyta listę wprost z ClickUp (bez żadnego innego CRM po drodze). Leady trafiają do rynku Niemcy jak każde
+# inne: na tablicę i do okna alarmu „obsłuż dziś”. Do klienta nic nie wychodzi samo (Niemcy: auto_send=False).
+# Taski sprzed pierwszego podłączenia listy (zaległe) też trafiają na tablicę, ale bez okna alarmu.
 CLICKUP_DE_SOURCE = "ClickUp DE"
-CLICKUP_DE_ALERT = os.environ.get("CLICKUP_DE_ALERT", "0") == "1"
+CLICKUP_DE_SINCE_KEY = "clickup_de_since"
 CLICKUP_AUTO_ACCEPT_DAYS = int(os.environ.get("CLICKUP_AUTO_ACCEPT_DAYS", "7") or 7)
 CLICKUP_DE_ALIASES = {  # początek słowa w nazwie pola formularza (małe litery) → pole leada
     "company": ["firmenname", "firma", "unternehmen", "company", "nazwa firmy"],
@@ -1773,6 +1773,8 @@ def sync_clickup_de_leads():
     list_id, token = clickup_de_config()
     if not list_id:
         return False, 0, "Brak CLICKUP_LIST_ID_DE (lista ClickUp z niemieckimi leadami)"
+    if not get_setting(CLICKUP_DE_SINCE_KEY):  # pierwsze podłączenie listy — od teraz alarm dla nowych
+        set_setting(CLICKUP_DE_SINCE_KEY, datetime.utcnow().isoformat(timespec="seconds"))
     fresh_since = datetime.utcnow() - timedelta(days=CLICKUP_AUTO_ACCEPT_DAYS)
     imported = linked = moved = 0
     for task in _clickup_fetch_all_tasks(list_id, token=token):
@@ -11842,8 +11844,13 @@ def unhandled_leads(code=None):
     q = all_markets(Lead.query.filter(Lead.market == code, Lead.created_at >= lead_alert_since(),
                                       Lead.handled_at.is_(None), Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
                                       Lead.clickup_pending.isnot(True)))
-    if not CLICKUP_DE_ALERT:  # niemieckie leady z ClickUp: pierwszy kontakt robi Posevo (DE CRM)
-        q = q.filter(db.or_(Lead.source.is_(None), Lead.source != CLICKUP_DE_SOURCE))
+    de_since = get_setting(CLICKUP_DE_SINCE_KEY)
+    if de_since:  # zaległe taski z niemieckiej listy (sprzed jej podłączenia) — na tablicy, ale bez okna alarmu
+        try:
+            cut = datetime.fromisoformat(de_since)
+            q = q.filter(db.or_(Lead.source.is_(None), Lead.source != CLICKUP_DE_SOURCE, Lead.created_at >= cut))
+        except ValueError:
+            pass
     return q.order_by(Lead.created_at).all()
 
 

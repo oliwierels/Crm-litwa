@@ -43,7 +43,7 @@ wystarczy dopisać parę do `lt_strings.py`.
 | `INBOX_IMAP_USER`, `INBOX_IMAP_PASS` | `kontakt@33bots.lt` + hasło — zapytania z maila wpadają jako leady |
 | `ANTHROPIC_API_KEY` | ten sam klucz co w polskim CRM |
 | `CLICKUP_API_TOKEN`, `CLICKUP_LIST_ID` | osobna lista ClickUp dla Litwy (opcjonalnie) |
-| `CLICKUP_LIST_ID_DE` (+ opcjonalnie `CLICKUP_API_TOKEN_DE`) | lista ClickUp z niemieckimi leadami z reklam Meta — ta sama, z której czyta DE CRM Posevo (repo CRM-De, jego `CLICKUP_LIST_ID`). Leady trafiają do rynku Niemcy jako „ClickUp DE”, bez maili do klienta i bez okna alarmu (`CLICKUP_DE_ALERT=1` włącza alarm) |
+| `CLICKUP_LIST_ID_DE` (+ opcjonalnie `CLICKUP_API_TOKEN_DE`, gdy lista jest w innym workspace ClickUp) | lista ClickUp z niemieckimi leadami z reklam Meta. Leady trafiają do rynku Niemcy jako „ClickUp DE” — na tablicę i do okna alarmu jak każde inne (do klienta nic nie wychodzi samo); zaległe taski sprzed podłączenia listy bez okna alarmu |
 | `INFAKT_API_KEY` | ten sam co w polskim CRM (faktury z tej samej JDG) |
 | `PL_DATABASE_URL` | adres bazy **polskiego** CRM — do przeniesienia litewskich leadów (patrz niżej) |
 | `CRM_DEFAULT_LANG` | `pl` (domyślnie) albo `lt` — język dla nowych urządzeń |

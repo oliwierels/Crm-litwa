@@ -69,12 +69,17 @@ def test_german_list_imports_to_market_de(app, monkeypatch):
     assert old.clickup_pending, "starszy niż CLICKUP_AUTO_ACCEPT_DAYS — do „Z ClickUp”"
     assert old.event_date.date() == datetime(2027, 3, 14).date()
 
-    # okno alarmu „obsłuż dziś” bez niemieckich leadów z ClickUp (pierwszy kontakt robi Posevo)
+    # zaległy task (sprzed podłączenia listy) — na tablicy, ale bez okna alarmu; nowy task po podłączeniu — z alarmem
     assert fresh not in crm.unhandled_leads("de")
-    # druga synchronizacja — bez duplikatów
+    new_task = de_task("de-9", "Kevin Schaper", "+491721682442", "kevin@example.de", datetime.utcnow() + timedelta(seconds=5))
+    tasks.append(new_task)
+    ok, n, _ = crm.sync_clickup_leads()
+    new = crm.all_markets(crm.Lead.query).filter_by(clickup_task_id="de-9").one()
+    assert ok and n == 1 and new in crm.unhandled_leads("de"), "nowy niemiecki lead = nasz, okno alarmu jak dla innych"
+    # kolejna synchronizacja — bez duplikatów
     ok, n, _ = crm.sync_clickup_leads()
     assert ok and n == 0
-    assert crm.all_markets(crm.Lead.query).filter(crm.Lead.clickup_task_id.in_(["de-1", "de-2"])).count() == 2
+    assert crm.all_markets(crm.Lead.query).filter(crm.Lead.clickup_task_id.in_(["de-1", "de-2", "de-9"])).count() == 3
 
 
 def test_german_task_already_pending_from_main_list_moves_to_de(app, monkeypatch):
