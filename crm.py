@@ -1209,6 +1209,7 @@ def _realize_scheduler():
                     sales_automation_pass()
                 run_offer_audit_once()
                 cleanup_offer_audit_steps()
+                clear_form_day_event_dates()
                 db.session.remove()
         except Exception:
             pass
@@ -1615,17 +1616,20 @@ def _clickup_task_to_lead(task):
             break
     fields["assigned_to"] = assigned_to
 
-    due = task.get("due_date")
-    if due:
-        try:
-            fields["event_date"] = datetime.utcfromtimestamp(int(due) / 1000)
-        except (TypeError, ValueError):
-            pass
-
     created = task.get("date_created")
     if created:
         try:
             fields["created_at"] = datetime.utcfromtimestamp(int(created) / 1000)
+        except (TypeError, ValueError):
+            pass
+
+    # termin taska ustawiony na dzień zgłoszenia (formularz / automat w ClickUp) to nie data wydarzenia — zostaje puste
+    due = task.get("due_date")
+    if due and "event_date" not in fields:
+        try:
+            due_dt = datetime.utcfromtimestamp(int(due) / 1000)
+            if not fields.get("created_at") or to_local(due_dt).date() != to_local(fields["created_at"]).date():
+                fields["event_date"] = due_dt
         except (TypeError, ValueError):
             pass
 
@@ -3460,6 +3464,30 @@ def cleanup_offer_audit_steps():
     set_setting(OFFER_AUDIT_CLEANUP_KEY, f"{len(removed)} @ {datetime.utcnow():%Y-%m-%d %H:%M}")
     db.session.commit()
     return removed
+
+
+FORM_DAY_DATES_KEY = "form_day_event_dates_cleared_v1"
+
+
+def clear_form_day_event_dates():
+    """Jednorazowo: nowe leady z ClickUp dostawały datę wydarzenia = dzień zgłoszenia (termin taska), a nie podaną
+    przez klienta. Leady na etapie Nowy z taką datą (ten sam dzień co wpłynięcie) — data wydarzenia czyszczona."""
+    if get_setting(FORM_DAY_DATES_KEY) or not _claim_once(FORM_DAY_DATES_KEY + "_lock"):
+        return None
+    cleared = []
+    for lead in Lead.query.filter(Lead.stage == "Nowy", Lead.clickup_task_id.isnot(None), Lead.event_date.isnot(None),
+                                  Lead.created_at.isnot(None)).all():
+        day = to_local(lead.event_date).date()
+        days = {d.event_date for d in lead.event_days}
+        if day != to_local(lead.created_at).date() or not days <= {day}:
+            continue
+        lead.event_date = lead.event_end_date = None
+        for d in list(lead.event_days):
+            db.session.delete(d)
+        cleared.append(lead.id)
+    set_setting(FORM_DAY_DATES_KEY, f"{len(cleared)}: {', '.join(map(str, cleared))}"[:500])
+    db.session.commit()
+    return cleared
 
 
 def run_offer_audit_once():
