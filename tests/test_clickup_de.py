@@ -38,8 +38,8 @@ def de_task(tid, name, phone, email, created, due=None, extra_fields=()):
 
 def test_german_list_imports_to_market_de(app, monkeypatch):
     now = datetime.utcnow().replace(microsecond=0)
-    tasks = [de_task("de-1", "Norbert Ratka", "+4915207690833", "norbert@example.de", now - timedelta(hours=3),
-                     due=now - timedelta(hours=1)),
+    tasks = [de_task("de-1", "Norbert Ratka", "+4915207690833", "norbert@example.de", now - timedelta(minutes=3),
+                     due=now - timedelta(minutes=1)),
              de_task("de-2", "Olga Koop", "+491786779159", "olga@example.de", now - timedelta(days=12),
                      extra_fields=[{"name": "Veranstaltungsdatum", "type": "date",
                                     "value": ms(datetime(2027, 3, 14))}])]
@@ -64,18 +64,17 @@ def test_german_list_imports_to_market_de(app, monkeypatch):
     assert fresh.market == "de" and fresh.source == crm.CLICKUP_DE_SOURCE and fresh.currency == "EUR"
     assert fresh.contact_phone == "+4915207690833" and fresh.contact_email == "norbert@example.de"
     assert fresh.contact_name == "Norbert Ratka" and "Ihre Antwort: Firmenfeier" in fresh.notes
-    assert not fresh.clickup_pending, "świeży lead od razu na tablicy"
+    assert not fresh.clickup_pending and not old.clickup_pending, "wszystkie od razu na tablicy"
     assert fresh.event_date is None, "termin taska = dzień zgłoszenia to nie data wydarzenia"
-    assert old.clickup_pending, "starszy niż CLICKUP_AUTO_ACCEPT_DAYS — do „Z ClickUp”"
     assert old.event_date.date() == datetime(2027, 3, 14).date()
-
-    # zaległy task (sprzed podłączenia listy) — na tablicy, ale bez okna alarmu; nowy task po podłączeniu — z alarmem
-    assert fresh not in crm.unhandled_leads("de")
+    assert old.created_at >= now and "Zgłoszenie z ClickUp z" in old.notes, "zaległe: w CRM od chwili importu"
+    # wszystkie (także zaległe) w oknie „obsłuż dziś”
+    assert fresh in crm.unhandled_leads("de") and old in crm.unhandled_leads("de")
     new_task = de_task("de-9", "Kevin Schaper", "+491721682442", "kevin@example.de", datetime.utcnow() + timedelta(seconds=5))
     tasks.append(new_task)
     ok, n, _ = crm.sync_clickup_leads()
     new = crm.all_markets(crm.Lead.query).filter_by(clickup_task_id="de-9").one()
-    assert ok and n == 1 and new in crm.unhandled_leads("de"), "nowy niemiecki lead = nasz, okno alarmu jak dla innych"
+    assert ok and n == 1 and new in crm.unhandled_leads("de")
     # kolejna synchronizacja — bez duplikatów
     ok, n, _ = crm.sync_clickup_leads()
     assert ok and n == 0

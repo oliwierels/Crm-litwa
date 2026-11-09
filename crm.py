@@ -1659,11 +1659,11 @@ _CLICKUP_REFRESH_FIELDS = (
 
 
 # ---- Niemcy: osobna lista ClickUp (formularze z reklam Meta w DE) ----
-# CRM czyta listę wprost z ClickUp (bez żadnego innego CRM po drodze). Leady trafiają do rynku Niemcy jak każde
-# inne: na tablicę i do okna alarmu „obsłuż dziś”. Do klienta nic nie wychodzi samo (Niemcy: auto_send=False).
-# Taski sprzed pierwszego podłączenia listy (zaległe) też trafiają na tablicę, ale bez okna alarmu.
+# CRM czyta listę wprost z ClickUp (bez żadnego innego CRM po drodze). Wszystkie leady z listy trafiają do rynku
+# Niemcy od razu na tablicę i do okna alarmu „obsłuż dziś”; zaległe (wcześniejsze zgłoszenia) są w CRM od chwili
+# importu, a data zgłoszenia z ClickUp jest w notatce. Do klienta nic nie wychodzi samo (Niemcy: auto_send=False).
 CLICKUP_DE_SOURCE = "ClickUp DE"
-CLICKUP_DE_SINCE_KEY = "clickup_de_since"
+CLICKUP_DE_LATE_MIN = 15  # zgłoszenie starsze niż tyle minut w chwili importu = zaległe
 CLICKUP_AUTO_ACCEPT_DAYS = int(os.environ.get("CLICKUP_AUTO_ACCEPT_DAYS", "7") or 7)
 CLICKUP_DE_ALIASES = {  # początek słowa w nazwie pola formularza (małe litery) → pole leada
     "company": ["firmenname", "firma", "unternehmen", "company", "nazwa firmy"],
@@ -1768,14 +1768,11 @@ def _clickup_task_to_lead_de(task):
 
 
 def sync_clickup_de_leads():
-    """Niemiecka lista ClickUp → leady rynku Niemcy. Świeże (CLICKUP_AUTO_ACCEPT_DAYS) od razu na tablicę,
-    starsze do „Z ClickUp”. Bez duplikatów (task, telefon, e-mail). Zwraca (ok, nowe, komunikat)."""
+    """Niemiecka lista ClickUp → leady rynku Niemcy, wszystkie od razu na tablicę (zaległe w CRM od chwili importu).
+    Bez duplikatów (task, telefon, e-mail). Zwraca (ok, nowe, komunikat)."""
     list_id, token = clickup_de_config()
     if not list_id:
         return False, 0, "Brak CLICKUP_LIST_ID_DE (lista ClickUp z niemieckimi leadami)"
-    if not get_setting(CLICKUP_DE_SINCE_KEY):  # pierwsze podłączenie listy — od teraz alarm dla nowych
-        set_setting(CLICKUP_DE_SINCE_KEY, datetime.utcnow().isoformat(timespec="seconds"))
-    fresh_since = datetime.utcnow() - timedelta(days=CLICKUP_AUTO_ACCEPT_DAYS)
     imported = linked = moved = 0
     for task in _clickup_fetch_all_tasks(list_id, token=token):
         task_id = task.get("id")
@@ -1788,7 +1785,7 @@ def sync_clickup_de_leads():
             if existing.clickup_pending and existing.stage == "Nowy" and existing.market != "de":
                 existing.market, existing.source = "de", CLICKUP_DE_SOURCE
                 moved += 1
-            if existing.clickup_pending and (existing.created_at or datetime.utcnow()) >= fresh_since:
+            if existing.clickup_pending:  # z niemieckiej listy wszystko widoczne od razu
                 existing.clickup_pending = False
                 moved += 1
             continue
@@ -1808,18 +1805,21 @@ def sync_clickup_de_leads():
                 notes=f"🔗 Ten sam lead przyszedł też z ClickUp (lista DE) — nie dodano duplikatu.\n{fields.get('notes') or ''}".strip()))
             linked += 1
             continue
-        created = fields.get("created_at")
-        fresh = created is None or created >= fresh_since
-        lead = Lead(company=fields["company"], clickup_task_id=task_id, stage="Nowy", clickup_pending=not fresh,
+        created = fields.pop("created_at", None)
+        lead = Lead(company=fields["company"], clickup_task_id=task_id, stage="Nowy", clickup_pending=False,
                     assigned_to=fields.get("assigned_to", 1), source=CLICKUP_DE_SOURCE, notes=fields.get("notes", ""),
                     currency="EUR", market="de")
         for f in _CLICKUP_REFRESH_FIELDS + ("contact_email2",):
             if f in fields:
                 setattr(lead, f, fields[f])
+        if created and created >= datetime.utcnow() - timedelta(minutes=CLICKUP_DE_LATE_MIN):
+            lead.created_at = created
+        elif created:  # zaległe zgłoszenie: w CRM od teraz (okno „obsłuż dziś”), data z ClickUp w notatce
+            lead.notes = (f"📥 Zgłoszenie z ClickUp z {to_local(created):%d.%m.%Y %H:%M} — zaległe, w CRM od "
+                          f"{to_local(datetime.utcnow()):%d.%m.%Y}.\n" + (lead.notes or "")).strip()
         db.session.add(lead)
-        if fresh:
-            db.session.flush()
-            db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage=lead.stage, changed_by=None))
+        db.session.flush()
+        db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage=lead.stage, changed_by=None))
         imported += 1
     db.session.commit()
     return True, imported, (f"Niemcy (ClickUp DE): {imported} nowych"
@@ -11844,13 +11844,6 @@ def unhandled_leads(code=None):
     q = all_markets(Lead.query.filter(Lead.market == code, Lead.created_at >= lead_alert_since(),
                                       Lead.handled_at.is_(None), Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
                                       Lead.clickup_pending.isnot(True)))
-    de_since = get_setting(CLICKUP_DE_SINCE_KEY)
-    if de_since:  # zaległe taski z niemieckiej listy (sprzed jej podłączenia) — na tablicy, ale bez okna alarmu
-        try:
-            cut = datetime.fromisoformat(de_since)
-            q = q.filter(db.or_(Lead.source.is_(None), Lead.source != CLICKUP_DE_SOURCE, Lead.created_at >= cut))
-        except ValueError:
-            pass
     return q.order_by(Lead.created_at).all()
 
 
