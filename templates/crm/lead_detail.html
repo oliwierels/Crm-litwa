@@ -238,12 +238,29 @@
           {% if lq.over8 %}<div style="color:var(--yellow);margin-bottom:6px">⚠️ Ponad 8 h — policzone jak 8 h, sprawdź w kalkulatorze.</div>{% endif %}
           <details style="margin-bottom:8px"><summary style="cursor:pointer;color:var(--accent)">Rozbicie ceny</summary>
             <div style="white-space:pre-wrap;color:var(--muted);margin-top:4px">{{ lq.breakdown }}</div></details>
-          {% if msgr %}<textarea id="lt-msg" rows="9" style="width:100%;font-size:12.5px;line-height:1.45">{{ lq.message }}</textarea>{% endif %}
+          {% if msgr %}<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;font-size:12px;color:var(--muted)">
+            Wiadomość:
+            <button type="button" class="btn btn-ghost btn-sm" id="lt-v-hello" style="font-weight:700" onclick="ltVersion('hello')" title="Pierwsza wiadomość: powitanie i pytanie o wydarzenie, bez ceny">👋 Powitanie</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="lt-v-price" onclick="ltVersion('price')" title="Gdy klient pyta o cenę">💶 Z ceną</button>
+          </div>
+          <textarea id="lt-msg" rows="9" style="width:100%;font-size:12.5px;line-height:1.45">{{ lq.message }}</textarea>
+          <script>
+          const LT_VERSIONS = {hello: {{ lq.message|tojson }}, price: {{ lq.message_price|tojson }}};
+          function ltVersion(v) {
+            const box = document.getElementById('lt-msg');
+            if (box.value !== LT_VERSIONS.hello && box.value !== LT_VERSIONS.price && box.value.trim()
+                && !confirm('Podmienić tekst? Twoje zmiany w okienku znikną.')) return;
+            box.value = LT_VERSIONS[v];
+            document.getElementById('lt-v-hello').style.fontWeight = v === 'hello' ? '700' : '400';
+            document.getElementById('lt-v-price').style.fontWeight = v === 'price' ? '700' : '400';
+          }
+          </script>{% endif %}
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
             {% if msgr %}<button type="button" class="btn btn-secondary btn-sm" onclick="ltMsg('copy')">📋 Kopiuj</button>{% endif %}
             {% if msgr and lq.whatsapp and wa_ready() %}<button type="button" id="wa-api-btn" class="btn btn-sm" style="background:#25D366;color:#06210f;font-weight:700" onclick="waSend()">🚀 Wyślij przez WhatsApp</button>{% endif %}
             {% if msgr and lq.whatsapp %}<button type="button" class="btn btn-sm" style="{{ 'background:none;border:1px solid #25D366;color:#25D366' if wa_ready() else 'background:#25D366;color:#06210f;font-weight:700' }}" onclick="ltMsg('whatsapp')">WhatsApp{{ ' (telefon)' if wa_ready() }}</button>{% endif %}
-            {% if msgr and lq.viber %}<button type="button" class="btn btn-sm" style="background:#7360F2;color:#fff;font-weight:700" onclick="ltMsg('viber')">Viber</button>{% endif %}
+            {% if msgr and lq.viber %}<button type="button" class="btn btn-sm" style="background:#7360F2;color:#fff;font-weight:700" onclick="ltMsg('viber')" title="Otwiera czat w Viber Desktop na tym komputerze">Viber</button>
+            <button type="button" class="btn btn-sm" style="background:none;border:1px solid #7360F2;color:#7360F2;font-weight:700" onclick="ltViberQr()" title="Kod QR: zeskanuj telefonem i wyślij z Vibera na telefonie">📱 Viber na telefonie</button>{% endif %}
             {% if msgr and lq.sms %}<button type="button" class="btn btn-sm" style="background:#0ea5e9;color:#fff;font-weight:700" onclick="ltMsg('sms')" title="Otwiera SMS z gotową treścią: na telefonie, na Macu (Wiadomości) albo w Windows (Łącze z telefonem)">SMS</button>{% endif %}
             {% if not lead.value_pln or lead.value_pln|int != lq.price %}
             <form method="post" action="{{ url_for('crm_lt_set_price', lead_id=lead.id) }}" style="display:inline">
@@ -273,8 +290,20 @@
           <div id="lt-qmail" style="color:var(--yellow);margin-top:8px">Brak skrzynki {{ mkt.domain }} do wysłania wyceny (MAIL_PASSWORD w Railway).</div>
           {% endif %}
           {% if msgr %}<div id="lt-msg-info" style="color:var(--muted);margin-top:6px">
-            {% if not lq.whatsapp %}Brak poprawnego numeru telefonu — skopiuj wiadomość i wyślij ręcznie.{% else %}WhatsApp i SMS otworzą się z gotową wiadomością. Viber otworzy czat z klientem — jeśli tekst się nie wpisze sam, jest skopiowany: Ctrl+V i Enter. Z komputera Viber działa po zainstalowaniu Viber Desktop.{% endif %}
+            {% if not lq.whatsapp %}Brak poprawnego numeru telefonu — skopiuj wiadomość i wyślij ręcznie.{% else %}WhatsApp i SMS otworzą się z gotową wiadomością. Viber otworzy czat z klientem w Viber Desktop — jeśli tekst się nie wpisze sam, jest skopiowany: Ctrl+V i Enter. Bez Viber Desktop: 📱 Viber na telefonie.{% endif %}
+          </div>
+          {% if lq.viber %}<div id="lt-viber-help" hidden style="margin-top:8px;padding:10px;border:1px solid #7360F2;border-radius:8px">
+            <div id="lt-viber-why" style="font-weight:600;margin-bottom:6px"></div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
+              <div id="lt-viber-qr" style="background:#fff;color:#111;padding:4px;border-radius:6px;line-height:0;min-width:120px;min-height:120px;display:flex;align-items:center;justify-content:center"></div>
+              <div style="flex:1;min-width:220px;line-height:1.5">
+                <b>📱 Z telefonu:</b> zeskanuj kod aparatem → otworzy się strona z tą wiadomością → „Otwórz Viber” → Wyślij. Wysyłka zapisze się w komentarzach. Kod ważny 30 min.<br>
+                <b>💻 Z komputera:</b> zainstaluj Viber Desktop (<a href="https://www.viber.com/" target="_blank" rel="noopener" style="color:var(--accent)">viber.com</a> → Download) i połącz go z telefonem — przy pierwszym uruchomieniu pokaże kod do zeskanowania Viberem w telefonie. Potem kliknij Viber jeszcze raz, a w okienku przeglądarki „Otworzyć Viber?” wybierz Otwórz.<br>
+                <a href="{{ lq.viber }}" style="color:var(--accent)">Otwórz czat bez tekstu</a> (tekst jest skopiowany — Ctrl+V)
+              </div>
+            </div>
           </div>{% endif %}
+          {% endif %}
           <script>
           function waSend() {
             const btn = document.getElementById('wa-api-btn'), info = document.getElementById('lt-msg-info');
@@ -289,20 +318,62 @@
                 else { info.textContent = '⚠️ ' + (d.error || 'nie wyszło'); btn.disabled = false; }
               }).catch(() => { info.textContent = '⚠️ Błąd połączenia — spróbuj jeszcze raz.'; btn.disabled = false; });
           }
+          function ltLogSent(kind, text) {
+            const fd = new FormData(); fd.append('channel', kind); fd.append('text', text);
+            return fetch('{{ url_for('crm_lt_message_sent', lead_id=lead.id) }}', {method: 'POST', body: fd});
+          }
           function ltMsg(kind) {
             const text = document.getElementById('lt-msg').value;
             const done = () => {
               const info = document.getElementById('lt-msg-info');
               if (kind === 'copy') { info.textContent = '✅ Skopiowano'; return; }
-              const fd = new FormData(); fd.append('channel', kind); fd.append('text', text);
-              fetch('{{ url_for('crm_lt_message_sent', lead_id=lead.id) }}', {method: 'POST', body: fd});
-              info.textContent = '✅ Zapisano w komentarzach leada' + (kind === 'viber' ? ' — jeśli tekstu nie ma w czacie, wklej go (Ctrl+V)' : '');
+              if (kind === 'viber') return;  // zapis dopiero, gdy Viber faktycznie się otworzy (ltViber)
+              ltLogSent(kind, text);
+              info.textContent = '✅ Zapisano w komentarzach leada';
             };
             (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).catch(() => {}).finally(done);
             if (kind === 'whatsapp') window.open('https://wa.me/{{ lq.whatsapp.split('wa.me/')[1].split('?')[0] if lq.whatsapp else '' }}?text=' + encodeURIComponent(text), '_blank');
-            // treść z okienka (mogła być poprawiona); draft = gotowy tekst w czacie Vibera (jeśli wersja Vibera to obsługuje)
-            if (kind === 'viber') window.location.href = {{ lq.viber|tojson }} + '&draft=' + encodeURIComponent(text);
+            if (kind === 'viber') ltViber(text);
             if (kind === 'sms') window.location.href = {{ (lq.sms.split('?')[0] if lq.sms else '')|tojson }} + '?&body=' + encodeURIComponent(text);
+          }
+          // Viber Desktop: gdy się otworzy, okno CRM traci fokus. Brak reakcji w 2,5 s = nie ma Vibera na tym komputerze
+          // (albo przeglądarka nie zapytała) → podpowiedź + kod QR na telefon. Treść z okienka (mogła być poprawiona).
+          let ltViberStop = null;
+          function ltViber(text) {
+            const info = document.getElementById('lt-msg-info'), help = document.getElementById('lt-viber-help');
+            if (ltViberStop) ltViberStop();
+            let opened = false, t1 = null, t2 = null;
+            const stop = () => {
+              window.removeEventListener('blur', leave); document.removeEventListener('visibilitychange', vis);
+              clearTimeout(t1); clearTimeout(t2); ltViberStop = null;
+            };
+            const leave = () => {
+              if (opened) return;
+              opened = true; stop(); help.hidden = true;
+              ltLogSent('viber', text);
+              info.textContent = '✅ Viber otwarty — zapisano w komentarzach leada. Jeśli tekstu nie ma w czacie: Ctrl+V i Enter.';
+            };
+            const vis = () => { if (document.hidden) leave(); };
+            window.addEventListener('blur', leave); document.addEventListener('visibilitychange', vis);
+            t1 = setTimeout(() => {
+              if (opened) return;
+              info.textContent = '⚠️ Viber się nie otworzył na tym komputerze — wyślij z telefonu (kod niżej) albo zainstaluj Viber Desktop.';
+              ltViberQr(text, 'Viber się nie otworzył?');
+            }, 2500);
+            t2 = setTimeout(stop, 120000);
+            ltViberStop = stop;
+            window.location.href = {{ lq.viber|tojson }} + '&draft=' + encodeURIComponent(text);
+          }
+          function ltViberQr(text, why) {
+            const help = document.getElementById('lt-viber-help'), box = document.getElementById('lt-viber-qr');
+            help.hidden = false;
+            document.getElementById('lt-viber-why').textContent = why || '📱 Wyślij tę wiadomość z Vibera na telefonie';
+            box.textContent = 'Generuję kod…';
+            const fd = new FormData(); fd.append('text', text === undefined ? document.getElementById('lt-msg').value : text);
+            fetch('{{ url_for('crm_viber_qr', lead_id=lead.id) }}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+              .then(r => r.json()).then(d => { if (d.ok) box.innerHTML = d.svg; else box.textContent = '⚠️ ' + (d.error || 'nie wyszło'); })
+              .catch(() => { box.textContent = '⚠️ Błąd połączenia — spróbuj jeszcze raz.'; });
+            help.scrollIntoView({behavior: 'smooth', block: 'nearest'});
           }
           </script>
         {% else %}

@@ -837,7 +837,7 @@ def _inject_ui_lang():
 # ---------- LOGOWANIE (włącza się, gdy w Railway jest zmienna CRM_PASSWORD) ----------
 
 # strony dostępne bez logowania: konektor MCP (chroni go MCP_SECRET) i samo logowanie
-PUBLIC_ENDPOINTS = {"static", "index", "crm_login", "crm_logout", "mcp_endpoint", "lead_form", "set_ui_lang", "whatsapp_webhook"}
+PUBLIC_ENDPOINTS = {"static", "index", "crm_login", "crm_logout", "mcp_endpoint", "lead_form", "set_ui_lang", "whatsapp_webhook", "viber_phone"}
 LOGIN_MAX_FAILS = 8
 LOGIN_WINDOW_S = 15 * 60
 _login_fails = {}
@@ -9975,6 +9975,16 @@ def lt_offer_message(lead, when, time_txt, place, price_txt, code=None):
     return "\n".join(lines)
 
 
+def lt_welcome_message(lead, when, code=None):
+    """Pierwsza wiadomość na Viber / WhatsApp: powitanie od handlowca i pytanie o wydarzenie, bez ceny (cena w rozmowie)."""
+    m = markets.get(code or lead_market(lead))
+    owner = (USERS_BY_ID.get(lead.assigned_to) or USERS[0]) if lead else USERS[0]
+    full = owner.get("full_name") or owner["name"]
+    lines = [m["msg_hello"], "", m["msg_intro"].format(name=full.split()[0], when=_when_phrase(when, m["code"])), "",
+             m["msg_question"], "", m["msg_bye"], f"{full}, 33bots"]
+    return "\n".join(lines)
+
+
 def lt_phone_digits(phone, code="lt"):
     """Numer do linków wa.me / viber: '+370 612 34567' / '861234567' → '37061234567', '0151 2345678' → '491512345678'."""
     m = markets.get(code)
@@ -10039,6 +10049,7 @@ def lt_quote(lead, remote_budget=1):
     price_txt = f"{price:,}".replace(",", " ")
     when = _lt_dates_text(lead)
     message = lt_offer_message(lead, when, time_txt, place, price_txt, code=code)
+    welcome = lt_welcome_message(lead, when, code)  # pierwsza wiadomość na komunikator — bez ceny
     digits = lt_phone_digits(lead.contact_phone, code)
     from urllib.parse import quote as _q
     template_params = [when or m["soon"], time_txt, place[:200], price_txt]
@@ -10048,10 +10059,11 @@ def lt_quote(lead, remote_budget=1):
         "override": bool(ov), "calc_price": calc_price,
         "hours_src": hours_src, "assumed": hours_src == "założone", "departure": opt["label"],
         "km": int(round(opt["km"])), "days": days, "when": when, "over8": dur > max(pricing.HOUR_FACTORS),
-        "breakdown": pricing.describe(q, opt["label"], res["place"] or place), "message": message,
-        "whatsapp": f"https://wa.me/{digits}?text={_q(message)}" if digits else "",
+        "breakdown": pricing.describe(q, opt["label"], res["place"] or place),
+        "message": welcome, "message_price": message,
+        "whatsapp": f"https://wa.me/{digits}?text={_q(welcome)}" if digits else "",
         "viber": f"viber://chat?number=%2B{digits}" if digits else "",
-        "sms": f"sms:+{digits}?&body={_q(message)}" if digits else "",
+        "sms": f"sms:+{digits}?&body={_q(welcome)}" if digits else "",
         "calc_url": url_for("crm_calculator", lead=lead.id, cel=place, h=tier,
                             od=pricing.fmt_hour(start) if start is not None else None, dni=days),
     }
@@ -10117,6 +10129,85 @@ def crm_lt_message_sent(lead_id):
                             notes=f"💬 Wiadomość z ceną wysłana na {channel}\n---\n{text}"))
     db.session.commit()
     return jsonify({"ok": True})
+
+
+# ---------- VIBER Z TELEFONU (kod QR) ----------
+# Piszemy z własnego Vibera (nie bot — Bot API pisze tylko do subskrybentów). Na komputerze link viber:// działa tylko
+# z zainstalowanym Viber Desktop. Bez niego: kod QR w leadzie → telefon otwiera stronę z gotowym tekstem i przyciskiem
+# „Otwórz Viber” (czat z numerem klienta). Losowy kod, ważny 30 min, bez logowania; nic nie wychodzi samo.
+VIBER_QR_PREFIX = "viber_qr:"
+VIBER_QR_TTL = timedelta(minutes=30)
+
+
+def qr_svg(data, px=4, quiet=4):
+    """Kod QR jako SVG (czarny na białym — skanuje się też przy ciemnym motywie)."""
+    from reportlab.graphics.barcode.qr import QrCodeWidget
+    w = QrCodeWidget(data, barLevel="M")
+    w.draw()
+    q = w.qr
+    n = q.getModuleCount()
+    size = n + 2 * quiet
+    path = "".join(f"M{c + quiet},{r + quiet}h1v1h-1z" for r in range(n) for c in range(n) if q.isDark(r, c))
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" width="{size * px}" '
+            f'height="{size * px}" shape-rendering="crispEdges" role="img" aria-label="Kod QR">'
+            f'<rect width="{size}" height="{size}" fill="#fff"/><path d="{path}" fill="#000"/></svg>')
+
+
+def _viber_qr_entry(code):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,40}", code or ""):
+        return None
+    row = db.session.get(AppSetting, VIBER_QR_PREFIX + code)
+    try:
+        d = json.loads(row.value) if row and row.value else None
+        ts = datetime.fromisoformat(d["ts"]) if d else None
+    except (ValueError, KeyError, TypeError):
+        return None
+    return d if ts and datetime.utcnow() - ts <= VIBER_QR_TTL else None
+
+
+@app.route("/crm/leads/<int:lead_id>/viber-qr", methods=["POST"])
+def crm_viber_qr(lead_id):
+    """Kod QR: ta sama wiadomość (z okienka, po poprawkach) do wysłania z Vibera na telefonie."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    digits = lt_phone_digits(lead.contact_phone, lead_market(lead))
+    if not digits:
+        return jsonify({"ok": False, "error": "Brak poprawnego numeru telefonu klienta"}), 400
+    for row in AppSetting.query.filter(AppSetting.key.startswith(VIBER_QR_PREFIX, autoescape=True)).all():
+        if row.key.startswith(VIBER_QR_PREFIX) and not _viber_qr_entry(row.key[len(VIBER_QR_PREFIX):]):
+            db.session.delete(row)  # stare kody
+    code = secrets.token_urlsafe(12)
+    set_setting(VIBER_QR_PREFIX + code, json.dumps({
+        "lead": lead.id, "digits": digits, "text": (request.form.get("text") or "").replace("\r\n", "\n").strip()[:3000],
+        "ts": datetime.utcnow().isoformat(), "user": get_current_user(request)["id"]}))
+    db.session.commit()
+    url = url_for("viber_phone", code=code, _external=True)
+    return jsonify({"ok": True, "url": url, "svg": qr_svg(url)})
+
+
+@app.route("/f/v/<code>", methods=["GET", "POST"])
+def viber_phone(code):
+    """Strona na telefon (z kodu QR): gotowy tekst + „Otwórz Viber”. POST = klik „Otwórz Viber” → wpis w leadzie."""
+    d = _viber_qr_entry(code)
+    if not d:
+        if request.method == "POST":
+            return jsonify({"ok": False}), 410
+        return render_template("crm/viber_phone.html", d=None), 410
+    if request.method == "POST":
+        if not d.get("logged"):
+            lead = all_markets(Lead.query).filter_by(id=d["lead"]).first()
+            if lead:
+                db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=datetime.utcnow(),
+                                        assigned_to=d.get("user"),
+                                        notes=f"💬 Wiadomość z ceną wysłana na Viber (z telefonu)\n---\n{d['text']}"))
+            d["logged"] = True
+            set_setting(VIBER_QR_PREFIX + code, json.dumps(d))
+            db.session.commit()
+        return jsonify({"ok": True})
+    plain = f"viber://chat?number=%2B{d['digits']}"
+    resp = make_response(render_template("crm/viber_phone.html", d=d, plain=plain,
+                                         viber=plain + (f"&draft={quote(d['text'], safe='')}" if d["text"] else "")))
+    resp.headers.update({"Cache-Control": "no-store", "X-Robots-Tag": "noindex", "Referrer-Policy": "no-referrer"})
+    return resp
 
 
 app.jinja_env.globals.update(lt_quote=lt_quote)
@@ -10186,7 +10277,7 @@ def wa_send_quote(lead, text, actor_id):
                        or markets.get(code)["whatsapp_lang"])},
                                 "components": [{"type": "body", "parameters": params}]}}
         how = f"szablon „{name}”"
-        text = q.get("message") or text
+        text = q.get("message_price") or text
     msg_id, err = _wa_post(payload)
     if err:
         return err

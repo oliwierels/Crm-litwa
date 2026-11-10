@@ -96,6 +96,11 @@ MARKETS = {
         "msg_included": "Į kainą įskaičiuota: atvykimas, asmeninis operatorius, roboto pritaikymas jūsų renginiui "
                         "ir techninė pagalba vietoje.",
         "msg_reserve": "Ar rezervuojame šią datą? Mielai atsakysiu į klausimus.",
+        # pierwsza wiadomość (powitanie od handlowca, bez ceny — cena w rozmowie)
+        "msg_intro": "Čia {name} iš 33bots. Gavau jūsų užklausą dėl humanoidinio roboto Unitree G1 jūsų renginiui{when}.",
+        "msg_question": "Papasakokite trumpai apie renginį – kokia proga ir ką norėtumėte, kad robotas darytų? "
+                        "Tada pasiūlysiu geriausią variantą.",
+        "msg_bye": "Gražios dienos!",
         "soon": "artimiausiu metu",
         # --- kampanie ---
         "campaign_body": "Laba diena,\n\n\n\nPagarbiai,\n",
@@ -204,6 +209,11 @@ MARKETS = {
         "msg_included": "Im Preis enthalten: Anreise, ein eigener Operator, Anpassung des Roboters an Ihre Veranstaltung "
                         "und technischer Support vor Ort.",
         "msg_reserve": "Sollen wir den Termin für Sie reservieren? Ich beantworte gerne Ihre Fragen.",
+        "msg_intro": "Hier ist {name} von 33bots. Ich habe Ihre Anfrage zum humanoiden Roboter Unitree G1 für Ihre "
+                     "Veranstaltung{when} erhalten.",
+        "msg_question": "Erzählen Sie mir kurz mehr: Was ist der Anlass und was soll der Roboter bei Ihnen machen? "
+                        "Dann schlage ich Ihnen die passende Variante vor.",
+        "msg_bye": "Einen schönen Tag noch!",
         "soon": "nach Absprache",
         "campaign_body": "Guten Tag,\n\n\n\nMit freundlichen Grüßen\n",
         "campaign_footer": "\n\n—\nFalls Sie keine solchen Nachrichten mehr erhalten möchten, antworten Sie einfach mit „NEIN“.",
