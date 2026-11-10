@@ -98,7 +98,7 @@ MARKETS = {
         "msg_reserve": "Ar rezervuojame šią datą? Mielai atsakysiu į klausimus.",
         # pierwsza wiadomość (powitanie od handlowca, bez ceny — cena w rozmowie)
         "msg_intro": "Čia {name} iš 33bots. Gavau jūsų užklausą dėl humanoidinio roboto Unitree G1 jūsų renginiui{when}.",
-        "msg_question": "Papasakokite trumpai apie renginį – kokia proga ir ką norėtumėte, kad robotas darytų? "
+        "msg_question": "Papasakokite trumpai apie renginį: kokia proga ir ką norėtumėte, kad robotas darytų? "
                         "Tada pasiūlysiu geriausią variantą.",
         "msg_bye": "Gražios dienos!",
         "soon": "artimiausiu metu",

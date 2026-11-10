@@ -2983,7 +2983,7 @@ def followup_draft(lead, sender, lang=None):
     signature = "\n".join(x for x in (sender["full_name"], "33Bots", sender["email"],
                                        mail_phone(sender["phone"], lead_market(lead))) if x)
     body = f"{t['hello']}\n\n{first}\n\n{t['help']}\n\n{t['bye']}\n{signature}"
-    return subject, body
+    return human_text(subject), human_text(body)
 
 
 @app.route("/crm/api/activity/<int:aid>/followup", methods=["GET", "POST"])
@@ -5412,7 +5412,7 @@ def journey_draft(j, lead, kind):
     return {
         "kind": kind, "label": journey.EMAIL_KINDS[kind], "company": lead.company,
         "to": ", ".join(lead.emails), "recipients": lead.emails, "from": f"{owner.get('full_name') or owner['name']} <{login or owner.get('email', '')}>",
-        "subject": subject, "body": body, "attachments": attachments, "warnings": warnings,
+        "subject": human_text(subject), "body": human_text(body), "attachments": attachments, "warnings": warnings,
         "fields": journey_contract_fields(j, lead) if kind in ("umowa", "umowa_baza") else None,
         "field_labels": journey.EDITABLE_FIELDS if kind in ("umowa", "umowa_baza") else [],
     }
@@ -6622,7 +6622,7 @@ def journey_invoice_draft(j, lead):
         warnings.append("Brak INFAKT_API_KEY w Railway — faktura nie wyjdzie, dopóki nie dodasz klucza API z inFakt.")
     if j.invoice_uuid and not j.invoice_uuid.startswith("task:"):
         warnings.append(f"Faktura {j.invoice_number or ''} jest już wystawiona — drugiej nie wystawisz z CRM (korekty w inFakt).")
-    return {"company": lead.company, "fields": fields, "subject": subject, "body": body, "hints": hints,
+    return {"company": lead.company, "fields": fields, "subject": human_text(subject), "body": human_text(body), "hints": hints,
             "warnings": warnings, "tax_symbols": INVOICE_TAX_SYMBOLS, "issued": bool(j.invoice_uuid and not j.invoice_uuid.startswith("task:")),
             "from": f"{owner.get('full_name') or owner['name']}",
             "recipients": email_list(lead.billing_email, *lead.emails)}
@@ -7208,6 +7208,34 @@ def strip_pl_phone(body, sender):
     return re.sub(r"\n{3,}", "\n\n", out)
 
 
+# Teksty do klientów (maile, szkice, oferty, wiadomości na komunikatory) bez „AI-owej” typografii: długie myślniki
+# (—, –), wielokropek jako jeden znak, strzałki, punktory, ozdobne cudzysłowy. Zostaje zwykły krótki „-”.
+_AI_TYPO = str.maketrans({"—": "-", "–": "-", "―": "-", "‒": "-", "−": "-", "•": "-", "▪": "-", "●": "-", "→": "->",
+                          "⇒": "->", "➜": "->", "➔": "->", "…": "...", "„": '"', "”": '"', "“": '"', "«": '"', "»": '"',
+                          "‘": "'", "’": "'", "\u00a0": " ", "\u202f": " ", "\u2009": " "})
+HUMAN_TYPO_RULE = ("Pisz jak człowiek w zwykłym mailu, w każdym języku (także po litewsku i niemiecku): NIGDY nie używaj "
+                   "długich myślników (— ani –), wielokropka jako jednego znaku, strzałek, punktorów • ani ozdobników. "
+                   "Zamiast myślnika postaw przecinek, dwukropek albo kropkę; zwykły krótki łącznik „-” jest w porządku. "
+                   "Cudzysłowy zwykłe \"…\".")
+
+
+def human_text(text):
+    """Tekst do klienta bez typowych dla AI znaków — patrz _AI_TYPO."""
+    if not isinstance(text, str) or not text:
+        return text
+    return text.translate(_AI_TYPO)
+
+
+def human_deep(value):
+    if isinstance(value, str):
+        return human_text(value)
+    if isinstance(value, dict):
+        return {k: human_deep(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [human_deep(v) for v in value]
+    return value
+
+
 def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=None, headers=None, cc=None):
     """Wysyła jeden mail przez SMTP (te same zmienne co raport dzienny + skrzynki osób).
     attachments: lista (nazwa_pliku, bajty, mime) — np. PDF oferty.
@@ -7218,6 +7246,7 @@ def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=Non
     from email.mime.multipart import MIMEMultipart
     from email.utils import formataddr, formatdate, make_msgid
     _smtp_send.last_warning = _smtp_send.last_msgid = None
+    subject, body = human_text(subject), human_text(body)  # do klienta nigdy nie idą „AI-owe” myślniki
     skey = re.sub(r"[^A-Z0-9]", "_", (sender or {}).get("name", "").upper())
     host = (os.environ.get(f"SMTP_HOST_{skey}", "").strip() if skey else "") or os.environ.get("SMTP_HOST", "").strip()
     login, pwd = _mailbox_for(sender)
@@ -7699,8 +7728,8 @@ def _assistant_execute(name, inp, user):
 
     if name == "send_email":
         to_addr = str(inp.get("to", "")).strip()
-        subject = str(inp.get("subject", "")).strip()
-        body = str(inp.get("body", "")).strip()
+        subject = human_text(str(inp.get("subject", "")).strip())
+        body = human_text(str(inp.get("body", "")).strip())
         if not (to_addr and subject and body):
             return _json.dumps({"error": "wymagane: to, subject i body"}), None
         recipients, bad = check_recipients(to_addr)
@@ -7730,6 +7759,7 @@ def _assistant_execute(name, inp, user):
         return _json.dumps({"ok": True, "sent_to": to_addr}), f"Wysłano maila do {to_addr}: {subject}"
 
     if name == "prepare_offer":
+        inp = human_deep(dict(inp))  # mail i treść PDF bez „AI-owych” myślników
         to_addr = str(inp.get("to", "")).strip()
         subject = str(inp.get("subject", "")).strip()
         body = str(inp.get("body", "")).strip()
@@ -9051,7 +9081,7 @@ def _campaign_ai_draft(instruction, sender):
         "bez linii-separatorów, bez nagłówków WIELKIMI LITERAMI, bez kolokwializmów, bez nachalnej sprzedaży. "
         "Możesz użyć {firma} (nazwa firmy podstawi się sama). "
         f"Zakończ: '{M()['bye']}' / {sender['full_name']} / 33Bots / {sender['email']} / {sender['phone']}. "
-        "Nigdy nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
+        "Nigdy nie pisz 'Edward Warchocki' — tylko 'Unitree G1'.\n" + HUMAN_TYPO_RULE
     )
     return _ai_forced_tool(INBOX_AI_MODEL, system, instruction, CAMPAIGN_AI_TOOL, max_tokens=2000)
 
@@ -9157,8 +9187,8 @@ def crm_campaign_new():
             else:
                 try:
                     res = _campaign_ai_draft(form["instruction"], sender)
-                    form["subject"] = str(res.get("subject") or form["subject"])
-                    form["body"] = str(res.get("body") or form["body"])
+                    form["subject"] = human_text(str(res.get("subject") or form["subject"]))
+                    form["body"] = human_text(str(res.get("body") or form["body"]))
                 except Exception as e:
                     error = f"Claude nie napisał wiadomości: {type(e).__name__}: {e}"[:300]
         else:
@@ -9420,7 +9450,7 @@ def lt_mail_draft(lead):
     body = (m["ask_hello"] + form + m["ask_list"] + m["ask_bye"] + "\n"
             f"{sender['full_name']}\n33Bots\n{sender['email']}" + (f"\n{mail_phone(sender['phone'], code)}"
                                                                       if mail_phone(sender["phone"], code) else ""))
-    return sender, m["ask_subject"], body
+    return sender, human_text(m["ask_subject"]), human_text(body)
 
 
 LT_ALREADY_SENT = "już wysłany"
@@ -9511,7 +9541,7 @@ def lt_quote_mail_draft(lead, q, sender, fixed=False):
              m["quote_reserve"], "", m["bye"],
              "\n".join(x for x in (sender.get("full_name") or sender.get("name"), "33Bots", sender.get("email"),
                                    mail_phone(sender.get("phone"), m["code"])) if x)]
-    return subject, "\n".join(lines)
+    return human_text(subject), human_text("\n".join(lines))
 
 
 def auto_offer_pdf(lead, q, sender):
@@ -9979,7 +10009,7 @@ def lt_offer_message(lead, when, time_txt, place, price_txt, code=None):
     when_txt = _when_phrase(when, m["code"])
     lines = [m["msg_hello"], "", m["msg_price"].format(when=when_txt, time=time_txt, place=place, price=price_txt), "",
              m["msg_included"], "", m["msg_reserve"], "", f"{owner.get('full_name') or owner['name']}, 33bots"]
-    return "\n".join(lines)
+    return human_text("\n".join(lines))
 
 
 def lt_welcome_message(lead, when, code=None):
@@ -9989,7 +10019,7 @@ def lt_welcome_message(lead, when, code=None):
     full = owner.get("full_name") or owner["name"]
     lines = [m["msg_hello"], "", m["msg_intro"].format(name=full.split()[0], when=_when_phrase(when, m["code"])), "",
              m["msg_question"], "", m["msg_bye"], f"{full}, 33bots"]
-    return "\n".join(lines)
+    return human_text("\n".join(lines))
 
 
 def _lt_msg_links(lead, code, message):
@@ -10306,7 +10336,7 @@ def lt_msg_ai(lead_id, writer_id, hint=""):
         "sytuacji i jest w kontekście (cena z kalkulatora CRM albo cena, którą już podaliśmy) — nigdy jej sam nie "
         "obniżaj; inna cena albo rabat tylko, gdy są we wskazówce użytkownika albo w notatkach zespołu. Jeśli "
         "wydarzenie już minęło albo klient odmówił — uprzejmie, bez naciskania (np. zapytaj o kolejne wydarzenia). "
-        "Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
+        "Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'.\n" + HUMAN_TYPO_RULE
     )
     task = ((f"WSKAZÓWKA UŻYTKOWNIKA: {hint}\n\n" if hint else "") + _lt_msg_context(lead)
             + "\n\nNapisz wiadomość na Viber/WhatsApp do tego klienta.")
@@ -10321,10 +10351,10 @@ def lt_msg_ai(lead_id, writer_id, hint=""):
                  "Napisz ją w całości w jednym, właściwym języku.")
     else:
         return {"error": "Claude nie napisał poprawnej wiadomości — spróbuj jeszcze raz"}
-    msg = str(res["message"]).strip()
+    msg = human_text(str(res["message"]).strip())
     if full not in msg:
         msg += f"\n{full}, 33bots"
-    draft = {"message": msg, "message_pl": str(res.get("message_pl") or "").strip(),
+    draft = {"message": msg, "message_pl": human_text(str(res.get("message_pl") or "").strip()),
              "hook": str(res.get("hook") or "").strip(), "language": res.get("language") or m["lang"],
              "ts": datetime.utcnow().isoformat(timespec="seconds"), "by": writer_id}
     set_setting(LT_MSG_AI_KEY.format(lead.id), json.dumps(draft))
@@ -11562,7 +11592,7 @@ def mail_ai_draft(code, instruction, pasted="", reply_id=None, lead_id=None, to=
         "dostępności ani obietnic — używaj tylko tego, co jest w poleceniu albo w danych z CRM; jeśli czegoś "
         "brakuje (np. godzin, miejsca), grzecznie dopytaj. Krótkie akapity, ton ciepły i profesjonalny, bez "
         "nagłówków i list w punktach, chyba że polecenie o nie prosi. Nigdy nie wstawiaj linków do formularzy. "
-        "Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
+        "Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'.\n" + HUMAN_TYPO_RULE
     )
     ctx = _mail_draft_context(code, reply_id, lead_id, pasted, to)
     task = (f"POLECENIE UŻYTKOWNIKA: {instruction.strip() or 'Napisz odpowiedź na tego maila.'}\n\n"
@@ -11582,7 +11612,7 @@ def mail_ai_draft(code, instruction, pasted="", reply_id=None, lead_id=None, to=
                  f"Napisz subject_out i body_out w całości {m['lang_in_pl']}.")
     else:
         return {"error": f"Claude nie napisał wersji {m['lang_in_pl']} — spróbuj jeszcze raz"}
-    draft = {k: str(res.get(k) or "").strip() for k in ("subject_pl", "body_pl", "subject_out", "body_out")}
+    draft = {k: human_text(str(res.get(k) or "").strip()) for k in ("subject_pl", "body_pl", "subject_out", "body_out")}
     return {"draft": draft, "info": "gotowe"}
 
 
