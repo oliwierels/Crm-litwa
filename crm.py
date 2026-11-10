@@ -8248,6 +8248,11 @@ def _ai_client():
     return anthropic.Anthropic()
 
 
+# Te modele odrzucają wymuszone narzędzie (tool_choice tool/any → 400) — od razu tool_choice=auto, bez straconego zapytania.
+_NO_FORCED_TOOL_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-fable-5-2",
+                          "claude-mythos-5-1", "claude-mythos-5-2")
+
+
 def _ai_forced_tool(model, system, user_text, tool, max_tokens=4096):
     """Wywołanie Claude'a, które ma skończyć się użyciem jednego narzędzia — zwraca jego argumenty.
     Najpierw wymusza narzędzie (tool_choice=tool); modele, które tego nie obsługują (np. Sonnet 5.5),
@@ -8258,6 +8263,7 @@ def _ai_forced_tool(model, system, user_text, tool, max_tokens=4096):
         raise RuntimeError("brak ANTHROPIC_API_KEY w Railway (web → Variables)")
     nudge = f"\n\nOdpowiedz WYŁĄCZNIE wywołaniem narzędzia {tool['name']} — bez tekstu."
     messages = [{"role": "user", "content": user_text + nudge}]
+    forced_ok = not str(model).startswith(_NO_FORCED_TOOL_MODELS)
 
     def pick(resp):
         for block in resp.content:
@@ -8266,13 +8272,14 @@ def _ai_forced_tool(model, system, user_text, tool, max_tokens=4096):
         return None
 
     try:
-        resp = client.messages.create(
-            model=model, max_tokens=max_tokens, system=system, tools=[tool],
-            tool_choice={"type": "tool", "name": tool["name"]}, messages=messages,
-        )
-        found = pick(resp)
-        if found is not None:
-            return found
+        if forced_ok:
+            resp = client.messages.create(
+                model=model, max_tokens=max_tokens, system=system, tools=[tool],
+                tool_choice={"type": "tool", "name": tool["name"]}, messages=messages,
+            )
+            found = pick(resp)
+            if found is not None:
+                return found
     except anthropic.BadRequestError as e:
         if "tool_choice" not in str(e):
             raise
@@ -10119,14 +10126,14 @@ def crm_lt_set_price(lead_id):
 
 @app.route("/crm/leads/<int:lead_id>/lt-wiadomosc", methods=["POST"])
 def crm_lt_message_sent(lead_id):
-    """Zapisuje w leadzie, że wiadomość z ceną poszła na WhatsApp / Viber / SMS (ręcznie z telefonu)."""
+    """Zapisuje w leadzie, że wiadomość poszła na WhatsApp / Viber / SMS (wysłana ręcznie przez handlowca)."""
     lead = db.session.get(Lead, lead_id) or abort(404)
     channel = {"whatsapp": "WhatsApp", "sms": "SMS"}.get(request.form.get("channel"), "Viber")
     text = (request.form.get("text") or "").strip()[:3000]
     now = datetime.utcnow()
     db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=now,
                             assigned_to=get_current_user(request)["id"],
-                            notes=f"💬 Wiadomość z ceną wysłana na {channel}\n---\n{text}"))
+                            notes=f"💬 Wiadomość wysłana na {channel}\n---\n{text}"))
     db.session.commit()
     return jsonify({"ok": True})
 
@@ -10198,7 +10205,7 @@ def viber_phone(code):
             if lead:
                 db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=datetime.utcnow(),
                                         assigned_to=d.get("user"),
-                                        notes=f"💬 Wiadomość z ceną wysłana na Viber (z telefonu)\n---\n{d['text']}"))
+                                        notes=f"💬 Wiadomość wysłana na Viber (z telefonu)\n---\n{d['text']}"))
             d["logged"] = True
             set_setting(VIBER_QR_PREFIX + code, json.dumps(d))
             db.session.commit()
@@ -10210,7 +10217,131 @@ def viber_phone(code):
     return resp
 
 
-app.jinja_env.globals.update(lt_quote=lt_quote)
+# ---------- WIADOMOŚĆ NA KOMUNIKATOR Z KONTEKSTU (Claude) ----------
+# „✨ Generuj z kontekstu”: Claude czyta maile, notatki, komentarze i etap leada i pisze krótką wiadomość na Viber /
+# WhatsApp od handlowca — do czego nawiązać, co dopowiedzieć, o co zapytać. To tylko tekst w okienku: wysyła człowiek.
+LT_MSG_AI_KEY = "lt_msg_ai:{}"
+LT_MSG_AI_MODEL = os.environ.get("MSG_AI_MODEL", "").strip() or "claude-opus-5-5"
+LT_MSG_TOOL = {
+    "name": "write_message",
+    "description": "Wiadomość na Viber/WhatsApp do klienta, jej polskie tłumaczenie i krótkie uzasadnienie dla zespołu.",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "language": {"type": "string", "enum": ["lt", "de", "pl", "en"], "description": "Język wiadomości"},
+            "message": {"type": "string", "description": "Wiadomość do klienta: powitanie, treść, podpis"},
+            "message_pl": {"type": "string", "description": "Ta sama wiadomość po polsku (dla zespołu)"},
+            "hook": {"type": "string",
+                     "description": "1–2 zdania po polsku: do czego wiadomość nawiązuje i dlaczego (co z kontekstu)"},
+        },
+        "required": ["language", "message", "message_pl", "hook"],
+    },
+}
+
+
+def _lt_msg_context(lead):
+    """Cały kontekst leada dla Claude'a: dane i cena z CRM, korespondencja mailowa (oryginały), historia w CRM."""
+    parts = [f"DZIŚ: {date.today():%Y-%m-%d}"]
+    base = _mail_draft_context(lead_market(lead), lead_id=lead.id)
+    if base:
+        parts.append(base)
+    mails = list(reversed(lead_mails(lead, limit=15)))
+    if mails:
+        lines = []
+        for mm in mails:
+            fresh, _old = poczta.split_quote(mm.body_text or "")
+            lines.append(f"[{_dt(mm.date)}] {'KLIENT' if mm.folder == 'in' else 'MY'} (język: {mm.lang or '?'}) — "
+                         f"{mm.subject or ''}\n{fresh.strip()[:1500]}")
+        parts.append("KORESPONDENCJA MAILOWA (od najstarszej):\n\n" + "\n\n".join(lines))
+    acts = sorted(lead.activities, key=lambda a: a.created_at or datetime.min, reverse=True)[:12]
+    if acts:
+        parts.append("HISTORIA W CRM (od najnowszych — komentarze, telefony, wysłane wiadomości, zadania):\n" + "\n".join(
+            f"- [{_dt(a.created_at)}] {a.kind}{' (zrobione)' if a.done else ''}: {(a.notes or '').strip()[:400]}"
+            for a in acts if (a.notes or "").strip()))
+    return "\n\n".join(parts)
+
+
+def lt_msg_ai(lead_id, writer_id, hint=""):
+    """Claude pisze wiadomość na komunikator na podstawie kontekstu leada (zadanie w tle) i zapamiętuje ją w leadzie."""
+    lead = all_markets(Lead.query).filter_by(id=lead_id).first()
+    if not lead:
+        return {"error": "Nie ma takiego leada"}
+    code = lead_market(lead)
+    m = markets.get(code)
+    writer = USERS_BY_ID.get(writer_id) or USERS_BY_ID.get(lead.assigned_to) or USERS[0]
+    full = writer.get("full_name") or writer["name"]
+    client_langs = [mm.lang for mm in lead_mails(lead, limit=15) if mm.folder == "in" and mm.lang]
+    system = (
+        f"Piszesz krótką wiadomość na Viber/WhatsApp, którą {full} z 33Bots sam wyśle klientowi ze swojego telefonu. "
+        "33Bots wynajmuje humanoidalnego robota Unitree G1 na wydarzenia (targi, konferencje, eventy firmowe) razem "
+        "z operatorem: dojazd, przygotowanie robota, dopasowanie osobowości i wiedzy robota do wydarzenia, wsparcie "
+        "na miejscu; robot wita gości, rozmawia na podstawie przygotowanej bazy wiedzy, tańczy, pozuje do zdjęć, "
+        "może wystąpić na scenie.\n"
+        "Najpierw przeczytaj cały kontekst (maile, notatki, komentarze, etap) i ustal: na czym stanęła rozmowa, czego "
+        "klient chce, co go hamuje (cena, termin, scenariusz…), kto na kogo czeka. Potem napisz wiadomość, która "
+        "naturalnie wraca do tej rozmowy i daje klientowi łatwy powód, żeby odpisać: nawiąż do konkretu z rozmowy, "
+        "dodaj jedną przydatną informację albo propozycję i zakończ jednym prostym pytaniem.\n"
+        "Styl: jak człowiek piszący z telefonu — 2–5 krótkich zdań (najwyżej ok. 600 znaków), ciepło i konkretnie, "
+        "bez sloganów, list, nagłówków i linków; najwyżej jedna emotka. Klient zna nas z maili — możesz krótko "
+        "nawiązać, że piszesz też tutaj. Nie pisz, że wiadomość jest automatyczna.\n"
+        f"Język: ten, w którym pisze klient (języki jego maili: {', '.join(dict.fromkeys(client_langs)) or 'brak maili'}); "
+        f"gdy klient nie pisał — {m['lang_in_pl']}. Jak native speaker, forma grzecznościowa. Litewski: powitanie "
+        "„Laba diena!” bez imienia (wołacz łatwo pomylić). Niemiecki: forma „Sie”. Polski: „Dzień dobry”, forma "
+        "Pan/Pani (gdy płeć niepewna — bez form osobowych). Nigdy po angielsku, chyba że klient pisze po angielsku.\n"
+        f"Na końcu, w osobnej linii, podpis: {full}, 33bots\n"
+        "Fakty: nie wymyślaj cen, rabatów, terminów, dostępności ani obietnic. Cenę podaj tylko, jeśli pasuje do "
+        "sytuacji i jest w kontekście (cena z kalkulatora CRM albo cena, którą już podaliśmy) — nigdy jej sam nie "
+        "obniżaj; inna cena albo rabat tylko, gdy są we wskazówce użytkownika albo w notatkach zespołu. Jeśli "
+        "wydarzenie już minęło albo klient odmówił — uprzejmie, bez naciskania (np. zapytaj o kolejne wydarzenia). "
+        "Nie pisz 'Edward Warchocki' — tylko 'Unitree G1'."
+    )
+    task = ((f"WSKAZÓWKA UŻYTKOWNIKA: {hint}\n\n" if hint else "") + _lt_msg_context(lead)
+            + "\n\nNapisz wiadomość na Viber/WhatsApp do tego klienta.")
+    res = {}
+    for _attempt in range(2):
+        res = _ai_forced_tool(LT_MSG_AI_MODEL, system, task, LT_MSG_TOOL, max_tokens=3000)
+        lang = res.get("language") or m["lang"]
+        seen = poczta.detect_lang(res.get("message") or "")
+        if str(res.get("message") or "").strip() and (not seen or seen == lang):
+            break
+        task += (f"\n\nUWAGA: poprzednia wiadomość nie była w języku {lang} (wykryto: {seen or 'pusto'}). "
+                 "Napisz ją w całości w jednym, właściwym języku.")
+    else:
+        return {"error": "Claude nie napisał poprawnej wiadomości — spróbuj jeszcze raz"}
+    msg = str(res["message"]).strip()
+    if full not in msg:
+        msg += f"\n{full}, 33bots"
+    draft = {"message": msg, "message_pl": str(res.get("message_pl") or "").strip(),
+             "hook": str(res.get("hook") or "").strip(), "language": res.get("language") or m["lang"],
+             "ts": datetime.utcnow().isoformat(timespec="seconds"), "by": writer_id}
+    set_setting(LT_MSG_AI_KEY.format(lead.id), json.dumps(draft))
+    db.session.commit()
+    return {"draft": draft, "info": "gotowe"}
+
+
+def lt_msg_saved(lead_id):
+    """Ostatnia wiadomość z kontekstu wygenerowana dla leada (albo None)."""
+    try:
+        d = json.loads(get_setting(LT_MSG_AI_KEY.format(lead_id)) or "null")
+    except ValueError:
+        return None
+    return d if isinstance(d, dict) and d.get("message") else None
+
+
+@app.route("/crm/leads/<int:lead_id>/lt-wiadomosc/generuj", methods=["POST"])
+def crm_lt_msg_ai(lead_id):
+    """✨ Generuj z kontekstu — w tle (Claude potrzebuje 10–30 s), okienko odpytuje /crm/job."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    if _ai_client() is None:
+        return jsonify({"error": "Brak ANTHROPIC_API_KEY w Railway — Claude nie może pisać wiadomości."}), 400
+    jid = _start_job("Claude pisze wiadomość", lt_msg_ai, lead.id, get_current_user(request)["id"],
+                     (request.form.get("hint") or "").strip()[:1000])
+    return jsonify({"jid": jid, "poll": url_for("crm_job", jid=jid, format="json")})
+
+
+app.jinja_env.globals.update(lt_quote=lt_quote, lt_msg_saved=lt_msg_saved)
 
 
 # ---------- WHATSAPP (oficjalne WhatsApp Cloud API od Meta) ----------

@@ -86,6 +86,6 @@ def test_lt_sms_button_and_viber_draft(app, boxes):
     assert "'&draft=' + encodeURIComponent(text)" in html
     c.post(f"/crm/leads/{lead.id}/lt-wiadomosc", data={"channel": "sms", "text": "Sveiki!"})
     note = crm.Activity.query.filter_by(lead_id=lead.id).order_by(crm.Activity.id.desc()).first()
-    assert note.notes.startswith("💬 Wiadomość z ceną wysłana na SMS")
+    assert note.notes.startswith("💬 Wiadomość wysłana na SMS")
     calc = c.get(f"/crm/kalkulator?lead={lead.id}").get_data(as_text=True)
     assert "sms:+37061234567" in calc or "Kalkulator" in calc

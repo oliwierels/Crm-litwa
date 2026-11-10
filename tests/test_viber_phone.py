@@ -58,7 +58,7 @@ def test_qr_phone_page_opens_viber_and_logs_once(app, monkeypatch):
     # klik „Otwórz Viber” → jeden wpis w leadzie, nawet przy kilku kliknięciach
     assert phone.post(path).get_json()["ok"] and phone.post(path).get_json()["ok"]
     notes = [a.notes for a in crm.Activity.query.filter_by(lead_id=lead.id).all() if "Viber" in (a.notes or "")]
-    assert notes == [f"💬 Wiadomość z ceną wysłana na Viber (z telefonu)\n---\n{text}"]
+    assert notes == [f"💬 Wiadomość wysłana na Viber (z telefonu)\n---\n{text}"]
 
     # po 30 min link wygasa; zły / zgadywany kod — nic
     key = crm.VIBER_QR_PREFIX + path.rsplit("/", 1)[1]
@@ -105,3 +105,54 @@ def test_first_message_is_welcome_without_price(app):
     assert "€" not in w and w.rstrip().endswith("Bartosz Wysocki, 33bots")
     html = app.test_client().get(f"/crm/leads/{lt.id}").get_data(as_text=True)
     assert "👋 Powitanie" in html and "💶 Z ceną" in html and "LT_VERSIONS" in html
+
+
+def test_generate_message_from_context(app, monkeypatch):
+    """✨ Generuj z kontekstu: Claude dostaje maile, notatki i komentarze leada; wynik zapamiętany i domyślny w okienku."""
+    lead = mk("UAB Konferencija", contact_email="ruta@konf.lt", contact_phone="+37061234567")
+    crm.db.session.add_all([
+        crm.MailMessage(mailbox="o.latek@33bots.lt", market="lt", folder="in", uid=None, uidvalidity=None,
+                        addrs=" ruta@konf.lt o.latek@33bots.lt ", subject="Re: Pasiūlymas", lang="lt",
+                        date=datetime(2026, 11, 2, 14, 11), body_text="Ačiū, bet mums per brangu."),
+        crm.MailMessage(mailbox="o.latek@33bots.lt", market="lt", folder="in", uid=None, uidvalidity=None,
+                        addrs=" ruta@konf.lt o.latek@33bots.lt ", subject="Re: Pasiūlymas", lang="lt",
+                        date=datetime(2026, 11, 4, 17, 55),
+                        body_text="Idėja: robotas tik per pristatymą, kaip pranešėjas, 30–35 min."),
+        crm.Activity(lead_id=lead.id, kind="note", notes="Klientka ma budżet ok. 1200 €", done=True)])
+    crm.db.session.commit()
+    seen = {}
+
+    def fake_tool(model, system, text, tool, max_tokens=4096):
+        seen.update(model=model, system=system, text=text, tool=tool["name"])
+        return {"language": "lt", "message_pl": "Dzień dobry! …", "hook": "Nawiązuje do pomysłu robota-prelegenta.",
+                "message": "Laba diena! Čia Oliwier iš 33bots. Ar dar aktuali idėja, kad robotas būtų pranešėjas 30–35 min?"}
+    monkeypatch.setattr(crm, "_ai_forced_tool", fake_tool)
+    res = crm.lt_msg_ai(lead.id, 1, "zapytaj o budżet")
+    assert res["draft"]["message"].endswith("Oliwier Latek, 33bots"), "podpis doklejony"
+    assert "per brangu" in seen["text"] and "pranešėjas, 30–35 min" in seen["text"]
+    assert "budżet ok. 1200" in seen["text"] and "WSKAZÓWKA UŻYTKOWNIKA: zapytaj o budżet" in seen["text"]
+    assert seen["text"].index("per brangu") < seen["text"].index("pranešėjas"), "maile od najstarszego"
+    assert "języki jego maili: lt" in seen["system"] and "nigdy jej sam nie obniżaj" in seen["system"]
+    assert seen["tool"] == "write_message" and seen["model"] == crm.LT_MSG_AI_MODEL
+
+    c = app.test_client()
+    c.set_cookie("crm_market", "lt")
+    html = c.get(f"/crm/leads/{lead.id}").get_data(as_text=True)
+    assert "✨ Generuj z kontekstu" in html and "Nawiązuje do pomysłu robota-prelegenta." in html
+    box = html.split('<textarea id="lt-msg"', 1)[1].split("</textarea>", 1)[0]
+    assert "robotas būtų pranešėjas" in box, "zapamiętana wiadomość z kontekstu jest domyślna"
+
+    # trasa: zadanie w tle, wynik przez /crm/job (klucz draft); bez klucza API — czytelny błąd
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(crm, "_ai_client", lambda: object())
+    start = c.post(f"/crm/leads/{lead.id}/lt-wiadomosc/generuj", data={"hint": ""}).get_json()
+    import time
+    for _ in range(50):
+        job = c.get(start["poll"]).get_json()
+        if job["status"] != "pending":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "done" and "pranešėjas" in job["draft"]["message"]
+    monkeypatch.setattr(crm, "_ai_client", lambda: None)
+    r = c.post(f"/crm/leads/{lead.id}/lt-wiadomosc/generuj")
+    assert r.status_code == 400 and "ANTHROPIC_API_KEY" in r.get_json()["error"]
