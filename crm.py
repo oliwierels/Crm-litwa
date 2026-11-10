@@ -9992,6 +9992,16 @@ def lt_welcome_message(lead, when, code=None):
     return "\n".join(lines)
 
 
+def _lt_msg_links(lead, code, message):
+    """Wiadomość i linki do WhatsApp / Viber / SMS — także dla leada bez ceny (np. bez miejsca)."""
+    from urllib.parse import quote as _q
+    digits = lt_phone_digits(lead.contact_phone, code)
+    return {"phone_digits": digits, "market": code, "message": message, "message_price": "",
+            "whatsapp": f"https://wa.me/{digits}?text={_q(message)}" if digits else "",
+            "viber": f"viber://chat?number=%2B{digits}" if digits else "",
+            "sms": f"sms:+{digits}?&body={_q(message)}" if digits else ""}
+
+
 def lt_phone_digits(phone, code="lt"):
     """Numer do linków wa.me / viber: '+370 612 34567' / '861234567' → '37061234567', '0151 2345678' → '491512345678'."""
     m = markets.get(code)
@@ -10032,8 +10042,8 @@ def lt_quote(lead, remote_budget=1):
     code = lead_market(lead)
     m = markets.get(code)
     place = lt_extract_place(lead)
-    if not place:
-        return {"missing": ["miejsca"]}
+    if not place:  # bez ceny, ale z wiadomością na komunikator (powitanie / z kontekstu) i linkami
+        return {"missing": ["miejsca"], **_lt_msg_links(lead, code, lt_welcome_message(lead, _lt_dates_text(lead), code))}
     start, end, dur, hours_src = lt_extract_hours(lead)
     tier = next((h for h in sorted(pricing.HOUR_FACTORS) if dur <= h), max(pricing.HOUR_FACTORS))
     days = max(1, min(len(lead.event_days) or 1, pricing.MAX_DAYS))
@@ -10041,7 +10051,8 @@ def lt_quote(lead, remote_budget=1):
     res = price_quotes(place, tier, None, remote_budget=remote_budget, night=night, days=days, code=code)
     opt = res["options"].get(res["best"] or "")
     if not opt:
-        return {"missing": [f"km do „{place}” (wpisz w kalkulatorze)"], "place": place}
+        return {"missing": [f"km do „{place}” (wpisz w kalkulatorze)"], "place": place,
+                **_lt_msg_links(lead, code, lt_welcome_message(lead, _lt_dates_text(lead), code))}
     q = opt["quote"]
     price = calc_price = pricing.round_price(q["total"])
     if start is not None:

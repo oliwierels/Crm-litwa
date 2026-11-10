@@ -156,3 +156,21 @@ def test_generate_message_from_context(app, monkeypatch):
     monkeypatch.setattr(crm, "_ai_client", lambda: None)
     r = c.post(f"/crm/leads/{lead.id}/lt-wiadomosc/generuj")
     assert r.status_code == 400 and "ANTHROPIC_API_KEY" in r.get_json()["error"]
+
+
+def test_messenger_panel_without_price(app):
+    """Lead bez miejsca (brak ceny): okienko wiadomości, ✨ z kontekstu i przyciski WhatsApp / Viber / SMS i tak są."""
+    lead = crm.Lead(company="MB Frendas", stage="Nowy", assigned_to=1, currency="EUR", market="lt",
+                    contact_phone="+37061009614", contact_email="v@frendas.lt")
+    crm.db.session.add(lead)
+    crm.db.session.commit()
+    with app.test_request_context():
+        q = crm.lt_quote(lead)
+    assert q["missing"] == ["miejsca"] and not q.get("price")
+    assert q["message"].startswith("Laba diena!") and q["viber"] == "viber://chat?number=%2B37061009614"
+    c = app.test_client()
+    c.set_cookie("crm_market", "lt")
+    html = c.get(f"/crm/leads/{lead.id}").get_data(as_text=True)
+    assert "Cena pojawi się, gdy będą znane: miejsca" in html and '<textarea id="lt-msg"' in html
+    assert "onclick=\"ltMsg('viber')\"" in html and "onclick=\"ltMsg('whatsapp')\"" in html and "✨ Generuj z kontekstu" in html
+    assert 'id="lt-v-price" hidden' in html and "jako wartość leada" not in html and 'id="lt-qmail"' not in html

@@ -85,6 +85,7 @@ label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px
 /* BUTTONS */
 .btn { border: none; border-radius: var(--radius); padding: 7px 14px; font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity .15s; display: inline-flex; align-items: center; gap: 5px; }
 .btn:hover { opacity: .85; }
+[hidden] { display: none !important; }  /* atrybut hidden wygrywa z display przycisków (.btn) */
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
 .btn-secondary:hover { border-color: var(--accent); opacity: 1; }

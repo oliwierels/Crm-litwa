@@ -238,12 +238,17 @@
           {% if lq.over8 %}<div style="color:var(--yellow);margin-bottom:6px">⚠️ Ponad 8 h — policzone jak 8 h, sprawdź w kalkulatorze.</div>{% endif %}
           <details style="margin-bottom:8px"><summary style="cursor:pointer;color:var(--accent)">Rozbicie ceny</summary>
             <div style="white-space:pre-wrap;color:var(--muted);margin-top:4px">{{ lq.breakdown }}</div></details>
-          {% if msgr %}{% set ai = lt_msg_saved(lead.id) %}
+        {% else %}
+          <div style="color:var(--muted)">Cena pojawi się, gdy będą znane: {{ lq.missing|join(', ') }}.
+            {% if not lead.form_filled_at %}Klient jeszcze nie wypełnił formularza.{% endif %}</div>
+          <a class="btn btn-ghost btn-sm" style="margin:6px 0 10px" href="{{ url_for('crm_calculator', lead=lead.id) }}">🧮 Policz w kalkulatorze</a>
+        {% endif %}
+          {% if msgr and lq.message %}{% set ai = lt_msg_saved(lead.id) %}
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;font-size:12px;color:var(--muted)">
             Wiadomość:
             <button type="button" class="btn btn-ghost btn-sm" id="lt-v-ai" {{ 'hidden' if not ai }} style="font-weight:{{ '700' if ai else '400' }}" onclick="ltVersion('ai')" title="Napisana przez Claude'a na podstawie maili, notatek i komentarzy">✨ Z kontekstu</button>
             <button type="button" class="btn btn-ghost btn-sm" id="lt-v-hello" style="font-weight:{{ '400' if ai else '700' }}" onclick="ltVersion('hello')" title="Pierwsza wiadomość: powitanie i pytanie o wydarzenie, bez ceny">👋 Powitanie</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="lt-v-price" style="font-weight:400" onclick="ltVersion('price')" title="Gdy klient pyta o cenę">💶 Z ceną</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="lt-v-price" {{ 'hidden' if not lq.message_price }} style="font-weight:400" onclick="ltVersion('price')" title="Gdy klient pyta o cenę">💶 Z ceną</button>
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
             <button type="button" class="btn btn-sm" id="lt-ai-btn" style="background:#7c3aed;color:#fff;font-weight:700;white-space:nowrap" onclick="ltMsgAi()" title="Claude czyta maile, notatki i komentarze leada i pisze wiadomość, która nawiązuje do rozmowy">✨ Generuj z kontekstu</button>
@@ -310,17 +315,17 @@
             {% if msgr and lq.viber %}<button type="button" class="btn btn-sm" style="background:#7360F2;color:#fff;font-weight:700" onclick="ltMsg('viber')" title="Otwiera czat w Viber Desktop na tym komputerze">Viber</button>
             <button type="button" class="btn btn-sm" style="background:none;border:1px solid #7360F2;color:#7360F2;font-weight:700" onclick="ltViberQr()" title="Kod QR: zeskanuj telefonem i wyślij z Vibera na telefonie">📱 Viber na telefonie</button>{% endif %}
             {% if msgr and lq.sms %}<button type="button" class="btn btn-sm" style="background:#0ea5e9;color:#fff;font-weight:700" onclick="ltMsg('sms')" title="Otwiera SMS z gotową treścią: na telefonie, na Macu (Wiadomości) albo w Windows (Łącze z telefonem)">SMS</button>{% endif %}
-            {% if not lead.value_pln or lead.value_pln|int != lq.price %}
+            {% if lq.price and (not lead.value_pln or lead.value_pln|int != lq.price) %}
             <form method="post" action="{{ url_for('crm_lt_set_price', lead_id=lead.id) }}" style="display:inline">
               <button class="btn btn-secondary btn-sm">💾 Ustaw {{ lq.price }} € jako wartość leada</button>
             </form>
             {% endif %}
-            {% if lead.emails %}
+            {% if lead.emails and lq.price %}
             <button type="button" class="btn btn-secondary btn-sm" onclick="const d = document.getElementById('lt-qmail'); d.open = true; d.scrollIntoView({behavior: 'smooth', block: 'center'})">✉️ Mail z wyceną</button>
             {% endif %}
-            <a class="btn btn-ghost btn-sm" href="{{ lq.calc_url }}">🧮 Kalkulator</a>
+            {% if lq.price %}<a class="btn btn-ghost btn-sm" href="{{ lq.calc_url }}">🧮 Kalkulator</a>{% endif %}
           </div>
-          {% set qm = quote_mail_preview(lead, lq) if lead.emails else none %}
+          {% set qm = quote_mail_preview(lead, lq) if lead.emails and lq.price else none %}
           {% if qm %}
           <details id="lt-qmail" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px" {{ 'open' if not mkt.auto_send and not qm.sent_at }}>
             <summary style="cursor:pointer;font-weight:600">✉️ Mail z ofertą {{ mkt.lang_in_pl }} + PDF{% if qm.sent_at %} <span style="color:var(--green);font-weight:400">— wysłany {{ qm.sent_at[:10] }}</span>{% endif %}</summary>
@@ -334,7 +339,7 @@
               <button class="btn btn-primary btn-sm" style="margin-top:6px">📨 {{ 'Wyślij ponownie' if qm.sent_at else 'Wyślij ten mail' }}</button>
             </form>
           </details>
-          {% elif lead.emails %}
+          {% elif lead.emails and lq.price %}
           <div id="lt-qmail" style="color:var(--yellow);margin-top:8px">Brak skrzynki {{ mkt.domain }} do wysłania wyceny (MAIL_PASSWORD w Railway).</div>
           {% endif %}
           {% if msgr %}<div id="lt-msg-info" style="color:var(--muted);margin-top:6px">
@@ -449,11 +454,6 @@
             help.scrollIntoView({behavior: 'smooth', block: 'nearest'});
           }
           </script>
-        {% else %}
-          <div style="color:var(--muted)">Cena pojawi się, gdy będą znane: {{ lq.missing|join(', ') }}.
-            {% if not lead.form_filled_at %}Klient jeszcze nie wypełnił formularza.{% endif %}</div>
-          <a class="btn btn-ghost btn-sm" style="margin-top:6px" href="{{ url_for('crm_calculator', lead=lead.id) }}">🧮 Policz w kalkulatorze</a>
-        {% endif %}
       </div>
     </div>
     {% endif %}
