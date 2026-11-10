@@ -41,8 +41,29 @@ a.plain { color: var(--viber); }
   <div class="ok" id="info"></div>
   <p class="muted">Viber otworzy czat z klientem. Jeśli tekstu nie ma w polu wiadomości — przytrzymaj pole i wybierz <b>Wklej</b>, potem Wyślij.
     Nie otwiera się czat? <a class="plain" href="{{ plain }}" onclick="opened()">Otwórz bez tekstu</a>.</p>
+  <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Viber otwiera się, ale bez czatu z klientem?</summary>
+    <p class="muted">Kliknij po kolei warianty. Przy tym, który otworzy czat z klientem, kliknij „✅ działa” — telefon go zapamięta i „Otwórz Viber” będzie go używał.</p>
+    {% for n in [1, 2, 3, 4] %}<div style="display:flex;gap:8px;margin-top:6px">
+      <a class="btn btn-copy" style="margin:0;flex:1" href="#" onclick="tryStyle({{ n }}); return false">Wariant {{ n }}</a>
+      <button type="button" class="btn btn-copy" style="margin:0;flex:1" onclick="pickStyle({{ n }})">✅ działa</button></div>{% endfor %}
+  </details>
   <script>
-  const text = {{ d.text|tojson }};
+  const text = {{ d.text|tojson }}, digits = {{ d.digits|tojson }};
+  function viberUrl(style, dd, t0) {
+    const t = t0 ? '&draft=' + encodeURIComponent(t0) : '';
+    if (style === 2) return 'viber://chat?number=' + dd + t;
+    if (style === 3) return 'viber://contact?number=' + dd;
+    if (style === 4) return 'viber://add?number=' + dd;
+    return 'viber://chat?number=%2B' + dd + t;
+  }
+  function savedStyle() { try { return parseInt(localStorage.getItem('viberStyle') || '1', 10) || 1; } catch (e) { return 1; } }
+  if (savedStyle() !== 1) document.getElementById('open').href = viberUrl(savedStyle(), digits, text);
+  function tryStyle(n) { if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {}); location.href = viberUrl(n, digits, text); }
+  function pickStyle(n) {
+    try { localStorage.setItem('viberStyle', String(n)); } catch (e) {}
+    document.getElementById('open').href = viberUrl(n, digits, text);
+    document.getElementById('info').textContent = '✅ Zapamiętane: wariant ' + n;
+  }
   function copyMsg() {
     const info = document.getElementById('info');
     (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())

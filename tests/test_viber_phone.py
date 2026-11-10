@@ -31,7 +31,8 @@ def test_lead_has_viber_desktop_and_phone_buttons(app):
     assert 'id="lt-viber-help" hidden' in html
     # zapis „wysłane na Viber” dopiero, gdy Viber faktycznie się otworzy (okno traci fokus)
     assert "if (kind === 'viber') return;" in html and "window.addEventListener('blur', leave)" in html
-    assert '"viber://chat?number=%2B37061234567" + \'&draft=\' + encodeURIComponent(text)' in html
+    assert 'const LT_VIBER_DIGITS = "37061234567"' in html and "viberUrl(ltViberStyle(), LT_VIBER_DIGITS, text)" in html
+    assert "return 'viber://chat?number=%2B' + d + t;" in html and 'onclick="ltViberPick(4)"' in html
 
 
 def test_qr_phone_page_opens_viber_and_logs_once(app, monkeypatch):

@@ -292,7 +292,13 @@
           {% if msgr %}<div id="lt-msg-info" style="color:var(--muted);margin-top:6px">
             {% if not lq.whatsapp %}Brak poprawnego numeru telefonu — skopiuj wiadomość i wyślij ręcznie.{% else %}WhatsApp i SMS otworzą się z gotową wiadomością. Viber otworzy czat z klientem w Viber Desktop — jeśli tekst się nie wpisze sam, jest skopiowany: Ctrl+V i Enter. Bez Viber Desktop: 📱 Viber na telefonie.{% endif %}
           </div>
-          {% if lq.viber %}<div id="lt-viber-help" hidden style="margin-top:8px;padding:10px;border:1px solid #7360F2;border-radius:8px">
+          {% if lq.viber %}<details id="lt-viber-variants" style="margin-top:6px"><summary style="cursor:pointer;color:var(--accent)">Viber otwiera się, ale bez czatu z klientem?</summary>
+            <div style="margin-top:6px;line-height:1.8">Różne wersje Vibera (Chromebook, Android, iPhone, komputer) rozumieją inny link. Kliknij po kolei warianty — przy tym, który otworzy czat z tym klientem, kliknij „✅ działa”. CRM zapamięta go na tym urządzeniu i przycisk Viber będzie go używał.<br>
+              {% for n in [1, 2, 3, 4] %}<span style="white-space:nowrap;margin-right:12px"><a href="#" onclick="ltViberTry({{ n }}); return false" style="color:var(--accent)">Wariant {{ n }}</a>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="ltViberPick({{ n }})">✅ działa</button></span>{% endfor %}
+              <div id="lt-viber-style" style="color:var(--muted)"></div>
+            </div></details>
+          <div id="lt-viber-help" hidden style="margin-top:8px;padding:10px;border:1px solid #7360F2;border-radius:8px">
             <div id="lt-viber-why" style="font-weight:600;margin-bottom:6px"></div>
             <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
               <div id="lt-viber-qr" style="background:#fff;color:#111;padding:4px;border-radius:6px;line-height:0;min-width:120px;min-height:120px;display:flex;align-items:center;justify-content:center"></div>
@@ -362,7 +368,26 @@
             }, 2500);
             t2 = setTimeout(stop, 120000);
             ltViberStop = stop;
-            window.location.href = {{ lq.viber|tojson }} + '&draft=' + encodeURIComponent(text);
+            window.location.href = viberUrl(ltViberStyle(), LT_VIBER_DIGITS, text);
+          }
+          const LT_VIBER_DIGITS = {{ lq.phone_digits|tojson }};
+          // 1: chat z +, 2: chat bez +, 3: contact, 4: add — który działa, zależy od wersji Vibera na urządzeniu
+          function viberUrl(style, d, text) {
+            const t = text ? '&draft=' + encodeURIComponent(text) : '';
+            if (style === 2) return 'viber://chat?number=' + d + t;
+            if (style === 3) return 'viber://contact?number=' + d;
+            if (style === 4) return 'viber://add?number=' + d;
+            return 'viber://chat?number=%2B' + d + t;
+          }
+          function ltViberStyle() { try { return parseInt(localStorage.getItem('viberStyle') || '1', 10) || 1; } catch (e) { return 1; } }
+          function ltViberTry(n) {
+            const text = document.getElementById('lt-msg').value;
+            if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+            window.location.href = viberUrl(n, LT_VIBER_DIGITS, text);
+          }
+          function ltViberPick(n) {
+            try { localStorage.setItem('viberStyle', String(n)); } catch (e) {}
+            document.getElementById('lt-viber-style').textContent = '✅ Zapamiętane: wariant ' + n + ' — przycisk Viber używa go od teraz na tym urządzeniu.';
           }
           function ltViberQr(text, why) {
             const help = document.getElementById('lt-viber-help'), box = document.getElementById('lt-viber-qr');
