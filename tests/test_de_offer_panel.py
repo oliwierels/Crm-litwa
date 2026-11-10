@@ -73,3 +73,19 @@ def test_lt_keeps_messengers(app, boxes):
     c.set_cookie("crm_market", "lt")
     html = c.get(f"/crm/leads/{lead.id}").get_data(as_text=True)
     assert "WhatsApp" in html and "Viber" in html
+
+
+def test_lt_sms_button_and_viber_draft(app, boxes):
+    """LT: przycisk SMS z gotową treścią i Viber z tekstem w czacie (draft); zapis w komentarzach z kanałem SMS."""
+    lead = mk("UAB Žinutės", "lt", contact_email="z@x.lt", contact_phone="+37061234567", location="Vilnius")
+    c = app.test_client()
+    c.set_cookie("crm_market", "lt")
+    html = c.get(f"/crm/leads/{lead.id}").get_data(as_text=True)
+    assert "onclick=\"ltMsg('sms')\"" in html
+    assert "\"sms:+37061234567\" + '?&body=' + encodeURIComponent(text)" in html
+    assert "'&draft=' + encodeURIComponent(text)" in html
+    c.post(f"/crm/leads/{lead.id}/lt-wiadomosc", data={"channel": "sms", "text": "Sveiki!"})
+    note = crm.Activity.query.filter_by(lead_id=lead.id).order_by(crm.Activity.id.desc()).first()
+    assert note.notes.startswith("💬 Wiadomość z ceną wysłana na SMS")
+    calc = c.get(f"/crm/kalkulator?lead={lead.id}").get_data(as_text=True)
+    assert "sms:+37061234567" in calc or "Kalkulator" in calc

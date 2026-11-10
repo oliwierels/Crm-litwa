@@ -10051,6 +10051,7 @@ def lt_quote(lead, remote_budget=1):
         "breakdown": pricing.describe(q, opt["label"], res["place"] or place), "message": message,
         "whatsapp": f"https://wa.me/{digits}?text={_q(message)}" if digits else "",
         "viber": f"viber://chat?number=%2B{digits}" if digits else "",
+        "sms": f"sms:+{digits}?&body={_q(message)}" if digits else "",
         "calc_url": url_for("crm_calculator", lead=lead.id, cel=place, h=tier,
                             od=pricing.fmt_hour(start) if start is not None else None, dni=days),
     }
@@ -10106,9 +10107,9 @@ def crm_lt_set_price(lead_id):
 
 @app.route("/crm/leads/<int:lead_id>/lt-wiadomosc", methods=["POST"])
 def crm_lt_message_sent(lead_id):
-    """Zapisuje w leadzie, że wiadomość z ceną poszła na WhatsApp / Viber (ręcznie z telefonu)."""
+    """Zapisuje w leadzie, że wiadomość z ceną poszła na WhatsApp / Viber / SMS (ręcznie z telefonu)."""
     lead = db.session.get(Lead, lead_id) or abort(404)
-    channel = "WhatsApp" if request.form.get("channel") == "whatsapp" else "Viber"
+    channel = {"whatsapp": "WhatsApp", "sms": "SMS"}.get(request.form.get("channel"), "Viber")
     text = (request.form.get("text") or "").strip()[:3000]
     now = datetime.utcnow()
     db.session.add(Activity(lead_id=lead.id, kind="email", done=True, done_at=now,
