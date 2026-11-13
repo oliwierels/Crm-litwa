@@ -52,34 +52,31 @@
 @media (min-width: 981px) { .pm-back { display:none; } }
 #sprawy > summary { list-style:none; }
 #sprawy > summary::-webkit-details-marker { display:none; }
-.pm-chev { display:inline-block; transition:transform .15s; color:var(--muted); font-size:11px; width:12px; }
-#sprawy[open] > summary .pm-chev, .pm-task:not(.closed) .pm-task-head .pm-chev { transform:rotate(90deg); }
-.pm-task-head { cursor:pointer; }
-.pm-task.closed .pm-task-body { display:none; }
-.pm-task.closed { padding:5px 0 !important; }
+.pm-fold { font-weight:700; }
+#sprawy:not([open]) .pm-fold-open, #sprawy[open] .pm-fold-closed { display:none; }
+#sprawy:not([open]) .pm-desc { display:none; }
 </style>
 {% endblock %}
 
 {% block content %}
 {% set mtasks = mail_tasks_open() %}
 <details class="panel" id="sprawy" style="margin-bottom:12px;padding:10px 14px" {{ 'open' if request.args.get('sprawy') or (mtasks and mail_tasks_visible()) }}>
-  <summary style="cursor:pointer;font-weight:700;display:flex;gap:10px;align-items:center;flex-wrap:wrap" title="Kliknij, żeby zwinąć albo rozwinąć sprawy"><span class="pm-chev">▸</span>📋 Sprawy z przeglądu poczty ({{ mtasks|length }})
-    <span style="font-weight:400;color:var(--muted);font-size:12px">Claude przegląda odebrane i wysłane codziennie o {{ review_hours|join(':00 i ') }}:00 — okno ze sprawami wyskakuje od {{ tasks_from }}:00.</span>
+  <summary style="cursor:pointer;font-weight:700;display:flex;gap:10px;align-items:center;flex-wrap:wrap" title="Kliknij, żeby zwinąć albo rozwinąć wszystkie sprawy">📋 Sprawy z przeglądu poczty ({{ mtasks|length }})
+    <span class="btn btn-secondary btn-sm pm-fold"><span class="pm-fold-open">▲ Zwiń sprawy</span><span class="pm-fold-closed">▼ Rozwiń sprawy ({{ mtasks|length }})</span></span>
+    <span class="pm-desc" style="font-weight:400;color:var(--muted);font-size:12px">Claude przegląda odebrane i wysłane codziennie o {{ review_hours|join(':00 i ') }}:00 — okno ze sprawami wyskakuje od {{ tasks_from }}:00.</span>
     <form method="post" action="{{ url_for('crm_mail_tasks_verify') }}" style="margin-left:auto" onclick="event.stopPropagation()">
       <button class="btn btn-secondary btn-sm" {{ 'disabled' if not ai_ok }} title="Claude szuka w poczcie (wszystkie skrzynki i wątki z klientem) i w CRM, czy sprawa nie jest już zrobiona — zrobione zamyka z dowodem. Nic nie wysyła.">🔎 Sprawdź w poczcie, co już zrobione</button></form>
     <form method="post" action="{{ url_for('crm_mail_review_now') }}" onclick="event.stopPropagation()">
       <button class="btn btn-secondary btn-sm" {{ 'disabled' if not ai_ok }}>🔍 Przejrzyj pocztę teraz</button></form>
   </summary>
-  <div style="color:var(--muted);font-size:12px;margin:6px 0 2px">Każdą sprawę Claude sprawdza w poczcie i CRM, zanim trafi na listę (i potem co godzinę, gdy coś się zmieni) — to, co już zrobione (np. oferta poszła osobnym mailem), zamyka sam.
-    {% if mtasks|length > 1 %}<span style="white-space:nowrap"> · <a href="#" onclick="pmTasksAll(true); return false" style="color:var(--accent)">zwiń wszystkie</a> · <a href="#" onclick="pmTasksAll(false); return false" style="color:var(--accent)">rozwiń wszystkie</a></span>{% endif %}</div>
+  <div style="color:var(--muted);font-size:12px;margin:6px 0 2px">Każdą sprawę Claude sprawdza w poczcie i CRM, zanim trafi na listę (i potem co godzinę, gdy coś się zmieni) — to, co już zrobione (np. oferta poszła osobnym mailem), zamyka sam.</div>
   {% for t in mtasks %}
   <div class="pm-task" data-tid="{{ t.id }}" style="border-top:1px solid var(--border);padding:8px 0;font-size:12.5px;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
     <div style="flex:1;min-width:260px">
-      <div class="pm-task-head" onclick="pmTaskToggle(this)" title="Kliknij, żeby zwinąć albo rozwinąć"><span class="pm-chev">▸</span> <b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b>
-        <div style="color:var(--muted);padding-left:16px">{{ t.counterpart }} · „{{ t.subject }}” · od {{ to_local(t.created_at).strftime('%d.%m %H:%M') }}</div></div>
-      <div class="pm-task-body" style="padding-left:16px">
+      <b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b>
+      <div style="color:var(--muted)">{{ t.counterpart }} · „{{ t.subject }}” · od {{ to_local(t.created_at).strftime('%d.%m %H:%M') }}</div>
       <div>{{ t.reason }}{% if t.action %} <b>→ {{ t.action }}</b>{% endif %}</div>
-      {% if t.check_note %}<div style="color:var(--muted);font-size:12px">🔎 Sprawdzone w poczcie{% if t.checked_at %} {{ to_local(t.checked_at).strftime('%d.%m %H:%M') }}{% endif %}: {{ t.check_note }}</div>{% endif %}</div></div>
+      {% if t.check_note %}<div style="color:var(--muted);font-size:12px">🔎 Sprawdzone w poczcie{% if t.checked_at %} {{ to_local(t.checked_at).strftime('%d.%m %H:%M') }}{% endif %}: {{ t.check_note }}</div>{% endif %}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       {% if t.mail_id %}<a class="btn btn-primary btn-sm" href="{{ url_for('crm_mail_compose', reply=t.mail_id, task=t.id, auto=1) }}">✍️ Odpowiedz z Claude</a>
       <a class="btn btn-ghost btn-sm" href="{{ url_for('crm_mail', f='all', m=t.mail_id, sprawy=1) }}">Otwórz</a>{% endif %}
@@ -115,17 +112,9 @@
   const fresh = ids.some(id => !(st.seen || []).includes(id));
   if (st.closed === true && !forced && !fresh) panel.open = false;
   else if (st.closed === false && ids.length) panel.open = true;
-  const closedItems = new Set(st.items || []);
-  panel.querySelectorAll('.pm-task').forEach(e => { if (closedItems.has(e.dataset.tid)) e.classList.add('closed'); });
-  const save = () => {
-    try {
-      const items = [...panel.querySelectorAll('.pm-task.closed')].map(e => e.dataset.tid);
-      localStorage.setItem(KEY, JSON.stringify({closed: !panel.open, seen: ids, items: items}));
-    } catch (e) { /* bez pamięci — działa jak dotąd */ }
-  };
-  panel.addEventListener('toggle', save);
-  window.pmTaskToggle = h => { h.closest('.pm-task').classList.toggle('closed'); save(); };
-  window.pmTasksAll = close => { panel.querySelectorAll('.pm-task').forEach(e => e.classList.toggle('closed', close)); save(); };
+  panel.addEventListener('toggle', () => {
+    try { localStorage.setItem(KEY, JSON.stringify({closed: !panel.open, seen: ids})); } catch (e) { /* bez pamięci — działa jak dotąd */ }
+  });
 })();
 </script>
 {% if request.args.get('brak_leada') %}<div class="panel" style="margin-bottom:12px;padding:10px 14px;font-size:12.5px;border-color:var(--yellow)">👤 Ta sprawa nie ma leada w CRM — możesz go utworzyć przyciskiem „➕ Nowy lead z maila” przy mailu.</div>{% endif %}
