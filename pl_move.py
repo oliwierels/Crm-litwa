@@ -351,6 +351,16 @@ def move_all(eng, db, M, actor_id, limit=200, progress=None, on_step=None, code=
         try:
             won = row.get("stage") in WON
             existing = M["Lead"].query.filter_by(pl_id=pl_id).first()
+            task_id = row.get("clickup_task_id")
+            if existing is None and task_id and not won and M["Lead"].query.execution_options(all_markets=True) \
+                    .filter_by(clickup_task_id=task_id).first() is not None:
+                # to samo zgłoszenie z ClickUp jest już tutaj (np. niemiecka lista czytana wprost) — w PL tylko
+                # usuwamy duplikat, bez drugiej kopii
+                with eng.begin() as conn:
+                    _delete_in_pl(conn, meta, pl_id, task_id, code)
+                moved += 1
+                state["done"] = moved
+                continue
             if existing is None:
                 with eng.connect() as conn:
                     lead = _copy_lead(conn, meta, db, M, row, actor_id, code)

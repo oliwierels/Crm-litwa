@@ -1712,11 +1712,84 @@ _DE_PHONE_RE = re.compile(r"(?:\+|00)\d[\d\s/()-]{7,}\d|\b0\d[\d\s/-]{6,}\d\b")
 _DE_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 
+CLICKUP_DE_LISTS_KEY = "clickup_de_lists"
+CLICKUP_DE_REDISCOVER_H = 6
+_DE_MARK_RE = re.compile(r"(?:\+|\b00)\s?(?:49|43|41)[\d\s/()-]{6,}|@[\w.-]+\.(?:de|at|ch)\b", re.I)
+
+
+def clickup_de_configured():
+    """Czy niemiecka lista ClickUp jest podłączona w tym CRM (bez łączenia z ClickUp)."""
+    return bool(os.environ.get("CLICKUP_LIST_ID_DE", "").strip() or os.environ.get("CLICKUP_API_TOKEN_DE", "").strip())
+
+
 def clickup_de_config():
-    """(id listy, token) niemieckiej listy ClickUp albo (None, None), gdy nie ustawiono CLICKUP_LIST_ID_DE."""
-    list_id = os.environ.get("CLICKUP_LIST_ID_DE", "").strip()
-    token = (os.environ.get("CLICKUP_API_TOKEN_DE", "") or os.environ.get("CLICKUP_API_TOKEN", "")).strip()
-    return (list_id, token) if list_id and token else (None, None)
+    """([id list], token) niemieckiej listy ClickUp: CLICKUP_LIST_ID_DE (po przecinku) albo — gdy ustawiony jest
+    tylko klucz CLICKUP_API_TOKEN_DE — lista znaleziona sama (jak w CRM PL). (None, None), gdy niepodłączona."""
+    env_ids = [x.strip() for x in os.environ.get("CLICKUP_LIST_ID_DE", "").split(",") if x.strip()]
+    de_token = os.environ.get("CLICKUP_API_TOKEN_DE", "").strip()
+    token = de_token or os.environ.get("CLICKUP_API_TOKEN", "").strip()
+    if env_ids and token:
+        return env_ids, token
+    if de_token:
+        # w zapytaniu (przycisk) tylko zapamiętana lista — szukanie po wszystkich listach trwa dłużej niż 30 s
+        return clickup_de_lists(discover=not has_request_context()), de_token
+    return None, None
+
+
+def clickup_all_lists(token=None):
+    """Wszystkie listy dostępne tokenem: [{id, name}] (przestrzenie → foldery → listy i listy bez folderu)."""
+    out = []
+    for team in (_clickup_get("/team", token=token) or {}).get("teams") or []:
+        for sp in (_clickup_get(f"/team/{team['id']}/space", {"archived": "false"}, token=token) or {}).get("spaces") or []:
+            for f in (_clickup_get(f"/space/{sp['id']}/folder", {"archived": "false"}, token=token) or {}).get("folders") or []:
+                for lst in f.get("lists") or []:
+                    out.append({"id": str(lst["id"]), "name": f"{sp.get('name')} / {f.get('name')} / {lst.get('name')}"})
+            for lst in (_clickup_get(f"/space/{sp['id']}/list", {"archived": "false"}, token=token) or {}).get("lists") or []:
+                out.append({"id": str(lst["id"]), "name": f"{sp.get('name')} / {lst.get('name')}"})
+    return out
+
+
+def _clickup_task_is_german(task):
+    blob = " ".join([task.get("name") or "", task.get("text_content") or ""]
+                    + [str(_clickup_cf_value(cf) or "") for cf in task.get("custom_fields") or []])
+    return bool(_DE_MARK_RE.search(blob))
+
+
+def clickup_de_lists(discover=True, force=False):
+    """Listy z niemieckimi zgłoszeniami widoczne kluczem CLICKUP_API_TOKEN_DE — wykryte same (zapamiętane na
+    kilka godzin; nowy klucz = szukanie od razu). Ta sama zasada co w CRM PL."""
+    try:
+        cached = json.loads(get_setting(CLICKUP_DE_LISTS_KEY) or "{}")
+    except ValueError:
+        cached = {}
+    token = os.environ.get("CLICKUP_API_TOKEN_DE", "").strip() or None
+    tok_fp = hashlib.sha1((token or "").encode()).hexdigest()[:10]
+    ttl = timedelta(hours=CLICKUP_DE_REDISCOVER_H) if cached.get("ids") else timedelta(minutes=30)
+    fresh = (cached.get("at") and cached.get("tok") == tok_fp
+             and datetime.fromisoformat(cached["at"]) > datetime.utcnow() - ttl)
+    if (fresh and not force) or not discover:
+        return (cached.get("ids") or []) if cached.get("tok") == tok_fp else []
+    main = os.environ.get("CLICKUP_LIST_ID", "").strip()
+    found, checked = [], []
+    for lst in clickup_all_lists(token)[:120]:
+        if lst["id"] == main:
+            continue
+        try:
+            tasks = (_clickup_get(f"/list/{lst['id']}/task", {"archived": "false", "page": 0}, token=token) or {}).get("tasks") or []
+        except ClickUpAPIError as e:  # brak dostępu do jednej listy / limit zapytań — sprawdzamy dalej
+            checked.append({"id": lst["id"], "name": lst["name"], "error": str(e)[:120]})
+            time.sleep(1)
+            continue
+        time.sleep(0.4)  # limit zapytań ClickUp (ok. 100 na minutę)
+        sample = tasks[:40]
+        de = sum(1 for t in sample if _clickup_task_is_german(t))
+        checked.append({"id": lst["id"], "name": lst["name"], "tasks": len(sample), "german": de})
+        if de >= 1 and (de >= 3 or re.search(r"niem|germ|deutsch|\bde\b|dach", lst["name"], re.I)) and de * 2 >= len(sample):
+            found.append(lst["id"])
+    set_setting(CLICKUP_DE_LISTS_KEY, json.dumps({"ids": found, "at": datetime.utcnow().isoformat(timespec="seconds"),
+                                                  "tok": tok_fp, "checked": checked[:60]}, ensure_ascii=False))
+    db.session.commit()
+    return found
 
 
 def _clickup_cf_value(cf):
@@ -1804,11 +1877,14 @@ def _clickup_task_to_lead_de(task):
 def sync_clickup_de_leads():
     """Niemiecka lista ClickUp → leady rynku Niemcy, wszystkie od razu na tablicę (zaległe w CRM od chwili importu).
     Bez duplikatów (task, telefon, e-mail). Zwraca (ok, nowe, komunikat)."""
-    list_id, token = clickup_de_config()
-    if not list_id:
-        return False, 0, "Brak CLICKUP_LIST_ID_DE (lista ClickUp z niemieckimi leadami)"
+    list_ids, token = clickup_de_config()
+    if list_ids is None:
+        return False, 0, "Niemiecka lista ClickUp niepodłączona: ustaw CLICKUP_API_TOKEN_DE (i ewentualnie CLICKUP_LIST_ID_DE)"
+    if not list_ids:
+        return False, 0, "Niemcy: klucz CLICKUP_API_TOKEN_DE nie widzi listy z niemieckimi zgłoszeniami"
     imported = linked = moved = 0
-    for task in _clickup_fetch_all_tasks(list_id, token=token):
+    tasks = [t for lid in list_ids for t in _clickup_fetch_all_tasks(lid, token=token)]
+    for task in tasks:
         task_id = task.get("id")
         if not task_id:
             continue
@@ -1861,27 +1937,37 @@ def sync_clickup_de_leads():
                             + (f", {moved} przeniesiono z poczekalni" if moved else ""))
 
 
-def sync_clickup_leads():
-    """Główna lista ClickUp (CLICKUP_LIST_ID) i — jeśli ustawiona — niemiecka (CLICKUP_LIST_ID_DE).
-    Błąd jednej listy nie zatrzymuje drugiej. Zwraca (ok, liczba_nowo_zaimportowanych, komunikat)."""
-    results = []
+def sync_clickup_main_leads():
+    """Lista litewska (CLICKUP_LIST_ID) → leady. None, gdy niepodłączona. Zwraca (ok, nowe, komunikat)."""
     main_id = os.environ.get("CLICKUP_LIST_ID", "").strip()
-    de_id, _tok = clickup_de_config()
-    if main_id and os.environ.get("CLICKUP_API_TOKEN", "").strip() and main_id != de_id:
-        try:
-            results.append(_sync_clickup_main(main_id))
-        except ClickUpAPIError as e:
-            results.append((False, 0, f"Lista główna: {e}"))
-    if de_id:
+    de_env = [x.strip() for x in os.environ.get("CLICKUP_LIST_ID_DE", "").split(",") if x.strip()]
+    if not (main_id and os.environ.get("CLICKUP_API_TOKEN", "").strip()) or main_id in de_env:
+        return None
+    return _sync_clickup_main(main_id)
+
+
+def sync_clickup_leads():
+    """Lista litewska (CLICKUP_LIST_ID) i — gdy podłączona w tym CRM — niemiecka (CLICKUP_API_TOKEN_DE /
+    CLICKUP_LIST_ID_DE). Błąd jednej listy nie zatrzymuje drugiej. Zwraca (ok, liczba_nowo_zaimportowanych, komunikat)."""
+    results = []
+    try:
+        main = sync_clickup_main_leads()
+        if main is not None:
+            results.append(main)
+    except ClickUpAPIError as e:
+        db.session.rollback()
+        results.append((False, 0, f"Lista główna: {e}"))
+    if clickup_de_configured():
         try:
             results.append(sync_clickup_de_leads())
         except ClickUpAPIError as e:
             db.session.rollback()
             results.append((False, 0, f"Lista DE: {e}"))
     if not results:
-        return False, 0, "Brak konfiguracji: ustaw CLICKUP_API_TOKEN i CLICKUP_LIST_ID (oraz CLICKUP_LIST_ID_DE dla Niemiec)"
-    if not de_id:
-        results.append((True, 0, "Niemcy: lista ClickUp niepodłączona — ustaw w Railway CLICKUP_LIST_ID_DE"))
+        return False, 0, "Brak konfiguracji: ustaw CLICKUP_API_TOKEN i CLICKUP_LIST_ID (oraz CLICKUP_API_TOKEN_DE dla Niemiec)"
+    if not clickup_de_configured():
+        results.append((True, 0, "Niemcy: niemiecka lista ClickUp nie jest podłączona w tym CRM (CLICKUP_API_TOKEN_DE) — "
+                                 "niemieckie zgłoszenia przychodzą przez CRM PL"))
     return all(r[0] for r in results), sum(r[1] for r in results), "; ".join(r[2] for r in results)
 
 
@@ -1948,15 +2034,24 @@ def _clickup_scheduler():
     while True:
         try:
             with app.app_context():
-                ok, _n, msg = sync_clickup_leads()
-            health_beat("clickup", ok, info=msg, error=msg)
+                res = sync_clickup_main_leads()
+            if res is not None:
+                health_beat("clickup", res[0], info=res[2], error=res[2])
         except Exception as e:
             app.logger.exception("clickup")
             health_fail("clickup", e)
+        if clickup_de_configured():
+            try:
+                with app.app_context():
+                    ok, _n, msg = sync_clickup_de_leads()
+                health_beat("clickup_de", ok, info=msg, error=msg)
+            except Exception as e:
+                app.logger.exception("clickup_de")
+                health_fail("clickup_de", e)
         time.sleep(interval)
 
 
-if (os.environ.get("CLICKUP_API_TOKEN") and os.environ.get("CLICKUP_LIST_ID")) or clickup_de_config()[0]:
+if (os.environ.get("CLICKUP_API_TOKEN") and os.environ.get("CLICKUP_LIST_ID")) or clickup_de_configured():
     threading.Thread(target=_clickup_scheduler, daemon=True).start()
 
 
@@ -2270,10 +2365,6 @@ def build_sales_panel(period_days=90, today=None):
         if m == 0:
             y, m = y - 1, 12
     months.reverse()
-
-    def in_cur(lead, cur):
-        pln = to_pln(lead.value_pln, lead.currency)
-        return pln if cur == "PLN" else pln / rate
 
     won = {}
     for lead, stage, when in events:
@@ -4958,14 +5049,6 @@ def set_setting(key, value):
         row = AppSetting(key=key)
         db.session.add(row)
     row.value = value
-
-
-def _setting_number(key, lo, hi):
-    try:
-        value = float(str(get_setting(key)).replace(",", "."))
-    except ValueError:
-        value = float(SETTING_DEFAULTS[key])
-    return min(max(value, lo), hi)
 
 
 def to_local(dt):
@@ -12890,8 +12973,9 @@ health.set_local_time(to_local)
 
 HEALTH_HINTS = {
     "automaty": "Wątek automatów w tle (realizacje, duplikaty, kroki sprzedaży). Wyłącznik: AUTO_REALIZE, SALES_AUTOMATION.",
-    "clickup": "Railway → Variables: CLICKUP_API_TOKEN i CLICKUP_LIST_ID (lista główna) oraz CLICKUP_LIST_ID_DE "
-               "(lista niemiecka). Niemieckie zgłoszenia przychodzą też przez CRM PL (przenoszenie z PL).",
+    "clickup": "Railway → Variables: CLICKUP_API_TOKEN i CLICKUP_LIST_ID (lista litewska).",
+    "clickup_de": "Railway → Variables: CLICKUP_API_TOKEN_DE (token z workspace'u ClickUp z niemiecką listą), "
+                  "opcjonalnie CLICKUP_LIST_ID_DE; bez niego CRM sam szuka niemieckiej listy.",
     "journey": "Customer Journey czyta skrzynki LT/DE (hasła IMAP_PASS_* / SMTP_PASS_* w Railway) i zamienia "
                "dokumenty na PDF.",
     "inbox": "Skrzynki zapytań: INBOX_IMAP_USER / INBOX_IMAP_USER_DE i hasła (MAIL_PASSWORD albo INBOX_IMAP_PASS*); "
@@ -12942,8 +13026,8 @@ def health_jobs():
 
     add("automaty", "Automaty sprzedaży (realizacje, duplikaty, następne kroki, audyt ofert)", 45,
         env("AUTO_REALIZE", "1") != "0")
-    add("clickup", "Import leadów z ClickUp (LT i DE)", 30,
-        bool((env("CLICKUP_API_TOKEN") and env("CLICKUP_LIST_ID")) or clickup_de_config()[0]))
+    add("clickup", "Import leadów z ClickUp (lista litewska)", 30, bool(env("CLICKUP_API_TOKEN") and env("CLICKUP_LIST_ID")))
+    add("clickup_de", "Import niemieckich zgłoszeń z ClickUp", 30, clickup_de_configured())
     add("journey", "Customer Journey (umowy i bazy wiedzy ze skrzynek)", 45, env("JOURNEY_SCAN", "1") != "0")
     add("inbox", "Zapytania ze skrzynek kontakt@ (LT / DE)", 30,
         any(env(k, "").strip() for k in ("INBOX_IMAP_USER", "INBOX_IMAP_USER_DE", "MAIL_PASSWORD")))
@@ -12987,6 +13071,13 @@ def health_continuity(now=None):
         text = health.quiet_alarm(times, now)
         if text:
             found[f"quiet:leads:{code}"] = {"level": "yellow", "title": f"{name}: cisza dłuższa niż zwykle", "detail": text}
+    # niemieckie zgłoszenia z ClickUp — obojętnie, czy przyszły wprost, czy przez CRM PL
+    times = [r[0] for r in all_markets(db.session.query(Lead.created_at).filter(
+        Lead.source == CLICKUP_DE_SOURCE, Lead.created_at >= since)).all()]
+    text = health.quiet_alarm(times, now)
+    if text:
+        found["quiet:leads:clickup_de"] = {"level": "yellow", "title": "Niemieckie zgłoszenia z ClickUp: cisza dłuższa "
+                                                                       "niż zwykle", "detail": text}
     if os.environ.get("MAIL_SYNC", "1") != "0":
         for b in mail_boxes():
             times = [r[0] for r in all_markets(db.session.query(MailMessage.date).filter(

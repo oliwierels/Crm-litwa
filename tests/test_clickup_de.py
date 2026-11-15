@@ -96,3 +96,80 @@ def test_german_task_already_pending_from_main_list_moves_to_de(app, monkeypatch
     ok, n, msg = crm.sync_clickup_de_leads()
     crm.db.session.refresh(lead)
     assert ok and n == 0 and lead.market == "de" and lead.source == crm.CLICKUP_DE_SOURCE and not lead.clickup_pending, msg
+
+
+def test_german_list_found_by_key_alone(app, monkeypatch):
+    """Sam klucz CLICKUP_API_TOKEN_DE (bez ID listy): CRM LT/DE sam znajduje niemiecką listę, jak CRM PL.
+    W zapytaniu (przycisk) bez szukania — tylko zapamiętana lista."""
+    now = datetime.utcnow().replace(microsecond=0)
+    tasks = [de_task(f"auto-{i}", f"Kunde {i}", f"+49152076908{i:02d}", f"k{i}@firma{i}.de", now - timedelta(minutes=2))
+             for i in range(3)]
+    calls = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls.append(url)
+        assert headers.get("Authorization") == "tok-only"
+        if url.endswith("/team"):
+            return Resp({"teams": [{"id": "T"}]})
+        if url.endswith("/team/T/space"):
+            return Resp({"spaces": [{"id": "S", "name": "Meta"}]})
+        if url.endswith("/space/S/folder"):
+            return Resp({"folders": []})
+        if url.endswith("/space/S/list"):
+            return Resp({"lists": [{"id": "PL-LISTE", "name": "Polska"}, {"id": "DE-AUTO", "name": "Leads Deutschland"}]})
+        if "/list/PL-LISTE/task" in url:
+            return Resp({"tasks": [{"id": "pl-1", "name": "Jan", "text_content": "tel 600100200", "custom_fields": []}],
+                         "last_page": True})
+        if "/list/DE-AUTO/task" in url:
+            return Resp({"tasks": tasks if (params or {}).get("page", 0) == 0 else [], "last_page": True})
+        raise AssertionError(url)
+
+    monkeypatch.delenv("CLICKUP_LIST_ID_DE", raising=False)
+    monkeypatch.delenv("CLICKUP_LIST_ID", raising=False)
+    monkeypatch.setenv("CLICKUP_API_TOKEN_DE", "tok-only")
+    monkeypatch.setattr(crm.time, "sleep", lambda s: None)
+    monkeypatch.setattr(crm.requests, "get", fake_get)
+    crm.set_setting(crm.CLICKUP_DE_LISTS_KEY, "")
+    crm.db.session.commit()
+    assert crm.clickup_de_configured()
+    with app.test_request_context():
+        assert crm.clickup_de_config() == ([], "tok-only") and not calls, "w zapytaniu bez szukania list"
+    ok, n, msg = crm.sync_clickup_de_leads()
+    assert ok and n == 3, msg
+    leads = crm.all_markets(crm.Lead.query.filter(crm.Lead.clickup_task_id.like("auto-%"))).all()
+    assert len(leads) == 3 and all(l.market == "de" and l.source == crm.CLICKUP_DE_SOURCE for l in leads)
+    with app.test_request_context():
+        assert crm.clickup_de_config() == (["DE-AUTO"], "tok-only"), "zapamiętana lista działa też z przycisku"
+    assert "clickup_de" in crm.health_jobs()
+
+
+def test_pl_move_skips_lead_already_imported_here(app, monkeypatch, tmp_path):
+    """Zgłoszenie z ClickUp jest już w CRM LT/DE (lista czytana wprost), a CRM PL też je zaimportował — przy
+    przenoszeniu z PL nie powstaje druga kopia; w PL duplikat znika i nie wróci z ClickUp."""
+    from sqlalchemy import Column, MetaData, Table, create_engine, insert, select
+    import pl_move
+    path = tmp_path / "pl.db"
+    eng = create_engine(f"sqlite:///{path}")
+    md = MetaData()
+    for name in ("leads", "stage_history", "lead_event_dates", "activities", "app_settings"):
+        Table(name, md, *[Column(c.name, c.type, primary_key=c.primary_key, nullable=c.primary_key is False)
+                          for c in crm.db.metadata.tables[name].columns])
+    md.create_all(eng)
+    here = crm.Lead(company="Kunde Doppelt", stage="Nowy", assigned_to=1, market="de", clickup_task_id="dup-77",
+                    contact_phone="+4915112345678", source=crm.CLICKUP_DE_SOURCE)
+    crm.db.session.add(here)
+    crm.db.session.commit()
+    with eng.begin() as c:
+        c.execute(insert(md.tables["leads"]).values(id=501, company="Kunde Doppelt", stage="Nowy", assigned_to=1,
+                                                    clickup_task_id="dup-77", contact_phone="+4915112345678",
+                                                    source="ClickUp DE", billing_country="DE", country="DE",
+                                                    created_at=datetime.utcnow()))
+    M = {"Lead": crm.Lead, "LeadEventDate": crm.LeadEventDate, "StageHistory": crm.StageHistory,
+         "Activity": crm.Activity}
+    moved, errors = pl_move.move_all(eng, crm.db, M, 1, code="de")
+    assert not errors and moved == 1
+    assert crm.all_markets(crm.Lead.query.filter_by(clickup_task_id="dup-77")).count() == 1, "bez drugiej kopii"
+    with eng.connect() as c:
+        assert c.execute(select(md.tables["leads"])).first() is None, "duplikat usunięty w PL"
+        keys = [r.key for r in c.execute(select(md.tables["app_settings"]))]
+    assert "clickup_dup:dup-77" in keys, "PL nie zaimportuje go z ClickUp drugi raz"

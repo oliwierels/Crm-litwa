@@ -4,7 +4,6 @@ co w planie jest nieoptymalne. Czyste funkcje — bez Flaska i bazy, żeby dało
 import math
 import re
 import unicodedata
-from datetime import timedelta
 
 ROAD_FACTOR = 1.25     # droga jest średnio ~25% dłuższa niż linia prosta
 AVG_SPEED_KMH = 70     # średnia prędkość przejazdu (trasy mieszane, z postojami)
@@ -18,8 +17,6 @@ CARPOOL_KM = 60        # ekipa podwójna: bazy operatorów bliżej niż tyle = j
 
 # współrzędne (lat, lon) — klucze po normalizacji (małe litery, bez polskich znaków)
 CITIES = {
-    # przejście graniczne Budzisko–Kalvarija (S61 / Via Baltica) — przybliżona pozycja; od niego liczymy km na Litwie
-    "granica": (float(__import__("os").environ.get("CALC_BORDER_LAT", "54.38")), float(__import__("os").environ.get("CALC_BORDER_LON", "23.02"))),
     "warszawa": (52.2297, 21.0122), "krakow": (50.0647, 19.9450), "lodz": (51.7592, 19.4560),
     "wroclaw": (51.1079, 17.0385), "poznan": (52.4064, 16.9252), "gdansk": (54.3520, 18.6466),
     "gdynia": (54.5189, 18.5305), "sopot": (54.4416, 18.5601), "szczecin": (53.4285, 14.5528),
@@ -483,10 +480,3 @@ def fmt_hours(h):
     total_min = int(round(h * 60))
     hh, mm = divmod(total_min, 60)
     return f"{hh} h {mm:02d} min" if hh else f"{mm} min"
-
-
-def daterange(a, b):
-    d = a
-    while d <= b:
-        yield d
-        d += timedelta(days=1)
