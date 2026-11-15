@@ -14,8 +14,20 @@ Bazy danych i zmienne zostają osobne, kod jest wspólny.
 ## Stan (15.11.2026)
 
 **Wspólne pliki** (identyczne w Moja-apka i Crm-litwa): `sales_rules.py`, `health.py` (strażnik CRM),
-`logistics.py`, `poczta.py`; testy: `test_sales_rules.py`, `test_health_rules.py`, `test_health_crm.py`,
-`test_mail_task_check.py`, `test_pages_open.py`, `test_ai_forced_tool.py`.
+`logistics.py`, `poczta.py`, **cały katalog `parts/`**; testy: `test_sales_rules.py`, `test_health_rules.py`,
+`test_health_crm.py`, `test_mail_task_check.py`, `test_pages_open.py`, `test_ai_forced_tool.py`.
+
+**`parts/` — wspólne części `crm.py` (39 plików tematycznych, ok. 4,5 tys. linii):** modele, logowanie, bramki
+etapów, follow-upy, automaty, czujniki i strona strażnika, daty wydarzeń, raport dzienny, ClickUp (mapowanie,
+import), użytkownicy, statystyki, próby kontaktu, zadania, karta leada, audyt ofert, dostarczalność, duplikaty,
+logistyka (plan i strony), Customer Journey (stan, umowa, dokumenty, poczta, strony), poczta wysłana, oferty,
+asystent, konektor MCP, sprawy z poczty. `crm.py` wczytuje każdą część przez `_include("nazwa")` dokładnie
+w miejscu, w którym kod był wcześniej, w tej samej przestrzeni nazw — zachowanie bez zmian (sprawdzone odciskiem:
+nazwy, adresy stron, kolejność obsługi zapytań, tabele — identyczne przed i po). `crm.py`: PL 12,8 → 8,3 tys.
+linii, LT/DE 13,4 → 8,9 tys. W `crm.py` zostaje to, co się (jeszcze) różni między CRM-ami.
+
+Jak zmieniać część: edytować plik w `parts/` i skopiować go do drugiego repozytorium (`diff -rq parts ../…/parts`).
+Kolejne części powstają tak samo: funkcja ujednolicona w obu `crm.py` → przeniesiona do `parts/`.
 
 **Usunięte jako martwe:** `app.py` (stary planer stolików, nic go nie uruchamiało), `render.yaml` (Render — nie
 używany), nieużywane funkcje `_setting_number`, `in_cur`, `logistics.daterange`, wpis „granica” w tabeli miast.
@@ -35,9 +47,9 @@ używany), nieużywane funkcje `_setting_number`, `in_cur`, `logistics.daterange
 
 ## Kolejne etapy
 
-1. **Wspólne moduły z `crm.py`** — najpierw tematy, w których funkcje są już identyczne: import ClickUp,
-   synchronizacja poczty, przegląd poczty i sprawy, Customer Journey, oferty, asystent i konektor. Każdy moduł
-   ten sam plik w obu repozytoriach; `crm.py` się kurczy.
+1. **Wspólne części z `crm.py`** — zrobione dla wszystkich identycznych bloków (`parts/`). Dalej: ujednolicać
+   funkcje, które różnią się drobiazgami (np. `sync_inbox`, `mail_ai_draft`, `_assistant_execute`, `mail_boxes`,
+   `health_jobs`), i przenosić je do `parts/`.
 2. **Ujednolicenie różnic** — to, czym PL różni się od LT/DE, jako ustawienia rynku (`market.py`), nie osobny kod.
    PL = rynek „pl”, funkcje tylko-PL (robot, inFakt) włączane ustawieniem serwisu.
 3. **Jedno repozytorium** — serwis CRM LT/DE w Railway przepięty na repozytorium Moja-apka (zmienna rynków,
