@@ -79,6 +79,17 @@ def test_working_minutes():
     assert sr.working_minutes(datetime(2026, 11, 4, 19, 0), datetime(2026, 11, 5, 9, 25)) == 25
 
 
+def test_response_time_capped():
+    """Czas reakcji: weekend się nie liczy, a licznik staje na 2 h pracy (zamiast 480 albo 1000 minut)."""
+    fri_pm, mon = datetime(2026, 11, 13, 15, 0), datetime(2026, 11, 16, 14, 0)
+    assert sr.working_minutes(fri_pm, mon) == 480
+    assert sr.response_minutes(fri_pm, mon) == sr.RESPONSE_CAP_MIN == 120
+    assert sr.response_minutes(datetime(2026, 11, 13, 18, 0), datetime(2026, 11, 16, 9, 20)) == 20  # pt 18:00 → pn
+    assert sr.response_label(120) == "ponad 2 h" and sr.response_label(25) == "25 min" and sr.response_label(None) == ""
+    assert sr.response_label(17.5) == "17 min"
+    assert sr.is_free_mail("jan@gmail.com") and sr.is_free_mail("wp.pl") and not sr.is_free_mail("anna@firma.pl")
+
+
 def test_attempt_limit_and_phone_key():
     assert sr.attempt_limit("prywatna") == 2 and sr.attempt_limit("firma") == 3 and sr.attempt_limit(None) == 3
     assert sr.phone_key("+48 600-100-200") == sr.phone_key("0048600100200") == sr.phone_key("600 100 200") == "600100200"

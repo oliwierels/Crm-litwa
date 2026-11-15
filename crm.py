@@ -2804,12 +2804,12 @@ def sales_automation_pass():
 
 
 def lead_response_minutes(lead):
-    """Czas reakcji w minutach pracy (pn–pt 8–18): od wpłynięcia zapytania do pierwszej odpowiedzi (lead obsłużony);
-    nieobsłużony — ile już czeka. None dla leadów sprzed alarmu nowych leadów."""
+    """Czas reakcji w minutach pracy (pn–pt 9–18): od wpłynięcia zapytania do pierwszej odpowiedzi (lead obsłużony);
+    nieobsłużony — ile już czeka. Licznik staje na sales_rules.RESPONSE_CAP_MIN („ponad 2 h”)."""
     if not lead or not lead.created_at:
         return None
     end = lead.handled_at or datetime.utcnow()
-    return sales_rules.working_minutes(to_local(lead.created_at).replace(tzinfo=None), to_local(end).replace(tzinfo=None))
+    return sales_rules.response_minutes(to_local(lead.created_at).replace(tzinfo=None), to_local(end).replace(tzinfo=None))
 
 
 @app.route("/crm/api/activity/<int:aid>/done", methods=["POST"])
@@ -3481,7 +3481,7 @@ def crm_callback():
 @app.context_processor
 def _sales_helpers():
     return {"lead_failed_attempts": lead_failed_attempts, "lead_response_minutes": lead_response_minutes,
-            "callback_ask": callback_ask_due()}
+            "response_label": sales_rules.response_label, "callback_ask": callback_ask_due()}
 
 
 @app.route("/crm/wersja")
@@ -12295,7 +12295,23 @@ def _review_threads(code, days=MAIL_REVIEW_DAYS, limit=40):
     return out[:limit]
 
 
-def _thread_digest(i, msgs, own):
+def _crm_state_line(lead):
+    """Co już poszło do klienta z CRM poza wątkiem (oferta, umowa) — żeby przegląd nie robił sprawy „wyślij umowę”,
+    gdy umowa poszła z Customer Journey osobnym mailem."""
+    if lead is None:
+        return ""
+    bits = [f"lead „{lead.company}”, etap {lead.stage}"]
+    o = (all_markets(SentOffer.query.filter(SentOffer.lead_id == lead.id, SentOffer.sent_at.isnot(None)))
+         .order_by(SentOffer.sent_at.desc()).first())
+    if o is not None:
+        bits.append(f"ostatnia oferta wysłana z CRM {_dtl(o.sent_at)}")
+    j = lead.journey
+    if j is not None and j.contract_sent_at:
+        bits.append(f"umowa {j.contract_status} (wysłana {_dtl(j.contract_sent_at)})")
+    return "CRM (poza tym wątkiem): " + "; ".join(bits)
+
+
+def _thread_digest(i, msgs, own, lead=None):
     lines = [f"### WĄTEK {i}: {msgs[-1].subject or '(bez tematu)'}"]
     for m in msgs[-5:]:
         who = "KLIENT" if m.folder == "in" and _is_external(m.from_addr, own) else (
@@ -12303,6 +12319,9 @@ def _thread_digest(i, msgs, own):
         fresh = poczta.split_quote(m.body_text or "")[0]
         text = (m.body_pl if m.body_pl and m.lang not in ("pl", None) else fresh) or ""
         lines.append(f"[{who} · {m.from_addr} · {_dt(m.date)} · {m.mailbox}]\n{' '.join(text.split())[:700]}")
+    state = _crm_state_line(lead)
+    if state:
+        lines.append(state)
     return "\n".join(lines)
 
 
@@ -12324,9 +12343,12 @@ def mail_review(code, actor_id=None):
         "zaproszenia kalendarza, odpowiedzi automatyczne, wątki, w których ostatni ruch jest po stronie klienta "
         "(odpisaliśmy i czekamy na niego) i niczego nie obiecaliśmy. Gdy nie ma żadnej sprawy — zwróć pustą listę. "
         f"Dziś jest {today:%Y-%m-%d %H:%M} (czas polski). Wszystkie pola pisz po polsku. „pilne” tylko gdy klient "
-        "się przypomina, termin jest bliski albo czeka dłużej niż 2 dni robocze."
+        "się przypomina, termin jest bliski albo czeka dłużej niż 2 dni robocze. Linia „CRM (poza tym wątkiem)” "
+        "mówi, co już poszło do klienta z CRM osobnym mailem — nie twórz sprawy „wyślij umowę / ofertę”, gdy widać "
+        "tam, że umowa / oferta poszła po prośbie klienta."
     )
-    text = "\n\n".join(_thread_digest(i, msgs, own) for i, (_a, _d, _k, msgs, _l) in enumerate(cand))
+    text = "\n\n".join(_thread_digest(i, msgs, own, mail_lead_for(last))
+                       for i, (_a, _d, _k, msgs, last) in enumerate(cand))
     res = _ai_forced_tool(MAIL_REVIEW_AI_MODEL, system, text, MAIL_REVIEW_TOOL, max_tokens=8000)
     new, created = 0, []
     for item in res.get("items") or []:
@@ -12366,7 +12388,8 @@ def mail_review(code, actor_id=None):
 
 
 def mail_tasks_autoclose(code=None):
-    """Sprawa znika sama, gdy w wątku poszła od nas odpowiedź (z CRM albo z programu pocztowego)."""
+    """Sprawa znika sama, gdy w wątku poszła od nas odpowiedź (z CRM albo z programu pocztowego) albo gdy umowa /
+    oferta, o którą chodziło, poszła w osobnym mailu lub z CRM (mail_tasks_close_proven)."""
     q = MailTask.query.filter(MailTask.status == "open")
     if code:
         q = q.filter(MailTask.market == code)
@@ -12384,7 +12407,7 @@ def mail_tasks_autoclose(code=None):
             n += 1
     if n:
         db.session.commit()
-    return n
+    return n + mail_tasks_close_proven(code)
 
 
 def _market_switch(resp, lead):
@@ -12429,8 +12452,12 @@ MAIL_TASK_CHECK_SYSTEM = (
     "zrobiliśmy to, czego dotyczy: „wyślij ofertę / wycenę” — jest nasz mail z ofertą lub ceną (temat, treść albo "
     "załącznik PDF z ofertą) albo wpis CRM o wysłanej ofercie; „wyślij umowę” — nasz mail z umową albo CRM: umowa "
     "wysłana / podpisana; „odpowiedz / odpisz” — wysłaliśmy odpowiedź na to, o co pytał (także w innym wątku); "
-    "„umów spotkanie / zadzwoń” — termin ustalony albo rozmowa odnotowana w CRM. NIE jest załatwiona, gdy nie ma "
-    "śladu, nasz mail nie odpowiada na prośbę albo klient po naszym ruchu poprosił o coś nowego, na co nie "
+    "„umów spotkanie / zadzwoń” — termin ustalony albo rozmowa odnotowana w CRM. Prośba mogła być we wcześniejszym "
+    "mailu klienta w tym wątku, a ostatni mail klienta to np. podziękowanie, potwierdzenie albo doprecyzowanie: "
+    "nasz ruch po prośbie, choć przed ostatnim mailem klienta, też ją załatwia, jeśli ostatni mail klienta nie "
+    "prosi o nic nowego. Liczy się też nasz mail z innej naszej skrzynki, w innym wątku albo do innej osoby z firmy "
+    "klienta, a wpis CRM „📨 Umowa … wysłane do …” albo „umowa wysłana” to wysłana umowa. NIE jest załatwiona, gdy "
+    "nie ma śladu, nasz mail nie odpowiada na prośbę albo klient po naszym ruchu poprosił o coś nowego, na co nie "
     "odpisaliśmy. Gdy nie masz pewności — done=false. Pisz po polsku."
 )
 
@@ -12473,55 +12500,145 @@ def _mail_text_pl(m, limit=500):
 
 
 def _task_asked_at(t):
+    """Ostatni mail klienta w wątku sprawy (z niego przegląd zrobił sprawę)."""
     return (t.mail.date if t.mail is not None and t.mail.date else t.created_at) or datetime.utcnow()
+
+
+# sprawa wyłącznie o umowę / ofertę — wtedy wysłana umowa / oferta zamyka ją bez pytania Claude'a
+_TASK_CONTRACT_RE = re.compile(r"umow|kontrakt", re.I)
+_TASK_OFFER_RE = re.compile(r"ofert|wycen", re.I)
+_TASK_OTHER_RE = re.compile(r"faktur|zdję|zdjec|film|baz[aęy] wiedzy|instrukc|spotkan|zadzwo|telefon|\bpytan|"
+                            r"\bodpowied|\bodpis|\bdopyt|potwierdz|rabat|zniżk|znizk|negocj", re.I)  # „do podpisu” ≠ „odpisz”
+_ATT_CONTRACT_RE = re.compile(r"umow|contract|sutart|vertrag", re.I)
+_ATT_OFFER_RE = re.compile(r"ofert|offer|pasiul|pasiūl|angebot|wycen", re.I)
+
+
+def _att_names(m):
+    try:
+        return [a.get("name") for a in json.loads(m.attachments or "[]") if isinstance(a, dict) and a.get("name")]
+    except (ValueError, TypeError):
+        return []
+
+
+def _task_domains(addrs):
+    """Firmowe domeny klienta (bez gmaili itp.) — umowa mogła pójść do kogoś innego z tej samej firmy."""
+    return {a.rsplit("@", 1)[-1] for a in addrs if "@" in a and not sales_rules.is_free_mail(a)
+            and a.rsplit("@", 1)[-1] not in OWN_DOMAINS}
+
+
+def _task_client_addrs(t, lead=None):
+    lead = lead if lead is not None else _task_lead(t)
+    return set(_task_addrs(t)) | ({e.lower() for e in lead.emails} if lead is not None else set())
+
+
+def _task_sent_since(t, lead, since, company=True):
+    """Nasze maile do klienta wysłane po `since` — z każdej naszej skrzynki; company=True także do innych osób
+    z jego firmy (ta sama domena, bez gmaili itp.)."""
+    addrs = _task_client_addrs(t, lead)
+    conds = [MailMessage.addrs.like(f"% {a} %") for a in sorted(addrs)]
+    if company:
+        conds += [MailMessage.addrs.like(f"%@{d} %") for d in sorted(_task_domains(addrs))]
+    if not conds:
+        return []
+    return all_markets(MailMessage.query.filter(MailMessage.folder == "sent", MailMessage.date > since,
+                                                db.or_(*conds))).order_by(MailMessage.date).all()
+
+
+def _task_done_proof(t, lead=None):
+    """Twardy dowód bez Claude'a: sprawa jest wyłącznie o wysłanie umowy albo oferty, a PO ostatnim mailu klienta
+    umowa / oferta poszła (z CRM albo mailem z załącznikiem na adres klienta, z dowolnej naszej skrzynki).
+    Opis dowodu albo None."""
+    what = f"{t.title or ''} {t.action or ''}"
+    contract, offer = bool(_TASK_CONTRACT_RE.search(what)), bool(_TASK_OFFER_RE.search(what))
+    if contract == offer or _TASK_OTHER_RE.search(what):
+        return None  # nie wiadomo, o co chodzi, albo sprawa ma więcej części — decyduje Claude
+    asked = _task_asked_at(t)
+    lead = lead if lead is not None else _task_lead(t)
+    if lead is not None:
+        if contract:
+            j = lead.journey
+            if j is not None and j.contract_sent_at and j.contract_sent_at > asked:
+                return f"CRM: umowa wysłana {_dtl(j.contract_sent_at)} (Customer Journey)."
+            doc = (all_markets(JourneyDocument.query.filter(
+                JourneyDocument.lead_id == lead.id, JourneyDocument.kind == "umowa_wyslana",
+                JourneyDocument.received_at > asked)).order_by(JourneyDocument.received_at).first())
+            if doc is not None:
+                return f"CRM: umowa wysłana {_dtl(doc.received_at)} — {doc.filename} ({doc.source or 'dokumenty leada'})."
+        else:
+            o = (all_markets(SentOffer.query.filter(SentOffer.lead_id == lead.id, SentOffer.sent_at > asked))
+                 .order_by(SentOffer.sent_at).first())
+            if o is not None:
+                return f"CRM: oferta wysłana z CRM {_dtl(o.sent_at)} do {o.to_addr or 'klienta'}."
+    att_re = _ATT_CONTRACT_RE if contract else _ATT_OFFER_RE
+    # tylko na adres klienta: mail do kogoś innego z jego firmy (np. agencji z kilkoma eventami) ocenia Claude
+    for m in _task_sent_since(t, lead, asked, company=False):
+        hit = next((n for n in _att_names(m) if att_re.search(n)), None)
+        if hit:
+            return f"Mail {_dtl(m.date)} z {m.mailbox} „{m.subject or ''}” — załącznik {hit}."
+    return None
 
 
 def mail_task_evidence(t):
     """Materiał do sprawdzenia sprawy: maile z klientem we wszystkich skrzynkach i wątkach (od kilku dni przed jego
-    prośbą do dziś) i wpisy w CRM leada. Zwraca (tekst, czy po prośbie klienta coś od nas wyszło / jest wpis)."""
+    prośbą do dziś; także nasze maile do innych osób z jego firmy) i wpisy w CRM leada.
+    Zwraca (tekst, czy po prośbie klienta coś od nas wyszło / jest wpis). Prośba mogła być we wcześniejszym mailu
+    wątku niż ostatni mail klienta (np. potem tylko „dziękuję”) — liczymy od pierwszego maila klienta w wątku."""
     own = _own_addresses()
     asked = _task_asked_at(t)
     lead = _task_lead(t)
-    addrs = set(_task_addrs(t)) | ({e.lower() for e in lead.emails} if lead is not None else set())
+    addrs = _task_client_addrs(t, lead)
+    window = asked - timedelta(days=MAIL_TASK_LOOKBACK_DAYS)
     msgs = {}
     q = mail_query_for_addrs(sorted(addrs)) if addrs else None
     if q is not None:
-        for m in all_markets(q.filter(MailMessage.date >= asked - timedelta(days=MAIL_TASK_LOOKBACK_DAYS))).all():
+        for m in all_markets(q.filter(MailMessage.date >= window)).all():
             msgs[m.id] = m
     if t.thread_key:
         for m in all_markets(MailMessage.query.filter(MailMessage.thread_key == t.thread_key)).all():
             msgs[m.id] = m
+    for m in _task_sent_since(t, lead, window):
+        msgs[m.id] = m
+    is_ours = lambda m: m.folder == "sent" or (m.from_addr or "").lower() in own  # noqa: E731
+    first_ask = [m.date for m in msgs.values() if t.thread_key and m.thread_key == t.thread_key and not is_ours(m)
+                 and m.date and window <= m.date <= asked]
+    since = min(first_ask + [asked])
     lines, after = [], False
     for m in sorted(msgs.values(), key=lambda m: m.date or datetime.min)[-16:]:
-        ours = m.folder == "sent" or (m.from_addr or "").lower() in own
-        later = bool(m.date and m.date > asked)
-        after = after or (ours and later)
-        try:
-            att = [a.get("name") for a in json.loads(m.attachments or "[]") if isinstance(a, dict) and a.get("name")]
-        except (ValueError, TypeError):
-            att = []
-        lines.append(f"- [{'MY → klient' if ours else 'klient → my'} · {_dtl(m.date)} · {m.mailbox} · "
-                     f"{'PO prośbie' if later else 'przed prośbą'}] „{m.subject or ''}”"
-                     + (f" · załączniki: {', '.join(att)[:200]}" if att else "") + f"\n  {_mail_text_pl(m)}")
+        ours = is_ours(m)
+        when = "PO prośbie" if m.date and m.date > asked else (
+            "po pierwszej prośbie w wątku, przed ostatnim mailem klienta" if m.date and m.date > since else "przed prośbą")
+        if m.id == t.mail_id:
+            when = "OSTATNI MAIL KLIENTA — z niego sprawa"
+        after = after or bool(ours and m.date and m.date > since)
+        att = _att_names(m)
+        lines.append(f"- [{'MY → klient' if ours else 'klient → my'} · {_dtl(m.date)} · {m.mailbox} · {when}] "
+                     f"„{m.subject or ''}”" + (f" · załączniki: {', '.join(att)[:200]}" if att else "")
+                     + f"\n  {_mail_text_pl(m)}")
     if not lines:
         lines.append("- brak maili z tym klientem w archiwum Poczty")
     if lead is not None:
         lines.append(f"CRM: lead „{lead.company}” · etap {lead.stage}")
         for o in all_markets(SentOffer.query.filter(SentOffer.lead_id == lead.id, SentOffer.sent_at.isnot(None))).all():
             lines.append(f"- CRM: oferta wysłana z CRM {_dtl(o.sent_at)} ({o.price or ''}) do {o.to_addr or ''}")
-            after = after or o.sent_at > asked
+            after = after or o.sent_at > since
         j = lead.journey
         if j is not None:
             lines.append(f"- CRM: umowa {j.contract_status}"
                          + (f" (wysłana {_dtl(j.contract_sent_at)})" if j.contract_sent_at else "")
                          + f", baza wiedzy {j.kb_status}")
+            after = after or bool(j.contract_sent_at and j.contract_sent_at > since)
+        for d in all_markets(JourneyDocument.query.filter(JourneyDocument.lead_id == lead.id,
+                                                          JourneyDocument.kind == "umowa_wyslana",
+                                                          JourneyDocument.received_at > since)).all():
+            lines.append(f"- CRM: umowa wysłana {_dtl(d.received_at)} — {d.filename} ({d.source or ''})")
+            after = True
         acts = [a for a in lead.activities if a.done and (a.done_at or a.created_at)
-                and (a.done_at or a.created_at) > asked - timedelta(days=1)]
+                and (a.done_at or a.created_at) > since - timedelta(days=1)]
         for a in sorted(acts, key=lambda a: a.done_at or a.created_at)[-10:]:
             when = a.done_at or a.created_at
             first = " ".join((a.notes or "").split("\n")[0].split())[:160]
             lines.append(f"- CRM {_dtl(when)}: [{a.kind}{'/' + a.outcome if a.outcome else ''}] {first}")
-            after = after or when > asked
+            after = after or when > since
     return "\n".join(lines), after
 
 
@@ -12531,16 +12648,44 @@ def _task_needs_check(t):
         return False  # przywrócona ręcznie — człowiek zdecydował
     if not t.checked_at or t.checked_at < datetime.utcnow() - timedelta(hours=MAIL_TASK_RECHECK_HOURS):
         return True
-    addrs = sorted(_task_addrs(t))
+    lead = _task_lead(t)
+    addrs = sorted(_task_client_addrs(t, lead))
     q = mail_query_for_addrs(addrs) if addrs else None
     if q is not None and all_markets(q.filter(MailMessage.created_at > t.checked_at)).first() is not None:
         return True
-    lead = _task_lead(t)
+    recent = _task_sent_since(t, lead, t.checked_at - timedelta(days=2))
+    if any((m.created_at or m.date or datetime.min) > t.checked_at for m in recent):
+        return True  # nasz mail do kogoś innego z firmy klienta (pobrany ze skrzynki po ostatnim sprawdzeniu)
     if lead is None:
         return False
     if all_markets(SentOffer.query.filter(SentOffer.lead_id == lead.id, SentOffer.sent_at > t.checked_at)).first():
         return True
+    if lead.journey is not None and lead.journey.updated_at and lead.journey.updated_at > t.checked_at:
+        return True  # zmiana w Customer Journey (np. umowa wysłana)
+    if all_markets(JourneyDocument.query.filter(JourneyDocument.lead_id == lead.id,
+                                                JourneyDocument.received_at > t.checked_at)).first() is not None:
+        return True
     return any(a.done and (a.done_at or a.created_at or datetime.min) > t.checked_at for a in lead.activities)
+
+
+def mail_tasks_close_proven(code=None):
+    """Bez Claude'a, przy każdym obiegu poczty: sprawy „wyślij umowę / ofertę”, przy których umowa / oferta już
+    poszła po ostatnim mailu klienta, zamykają się same z dowodem (widać je w „Zamknięte po sprawdzeniu poczty”)."""
+    q = MailTask.query.filter(MailTask.status == "open")
+    if code:
+        q = q.filter(MailTask.market == code)
+    n = 0
+    now = datetime.utcnow()
+    for t in all_markets(q).all():
+        if (t.done_how or "") == MAIL_TASK_REOPENED:
+            continue
+        proof = _task_done_proof(t)
+        if proof:
+            t.status, t.done_at, t.done_how, t.checked_at, t.check_note = "done", now, MAIL_TASK_DONE_HOW, now, proof
+            n += 1
+    if n:
+        db.session.commit()
+    return n
 
 
 def verify_mail_tasks(tasks=None, force=False):
@@ -12551,9 +12696,16 @@ def verify_mail_tasks(tasks=None, force=False):
     if tasks is None:
         tasks = all_markets(MailTask.query.filter(MailTask.status == "open")).order_by(MailTask.created_at).all()
     now = datetime.utcnow()
-    todo = []
+    todo, closed = [], 0
     for t in tasks:
-        if t.status != "open" or (t.done_how or "") == MAIL_TASK_REOPENED or not (force or _task_needs_check(t)):
+        if t.status != "open" or (t.done_how or "") == MAIL_TASK_REOPENED:
+            continue
+        proof = _task_done_proof(t)
+        if proof:  # umowa / oferta już poszła po ostatnim mailu klienta — bez pytania Claude'a
+            t.status, t.done_at, t.done_how, t.checked_at, t.check_note = "done", now, MAIL_TASK_DONE_HOW, now, proof
+            closed += 1
+            continue
+        if not (force or _task_needs_check(t)):
             continue
         ev, after = mail_task_evidence(t)
         if not after:  # po prośbie klienta nic od nas nie wyszło i nic nie ma w CRM — na pewno otwarta
@@ -12561,7 +12713,7 @@ def verify_mail_tasks(tasks=None, force=False):
             continue
         todo.append((t, ev))
     db.session.commit()
-    closed = 0
+    checked = len(todo) + closed
     system = MAIL_TASK_CHECK_SYSTEM + f" Dziś jest {to_local(now):%Y-%m-%d %H:%M} (czas polski)."
     for start in range(0, len(todo), MAIL_TASK_CHECK_BATCH):
         chunk = todo[start:start + MAIL_TASK_CHECK_BATCH]
@@ -12590,7 +12742,7 @@ def verify_mail_tasks(tasks=None, force=False):
                 t.status, t.done_at, t.done_how = "done", now, MAIL_TASK_DONE_HOW
                 closed += 1
         db.session.commit()
-    return {"info": f"Sprawdzono w poczcie {len(todo)} spraw — zamknięte jako już załatwione: {closed}",
+    return {"info": f"Sprawdzono w poczcie {checked} spraw — zamknięte jako już załatwione: {closed}",
             "closed": closed, "url": "/crm/poczta?sprawy=1"}
 
 

@@ -14,7 +14,7 @@ Decyzje (Krok 2), które tu są zapisane — zmiana = edycja stałych poniżej:
 - limit prób kontaktu: 3 nieudane (telefon nieodebrany, SMS / mail bez odpowiedzi), u osób prywatnych 2 →
   zadanie „Zdecyduj” dla opiekuna (bez automatycznego przenoszenia na Stracony),
 - czas reakcji: cel 30 min w godzinach pracy pn–pt 9:00–18:00 (lead z wieczora liczy się od 9:00 następnego dnia
-  roboczego), alert w CRM (okno alarmów) dla wszystkich,
+  roboczego), licznik staje na RESPONSE_CAP_MIN („ponad 2 h”), alert w CRM (okno alarmów) dla wszystkich,
 - osoby prywatne: szkic pierwszej odpowiedzi do zatwierdzenia (nic nie wychodzi samo) + telefon (1–2 próby),
 - „Czy ktoś oddzwaniał?”: raz dziennie na każdym komputerze od 16:00 — numer, który oddzwonił, zapisuje się
   przy leadzie jako udany kontakt,
@@ -70,6 +70,7 @@ PRIVATE_ATTEMPT_LIMIT = 2  # osoby prywatne: dzwonimy raz, najwyżej dwa razy
 CALLBACK_ASK_FROM = 16  # od tej godziny raz dziennie pytanie „czy ktoś oddzwaniał?”
 CALLBACK_PREFIX = "📲 Klient oddzwonił"
 RESPONSE_TARGET_MIN = 30
+RESPONSE_CAP_MIN = 120  # licznik czasu reakcji staje na 2 h pracy — dalej „ponad 2 h” (bez 500–1000 min po weekendzie)
 WORK_DAYS = (0, 1, 2, 3, 4)  # pn–pt
 WORK_START, WORK_END = 9, 18  # godziny pracy (czas reakcji): lead po 18:00 liczy się od 9:00 kolejnego dnia roboczego
 CALL_HOURS = "pn–pt 9:00–17:00"
@@ -86,6 +87,14 @@ COUNTRIES = {"PL": "Polska", "LT": "Litwa", "DE": "Niemcy", "RO": "Rumunia", "AT
 _FREE_MAIL = ("gmail.", "googlemail.", "wp.pl", "o2.pl", "onet.", "op.pl", "interia.", "poczta.", "yahoo.",
               "outlook.", "hotmail.", "live.", "icloud.", "me.com", "gmx.", "web.de", "t-online.", "proton",
               "inbox.lt", "one.lt", "zoho.", "aol.", "tlen.pl", "vp.pl", "int.pl", "spoko.pl", "buziaczek.pl")
+
+
+def is_free_mail(domain):
+    """Domena darmowej poczty (gmail, wp, outlook…) — nie mówi nic o firmie klienta."""
+    d = (domain or "").lower().rsplit("@", 1)[-1]
+    return d.startswith(_FREE_MAIL) or any(f in d for f in _FREE_MAIL)
+
+
 _PARTNER_RE = re.compile(r"robot|unitree|humanoid|automati|\bai\b|mechatroni", re.I)
 _AGENCY_RE = re.compile(r"event|agencj|agency|agentur|eventow|\bproduction|produkcj|incentive|\bmice\b|"
                         r"marketing|promo|\bshow\b|rozrywk|entertainment|wedding|ślub|wesel", re.I)
@@ -112,7 +121,7 @@ def suggest_client_type(company, contact_name="", emails=(), nip=None, notes="")
     if (nip or "").strip() or _COMPANY_RE.search(comp):
         return "firma", "nazwa firmy albo NIP"
     domains = [e.split("@")[-1].lower() for e in emails or () if "@" in e]
-    free = bool(domains) and all(d.startswith(_FREE_MAIL) or any(f in d for f in _FREE_MAIL) for d in domains)
+    free = bool(domains) and all(is_free_mail(d) for d in domains)
     same = bool(comp) and _norm(comp) == _norm(contact_name)
     looks_person = bool(re.fullmatch(r"[A-ZĄĆĘŁŃÓŚŹŻČĖĮŠŲŪŽÄÖÜ][\wąćęłńóśźżčėįšųūžäöüß'-]+"
                                      r"(\s+[A-ZĄĆĘŁŃÓŚŹŻČĖĮŠŲŪŽÄÖÜ][\wąćęłńóśźżčėįšųūžäöüß'-]+){1,2}", comp))
@@ -225,6 +234,20 @@ def next_work_day(d, n=1):
         if out.weekday() in WORK_DAYS:
             n -= 1
     return out
+
+
+def response_minutes(start_local, end_local):
+    """Czas reakcji: minuty pracy od zapytania do odpowiedzi, najwyżej RESPONSE_CAP_MIN."""
+    return min(working_minutes(start_local, end_local), RESPONSE_CAP_MIN)
+
+
+def response_label(minutes):
+    """„25 min” albo „ponad 2 h”, gdy licznik doszedł do limitu."""
+    if minutes is None:
+        return ""
+    if minutes >= RESPONSE_CAP_MIN:
+        return f"ponad {RESPONSE_CAP_MIN // 60} h"
+    return f"{int(minutes)} min"
 
 
 def working_minutes(start_local, end_local):

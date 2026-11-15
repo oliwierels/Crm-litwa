@@ -47,7 +47,7 @@
   <div class="sp-card"><b>Powody strat</b>
     <table class="sp-tbl">{% for r in p.reasons %}<tr><td>{{ r.label }}</td><td style="text-align:right"><b>{{ r.count }}</b></td></tr>{% else %}<tr><td class="sp-muted">Brak straconych.</td></tr>{% endfor %}</table></div>
   <div class="sp-card"><b>Czas reakcji</b>
-    <div style="font-size:22px;font-weight:700;margin-top:4px;color:{{ 'var(--green)' if p.response.median is not none and p.response.median <= p.response.target else 'var(--yellow)' }}">{{ p.response.median if p.response.median is not none else '—' }} min</div>
+    <div style="font-size:22px;font-weight:700;margin-top:4px;color:{{ 'var(--green)' if p.response.median is not none and p.response.median <= p.response.target else 'var(--yellow)' }}">{{ response_label(p.response.median) if p.response.median is not none else '—' }}</div>
     <div class="sp-muted">mediana minut pracy do pierwszej odpowiedzi (cel {{ p.response.target }} min){% if p.response.within is not none %} · w celu: {{ p.response.within }}% z {{ p.response.count }} leadów{% endif %}</div></div>
   <div class="sp-card"><b>Anulacje po wygranej</b> <span class="sp-muted">— {{ p.cancels|length }} szt., {{ money(p.cancel_pln, 'PLN') }}</span>
     <table class="sp-tbl">{% for c in p.cancels %}<tr><td><a href="{{ url_for('crm_lead_detail', lead_id=c.lead.id) }}">{{ c.lead.company }}</a></td><td>{{ c.when.strftime('%d.%m') }}</td><td class="sp-muted">{{ c.reason }}</td><td>{{ money(c.pln, 'PLN') }}</td></tr>{% else %}<tr><td class="sp-muted">Brak.</td></tr>{% endfor %}</table></div>

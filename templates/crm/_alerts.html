@@ -65,8 +65,8 @@
       <div class="al-top">
         <b>{{ l.company }}</b>
         <span class="al-meta">{{ l.contact }}{% if l.phone %} · 📞 <a href="tel:{{ l.phone }}" style="color:inherit">{{ l.phone }}</a>{% endif %}{% if l.email %} · ✉️ {{ l.email }}{% endif %}{% if l.source %} · {{ l.source }}{% endif %}</span>
-        <span class="al-age">{{ '⚠️ z poprzedniego dnia · ' if l.old }}wpadł {{ l.when }} ({{ l.age_h|round|int }} h temu)</span>
-        {% if l.resp_min is not none %}<span class="al-age" style="{{ 'color:#fff;background:#dc2626;border-radius:5px;padding:1px 6px' if l.late else '' }}">⏱ {{ l.resp_min }} min pracy bez odpowiedzi{{ ' — przekroczony cel ' ~ l.target ~ ' min' if l.late }}</span>{% endif %}
+        <span class="al-age">{{ '⚠️ z poprzedniego dnia · ' if l.old }}wpadł {{ l.when }}{% if l.age_h < 24 %} ({{ l.age_h|round|int }} h temu){% endif %}</span>
+        {% if l.resp_min is not none %}<span class="al-age" style="{{ 'color:#fff;background:#dc2626;border-radius:5px;padding:1px 6px' if l.late else '' }}">⏱ {{ response_label(l.resp_min) }} pracy bez odpowiedzi{{ ' — przekroczony cel ' ~ l.target ~ ' min' if l.late }}</span>{% endif %}
       </div>
       {% if l.notes %}<div class="al-notes">{{ l.notes }}</div>{% endif %}
       <div class="al-acts">

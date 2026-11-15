@@ -54,7 +54,9 @@ def test_verify_closes_done_task_and_keeps_open_one(app, client, monkeypatch):
                "Prosimy o ofertę na 20.11")
     mail("sent", f"o.latek@33bots.{DOM}", f"klient@sprawdz.{DOM}", "Oferta: robot Unitree G1 20.11",
          now - timedelta(days=1), "t-offer", "W załączniku oferta", att=["Oferta_33Bots.pdf"])
-    done_task = task(ask, "Wysłać ofertę — Sprawdz Oferta", "Wyślij ofertę", lead_id=lead.id)
+    # sprawa z kilku części (oferta + pytanie) — decyduje Claude, nie twardy dowód
+    done_task = task(ask, "Wysłać ofertę i odpowiedzieć o dojazd — Sprawdz Oferta", "Wyślij ofertę, odpisz o dojazd",
+                     lead_id=lead.id)
     other = mail("in", f"inny@nic.{DOM}", f"o.latek@33bots.{DOM}", "Umowa?", now - timedelta(days=1), "t-other",
                  "Proszę o umowę")
     open_task = task(other, "Wysłać umowę — Nic", "Wyślij umowę")
@@ -109,6 +111,85 @@ def test_review_new_task_checked_before_list(app, monkeypatch):
     t = crm.all_markets(crm.MailTask.query.filter(crm.MailTask.thread_key == "t-rev")).one()
     assert t.status == "done" and t.done_how == crm.MAIL_TASK_DONE_HOW
     assert ask.id == t.mail_id
+
+
+def test_contract_sent_separately_closes_without_claude(app, monkeypatch):
+    """„Wyślij umowę”: umowa poszła osobnym mailem z innej skrzynki do kogoś innego z firmy klienta albo z Customer
+    Journey — sprawa zamyka się sama przy obiegu poczty, bez Claude'a, z dowodem do podglądu."""
+    monkeypatch.setattr(crm, "_ai_client", lambda: None)
+    monkeypatch.setattr(crm, "_ai_forced_tool", lambda *a, **k: (_ for _ in ()).throw(AssertionError("bez Claude'a")))
+    now = datetime.utcnow()
+    lead = crm.Lead(company="Firma Umowna", stage="Wygrany", assigned_to=1, contact_email=f"anna@umowna.{DOM}", **MK)
+    crm.db.session.add(lead)
+    crm.db.session.commit()
+    ask = mail("in", f"anna@umowna.{DOM}", f"o.latek@33bots.{DOM}", "Re: Oferta", now - timedelta(hours=3), "t-cx",
+               "Akceptujemy, prosimy o umowę")
+    t = task(ask, "Wysłać umowę — Firma Umowna", "Wyślij umowę do podpisu", lead_id=lead.id)
+    mixed = task(ask, "Wysłać umowę i fakturę zaliczkową", "Wyślij umowę i fakturę", lead_id=lead.id)
+    crm.mail_tasks_autoclose()
+    assert t.status == "open", "nic jeszcze nie poszło"
+    # umowa do kogoś innego z firmy klienta — nie twardy dowód (agencja może mieć kilka eventów), ale materiał dla Claude'a
+    mail("sent", f"kontakt@33bots.{DOM}", f"prawnik@umowna.{DOM}", "Umowa dla działu prawnego", now - timedelta(hours=2),
+         "t-cx3", "Umowa do wglądu", att=["Umowa_wzor.docx"])
+    crm.mail_tasks_autoclose()
+    assert t.status == "open"
+    ev, after = crm.mail_task_evidence(t)
+    assert after and "Umowa_wzor.docx" in ev and "Umowa dla działu prawnego" in ev
+    # umowa na adres klientki z innej naszej skrzynki, w osobnym wątku — twardy dowód
+    mail("sent", f"kontakt@33bots.{DOM}", f"anna@umowna.{DOM}", "Umowa 33Bots", now - timedelta(hours=1), "t-cx2",
+         "W załączniku umowa", att=["Umowa_33Bots_Firma_Umowna.docx"])
+    assert crm.mail_tasks_autoclose() >= 1
+    crm.db.session.refresh(t)
+    crm.db.session.refresh(mixed)
+    assert t.status == "done" and t.done_how == crm.MAIL_TASK_DONE_HOW and "Umowa_33Bots_Firma_Umowna.docx" in t.check_note
+    assert mixed.status == "open", "sprawa z fakturą — umowa to tylko część"
+
+    # umowa z Customer Journey (bez maila w archiwum Poczty); przywrócona ręcznie — już nie zamykana
+    lead2 = crm.Lead(company="Firma Journey", stage="Wygrany", assigned_to=1, contact_email=f"jan@journey.{DOM}", **MK)
+    crm.db.session.add(lead2)
+    crm.db.session.commit()
+    ask2 = mail("in", f"jan@journey.{DOM}", f"o.latek@33bots.{DOM}", "Umowa?", now - timedelta(hours=2), "t-cj",
+                "Kiedy umowa?")
+    t2 = task(ask2, "Wysłać umowę — Firma Journey", "Wyślij umowę", lead_id=lead2.id)
+    back = task(ask2, "Wysłać umowę — Firma Journey (2)", "Wyślij umowę", lead_id=lead2.id,
+                done_how=crm.MAIL_TASK_REOPENED)
+    j = crm.ensure_journey(lead2)
+    crm.journey_set_contract(j, lead2, "wyslana", when=now - timedelta(minutes=30))
+    crm.db.session.commit()
+    crm.mail_tasks_autoclose()
+    crm.db.session.refresh(t2)
+    crm.db.session.refresh(back)
+    assert t2.status == "done" and "Customer Journey" in t2.check_note
+    assert back.status == "open"
+    assert "Firma Journey" in crm._thread_digest(0, [ask2], set(), lead2)
+    assert "umowa wyslana (wysłana" in crm._thread_digest(0, [ask2], set(), lead2)
+
+
+def test_contract_before_client_thanks_goes_to_claude(app, monkeypatch):
+    """Klient prosi o umowę, my ją wysyłamy, a klient potem pisze „dziękuję” — sprawa liczy się od pierwszej prośby
+    w wątku, więc umowa sprzed ostatniego maila klienta też się liczy (dawniej: „nic od nas nie wyszło”)."""
+    monkeypatch.setattr(crm, "_ai_client", lambda: object())
+    now = datetime.utcnow()
+    mail("in", f"ola@dzieki.{DOM}", f"o.latek@33bots.{DOM}", "Umowa", now - timedelta(hours=5), "t-ty",
+         "Prosimy o umowę na 28.11")
+    mail("sent", f"o.latek@33bots.{DOM}", f"ola@dzieki.{DOM}", "Umowa najmu robota", now - timedelta(hours=4), "t-ty-c",
+         "W załączniku umowa", att=["Umowa_33Bots_Dzieki.docx"])
+    thanks = mail("in", f"ola@dzieki.{DOM}", f"o.latek@33bots.{DOM}", "Re: Umowa", now - timedelta(hours=3), "t-ty",
+                  "Dziękuję, przekażę do podpisu")
+    t = task(thanks, "Wysłać umowę — Dzięki", "Wyślij umowę")
+    crm.mail_tasks_autoclose()
+    assert t.status == "open", "umowa przed ostatnim mailem klienta — bez twardego dowodu, decyduje Claude"
+    seen = []
+
+    def fake(model, system, text, tool, max_tokens=4096):
+        seen.append(text)
+        assert "Umowa_33Bots_Dzieki.docx" in text and "po pierwszej prośbie w wątku" in text
+        assert "OSTATNI MAIL KLIENTA" in text and "podziękowanie" in system
+        return {"items": [{"task": 0, "done": True, "evidence": "Umowa poszła 4 h temu, klient podziękował"}]}
+
+    monkeypatch.setattr(crm, "_ai_forced_tool", fake)
+    assert crm.verify_mail_tasks([t])["closed"] == 1 and len(seen) == 1
+    assert t.status == "done" and "podziękował" in t.check_note
 
 
 def test_open_lead_link_finds_lead_by_address(app, client):
