@@ -1,5 +1,6 @@
-"""Strażnik CRM w działaniu: czujniki pracowników w tle → alarm w CRM (pasek + strona „Stan CRM”), diagnoza
-Claude'a, powrót do normy, cisza w leadach, robot bez osobowości, narzędzie crm_health w czacie.
+"""Strażnik CRM w działaniu: czujniki pracowników w tle → alarm dla człowieka (pasek + strona „Stan CRM”, diagnoza
+Claude'a) albo naprawa bez człowieka (chwilowe błędy, restart wątku, błąd w kodzie), cisza w leadach, robot bez
+osobowości, narzędzie crm_health w czacie.
 Bez prawdziwego Claude'a i bez wysyłki."""
 import json
 from datetime import datetime, timedelta
@@ -37,24 +38,25 @@ def client():
     return c
 
 
-def test_failing_job_raises_alarm_with_diagnosis_and_clears(app, clean, monkeypatch):
+def test_human_alarm_with_diagnosis_and_clears(app, clean, monkeypatch):
+    """Błąd, którego bez człowieka nie naprawi się (zły klucz) — pasek, diagnoza, czat; po naprawie znika."""
     assert "kampanie" in crm.health_jobs()
     crm.health_beat("kampanie", True, info="ok")
     for _ in range(2):
-        crm.health_beat("kampanie", False, error="OperationalError: database is locked")
+        crm.health_beat("kampanie", False, error="HTTPError: 401 Client Error: Unauthorized (invalid api key)")
     assert not crm.health_check_pass()["alarms"], "dwa błędy z rzędu to jeszcze nie alarm"
-    crm.health_beat("kampanie", False, error="OperationalError: database is locked")
+    crm.health_beat("kampanie", False, error="HTTPError: 401 Client Error: Unauthorized (invalid api key)")
     res = crm.health_check_pass()
     alarm = res["alarms"]["job:kampanie"]
-    assert alarm["level"] == "red" and alarm["title"] == "Kampanie (Blitzkrieg): nie działa"
-    assert "database is locked" in alarm["detail"] and "Blitzkrieg" in alarm["hint"] and res["new"] == ["job:kampanie"]
+    assert alarm["level"] == "red" and alarm["title"] == "Kampanie (Blitzkrieg): nie działa" and alarm["who"] == "human"
+    assert "401" in alarm["detail"] and "Blitzkrieg" in alarm["hint"] and res["new"] == ["job:kampanie"]
 
     # pasek na górze CRM, licznik w menu i strona „Stan CRM”
     c = client()
     html = c.get("/crm/").get_data(as_text=True)
     assert "Strażnik CRM:" in html and "Kampanie (Blitzkrieg): nie działa" in html
     page = c.get("/crm/stan").get_data(as_text=True)
-    assert "🚨 Alarmy (1)" in page and "database is locked" in page and "Pracownicy w tle" in page
+    assert "Wymaga Twojej akcji (1)" in page and "Unauthorized" in page and "Pracownicy w tle" in page
     assert "diagnoza Claude'a pojawi się" in page
 
     # diagnoza Claude'a — raz na alarm
@@ -63,20 +65,19 @@ def test_failing_job_raises_alarm_with_diagnosis_and_clears(app, clean, monkeypa
     def fake(model, system, text, tool, max_tokens=4096):
         calls.append(text)
         assert tool["name"] == "health_diagnosis" and "Kampanie (Blitzkrieg): nie działa" in text
-        assert "database is locked" in text and "Railway" in system
-        return {"cause": "Baza była chwilowo zajęta — przyczyna to długie zapytanie.", "fix": "1. Poczekaj 15 minut.",
-                "urgent": False}
+        assert "Unauthorized" in text and "Railway" in system
+        return {"cause": "Klucz wygasł albo został zmieniony.", "fix": "1. Wygeneruj nowy klucz.", "urgent": False}
 
     monkeypatch.setattr(crm, "_ai_client", lambda: object())
     monkeypatch.setattr(crm, "_ai_forced_tool", fake)
     assert crm.health_check_pass()["diagnosed"] == 1
     assert crm.health_check_pass()["diagnosed"] == 0 and len(calls) == 1, "trwający alarm bez ponownej diagnozy"
     page = c.get("/crm/stan").get_data(as_text=True)
-    assert "Baza była chwilowo zajęta" in page and "Poczekaj 15 minut" in page and "—" not in page.split("Diagnoza")[1][:80]
+    assert "Klucz wygasł" in page and "Wygeneruj nowy klucz" in page
 
     # w czacie (konektor / asystent)
     out = json.loads(crm._assistant_execute("crm_health", {}, crm.USERS_BY_ID[1])[0])
-    assert out["all_ok"] is False and out["alarms"][0]["diag"]["cause"].startswith("Baza była")
+    assert out["all_ok"] is False and out["needs_human"][0]["diag"]["cause"].startswith("Klucz wygasł")
     assert any(j["key"] == "kampanie" and j["state"] == "failing" for j in out["jobs"])
     assert "crm_health" in [t["name"] for t in crm._mcp_tools_payload()]
 
@@ -86,15 +87,76 @@ def test_failing_job_raises_alarm_with_diagnosis_and_clears(app, clean, monkeypa
     assert not res["alarms"] and res["closed"] == ["job:kampanie"]
     assert "Strażnik CRM:" not in c.get("/crm/").get_data(as_text=True)
     page = c.get("/crm/stan").get_data(as_text=True)
-    assert "✅ Wszystko działa" in page and "wróciło do normy" in page
+    assert "Nic nie wymaga Twojej akcji" in page and "wróciło do normy" in page
 
 
-def test_stale_job_and_claim_every(app, clean):
+def test_transient_and_code_errors_are_fixed_without_human(app, clean, monkeypatch):
+    """Chwilowy błąd (np. zajęta baza) i błąd w kodzie: bez paska u człowieka, bez diagnozy — tylko w sekcji
+    „naprawiane automatycznie”. Gdy naprawa nie pomaga (6 h / 24 h), alarm przechodzi do człowieka."""
+    monkeypatch.setattr(crm, "_ai_client", lambda: object())
+    monkeypatch.setattr(crm, "_ai_forced_tool", lambda *a, **k: (_ for _ in ()).throw(AssertionError("bez diagnozy")))
+    for _ in range(3):
+        crm.health_beat("kampanie", False, error="OperationalError: database is locked")
+    alarm = crm.health_check_pass()["alarms"]["job:kampanie"]
+    assert alarm["who"] == "auto" and alarm["how"] == "wait"
+    c = client()
+    assert "Strażnik CRM:" not in c.get("/crm/").get_data(as_text=True), "nic dla człowieka"
+    page = c.get("/crm/stan").get_data(as_text=True)
+    assert "Nic nie wymaga Twojej akcji" in page and "Naprawiane automatycznie" in page and "ponawia sam" in page
+    out = json.loads(crm._assistant_execute("crm_health", {}, crm.USERS_BY_ID[1])[0])
+    assert out["all_ok"] is True and out["auto_fixing"][0]["how"] == "wait"
+
+    # po 6 h chwilowy błąd dalej trwa — człowiek (z diagnozą)
+    cur = json.loads(crm.get_setting(crm.HEALTH_ALARMS_KEY))
+    cur["job:kampanie"]["since"] = (datetime.utcnow() - timedelta(hours=7)).isoformat(timespec="seconds")
+    crm.set_setting(crm.HEALTH_ALARMS_KEY, json.dumps(cur))
+    crm.db.session.commit()
+    monkeypatch.setattr(crm, "_ai_forced_tool", lambda *a, **k: {"cause": "Baza przeciążona.", "fix": "Sprawdź Railway.",
+                                                                 "urgent": True})
+    res = crm.health_check_pass()
+    assert res["alarms"]["job:kampanie"]["who"] == "human" and res["escalated"] == ["job:kampanie"]
+    assert "nie pomogła od 7 h" in res["alarms"]["job:kampanie"]["why"] and res["diagnosed"] == 1
+    assert "Strażnik CRM:" in c.get("/crm/").get_data(as_text=True)
+
+    # błąd w kodzie — naprawia Claude (bez paska u człowieka)
+    crm.health_beat("kampanie", True)
+    crm.health_check_pass()
+    for _ in range(3):
+        crm.health_beat("kampanie", False, error="AttributeError: 'NoneType' object has no attribute 'stage'")
+    alarm = crm.health_check_pass()["alarms"]["job:kampanie"]
+    assert alarm["who"] == "auto" and alarm["how"] == "code"
+
+
+def test_dead_worker_restarted_automatically(app, clean, monkeypatch):
+    """Wątek pracownika umarł (stoi) — strażnik uruchamia go ponownie sam; po 3 nieudanych próbach — człowiek."""
+    import threading
+    started = []
+    dead = threading.Thread(target=lambda: None)
+    dead.start()
+    dead.join()
+    monkeypatch.setitem(crm._WORKERS, "campaign", (lambda: started.append(1), dead))
     beat = crm.health.beat_update({}, True, now=datetime.utcnow() - timedelta(hours=3))
     crm.set_setting(crm.HEALTH_BEAT_PREFIX + "kampanie", json.dumps(beat))
     crm.db.session.commit()
-    alarm = crm.health_check_pass()["alarms"]["job:kampanie"]
-    assert alarm["title"] == "Kampanie (Blitzkrieg): stoi" and "Restart" in alarm["hint"]
+    res = crm.health_check_pass()
+    alarm = res["alarms"]["job:kampanie"]
+    assert alarm["title"] == "Kampanie (Blitzkrieg): stoi" and alarm["who"] == "auto" and alarm["how"] == "restart"
+    assert res["fixed"] == ["job:kampanie"] and "uruchomiony ponownie" in alarm["auto_note"]
+    for _ in range(50):
+        if started:
+            break
+        import time
+        time.sleep(0.02)
+    assert started == [1] and crm._WORKERS["campaign"][1] is not dead
+    assert crm.health_check_pass()["fixed"] == [], "kolejna próba nie wcześniej niż po 10 min"
+    cur = json.loads(crm.get_setting(crm.HEALTH_ALARMS_KEY))
+    cur["job:kampanie"]["auto_tries"] = 3
+    crm.set_setting(crm.HEALTH_ALARMS_KEY, json.dumps(cur))
+    crm.db.session.commit()
+    assert crm.health_check_pass()["alarms"]["job:kampanie"]["who"] == "human", "3 próby bez skutku — człowiek"
+
+
+def test_claim_every(app, clean):
     key = "health_test_lock"
     assert crm._claim_every(key, 600) and not crm._claim_every(key, 600)
     row = crm.db.session.get(crm.AppSetting, key)

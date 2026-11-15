@@ -15,12 +15,13 @@
     Ostatnie sprawdzenie: <b style="color:{{ 'var(--red)' if r.watch_stale else 'inherit' }}">{{ r.checked_text }}</b>{% if r.watch_stale %} — strażnik dawno się nie zgłosił (po wdrożeniu startuje po ok. 2 min){% endif %}.
   </p>
 
-  <h3 style="margin:14px 0 6px;font-size:15px">{{ '✅ Wszystko działa' if not r.alarms else '🚨 Alarmy (' ~ r.alarms|length ~ ')' }}</h3>
+  <h3 style="margin:14px 0 6px;font-size:15px">{{ '✅ Nic nie wymaga Twojej akcji' if not r.alarms else '🚨 Wymaga Twojej akcji (' ~ r.alarms|length ~ ')' }}</h3>
   {% for a in r.alarms %}
   <div style="border:1px solid {{ 'rgba(220,38,38,.55)' if a.level == 'red' else 'rgba(234,179,8,.55)' }};border-radius:8px;padding:10px 12px;margin:8px 0;background:{{ 'rgba(220,38,38,.08)' if a.level == 'red' else 'rgba(234,179,8,.08)' }}">
     <b>{{ '🔴' if a.level == 'red' else '🟡' }} {{ a.title }}</b>
     <span style="color:var(--muted);font-size:12px"> · od {{ health_fmt(a.since) }}</span>
     {% if a.detail %}<div style="font-size:12.5px;margin-top:4px">{{ a.detail }}</div>{% endif %}
+    {% if a.why %}<div style="font-size:12px;margin-top:4px;color:var(--muted)">Dlaczego Ty: {{ a.why }}{% if a.auto_note %} · ostatnia próba naprawy: {{ a.auto_note }}{% endif %}</div>{% endif %}
     {% if a.diag %}
     <div style="font-size:12.5px;margin-top:6px"><b>Diagnoza{{ ' (pilne)' if a.diag.urgent }}:</b> {{ a.diag.cause }}</div>
     <div style="font-size:12.5px;margin-top:2px;white-space:pre-line"><b>Co zrobić:</b> {{ a.diag.fix }}</div>
@@ -29,6 +30,16 @@
     {% endif %}
   </div>
   {% endfor %}
+
+  {% if r.auto %}
+  <h3 style="margin:18px 0 6px;font-size:15px">🛠️ Naprawiane automatycznie — nic nie musisz robić ({{ r.auto|length }})</h3>
+  <ul style="margin:0 0 0 18px;font-size:12.5px">
+    {% for a in r.auto %}
+    <li style="margin:4px 0"><b>{{ a.title }}</b> <span style="color:var(--muted)">· od {{ health_fmt(a.since) }} · {{ a.how_text }}{% if a.auto_note %} · {{ a.auto_note }}{% endif %}</span>
+      {% if a.detail %}<div style="color:var(--muted);font-size:12px">{{ a.detail }}</div>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 
   <h3 style="margin:18px 0 6px;font-size:15px">Pracownicy w tle</h3>
   <table style="width:100%;font-size:12.5px">
@@ -45,8 +56,8 @@
   <h3 style="margin:18px 0 6px;font-size:15px">Historia</h3>
   <ul style="margin:0 0 0 18px;font-size:12.5px;color:var(--muted)">
     {% for e in r.log %}
-    <li>{{ health_fmt(e.at) }} · {{ ('🔴' if e.level == 'red' else '🟡') if e.event == 'open' else '✅' }}
-      {{ e.title }}{% if e.event == 'close' %} — wróciło do normy (alarm od {{ health_fmt(e.since) }}){% endif %}</li>
+    <li>{{ health_fmt(e.at) }} · {{ {'open': ('🔴' if e.level == 'red' else '🟡'), 'autofix': '🛠️', 'escalate': '🙋', 'close': '✅'}.get(e.event, '·') }}
+      {{ e.title }}{% if e.event == 'close' %} — wróciło do normy (alarm od {{ health_fmt(e.since) }}){% elif e.event == 'autofix' %} — naprawa automatyczna: {{ e.note }}{% elif e.event == 'escalate' %} — naprawa automatyczna nie pomogła, potrzebny człowiek{% elif e.event == 'open' and e.who == 'auto' %} — CRM / Claude naprawia sam{% endif %}</li>
     {% endfor %}
   </ul>
   {% endif %}

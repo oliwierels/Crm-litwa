@@ -6,10 +6,15 @@ Jak działa:
 - strażnik co kwadrans ocenia notki (job_state) i ciągłość pracy (quiet_alarm — np. od 4 dni ani jednego leada,
   a zwykle przychodzi kilka dziennie) i aktualizuje listę alarmów (merge_alarms). Alarm widać w CRM i znika sam,
   gdy wszystko wróci do normy;
-- strażnik niczego nie naprawia i niczego nie wysyła. Claude dopisuje tylko diagnozę po ludzku przy nowym alarmie.
+- każdy alarm ma właściciela (classify): „auto” — CRM naprawia sam (chwilowy błąd mija, stojący wątek
+  uruchamia ponownie, osobowość robota tworzy od razu, listę ClickUp szuka od nowa, błąd w kodzie naprawia
+  Claude) albo „human” — tylko to, czego bez człowieka zrobić się nie da (nowy klucz, hasło, decyzja). Ludzie
+  widzą tylko alarmy „human”; naprawa automatyczna, która nie pomaga, po czasie przechodzi do człowieka;
+- strażnik niczego nie wysyła do klientów. Claude dopisuje diagnozę po ludzku przy alarmie dla człowieka.
 
 Tu tylko czysta logika (bez bazy i Flaska) — CRM woła te funkcje i trzyma notki w ustawieniach (AppSetting).
 Czasy w danych są w UTC; do opisów CRM podaje funkcję czasu lokalnego (set_local_time)."""
+import re
 from datetime import datetime, timedelta
 
 FAIL_STREAK = 3  # tyle błędów z rzędu = alarm (pojedynczy timeout skrzynki to jeszcze nie awaria)
@@ -122,7 +127,7 @@ def job_alarms(beats, jobs, now=None, started_at=None):
 
 
 def merge_alarms(prev, found, now=None):
-    """Łączy nowy obraz z poprzednim: alarm, który trwa, zachowuje „od kiedy” i diagnozę.
+    """Łączy nowy obraz z poprzednim: alarm, który trwa, zachowuje „od kiedy”, diagnozę i próby naprawy.
     Zwraca (aktualne, nowe_klucze, zamknięte_klucze)."""
     now = now or datetime.utcnow()
     prev = prev or {}
@@ -131,6 +136,9 @@ def merge_alarms(prev, found, now=None):
         old = prev.get(key) or {}
         cur = dict(alarm)
         cur["since"] = old.get("since") or iso(now)
+        for k in ("auto_tries", "auto_at", "auto_note", "diag_tries"):
+            if old.get(k) is not None:
+                cur[k] = old[k]
         if old.get("diag") and old.get("title") == cur.get("title"):
             cur["diag"] = old["diag"]
         if not old:
@@ -138,6 +146,70 @@ def merge_alarms(prev, found, now=None):
         out[key] = cur
     closed = [k for k in prev if k not in found]
     return out, new, closed
+
+
+# --- kto naprawia: CRM / Claude sam („auto”) czy człowiek („human”) ---
+_HUMAN_RE = re.compile(
+    r"\b40[13]\b|unauthori[sz]ed|forbidden|invalid[ _-]?(?:api[ _-]?)?key|api[ _-]?key|\btoken\b|hasł|password|"
+    r"authenticat|login failed|\[AUTHENTICATIONFAILED\]|credential|brak konfiguracji|brak klucza|niepodłączon|"
+    r"nie jest podłączon|ustaw [A-Z][A-Z0-9_]{3,}|quota|insufficient|credit balance|billing|payment required|\b402\b",
+    re.I)
+_TRANSIENT_RE = re.compile(
+    r"timeout|timed out|temporar|\b5\d\d\b|connection (?:reset|refused|aborted)|ConnectionError|RemoteDisconnected|"
+    r"EOF occurred|rate limit|\b429\b|overloaded|database is locked|SSLError|\bssl\b|name resolution|"
+    r"Max retries exceeded|socket", re.I)
+_CODE_RE = re.compile(r"\b(?:TypeError|AttributeError|KeyError|NameError|ValueError|IndexError|UnboundLocalError|"
+                      r"ZeroDivisionError|AssertionError|ProgrammingError|InvalidRequestError|DataError|"
+                      r"UndefinedColumn|NotNullViolation|StatementError|JSONDecodeError|UnicodeError)\b")
+# po ilu próbach / godzinach naprawa automatyczna oddaje alarm człowiekowi
+AUTO_LIMIT = {"restart": ("tries", 3), "robot": ("tries", 2), "rediscover": ("tries", 2),
+              "wait": ("hours", 6), "code": ("hours", 24)}
+HOW_TEXT = {
+    "wait": "chwilowy błąd zewnętrznej usługi — CRM ponawia sam",
+    "restart": "wątek stanął — CRM uruchamia go ponownie",
+    "robot": "CRM od razu tworzy i wgrywa osobowość robota",
+    "rediscover": "CRM szuka listy ClickUp od nowa",
+    "code": "błąd w kodzie — naprawia go Claude",
+    "info": "informacja — nic nie trzeba robić",
+}
+
+
+def classify(key, alarm, now=None):
+    """Kto zajmuje się alarmem: ("auto", sposób z HOW_TEXT) albo ("human", powód). Człowiek dostaje tylko to, czego
+    bez niego zrobić się nie da (klucz, hasło, konfiguracja, cisza w leadach), i to, czego naprawa automatyczna
+    nie usunęła w czasie z AUTO_LIMIT."""
+    now = now or datetime.utcnow()
+    text = f"{alarm.get('title') or ''} {alarm.get('detail') or ''}"
+    if key.startswith("quiet:mail"):
+        return "auto", "info"  # skrzynka działa (pilnuje jej czujnik), po prostu mniej maili — nic do zrobienia
+    if key.startswith("quiet:"):
+        return "human", "cisza w zgłoszeniach — sprawdź formularz, reklamy i ClickUp"
+    if _HUMAN_RE.search(text):
+        return "human", "potrzebny klucz, hasło albo ustawienie w Railway"
+    if key.startswith("robot:"):
+        how = "robot"
+    elif "stoi" in (alarm.get("title") or ""):
+        how = "restart"
+    elif "nie znalazłem" in text or "nie widzi listy" in text:
+        how = "rediscover"
+    elif _CODE_RE.search(text):
+        how = "code"
+    elif _TRANSIENT_RE.search(text):
+        how = "wait"
+    else:
+        how = "code"
+    kind, limit = AUTO_LIMIT[how]
+    if kind == "tries" and int(alarm.get("auto_tries") or 0) >= limit:
+        return "human", f"naprawa automatyczna („{HOW_TEXT[how]}”) nie pomogła po {limit} próbach"
+    since = parse(alarm.get("since"))
+    if kind == "hours" and since and now - since >= timedelta(hours=limit):
+        return "human", f"naprawa automatyczna („{HOW_TEXT[how]}”) nie pomogła od {human(now - since)}"
+    return "auto", how
+
+
+def human_alarms(alarms):
+    """Tylko alarmy, które wymagają człowieka (pasek na górze CRM, licznik w menu)."""
+    return [a for a in sorted_alarms(alarms) if a.get("who") == "human"]
 
 
 def sorted_alarms(alarms):

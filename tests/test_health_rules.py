@@ -69,3 +69,29 @@ def test_merge_keeps_since_and_diagnosis():
     assert [a["key"] for a in h.sorted_alarms(cur)] == ["job:poczta", "quiet:leads"]
     assert h.human(timedelta(minutes=15)) == "15 min" and h.human(timedelta(hours=5)) == "5 h"
     assert h.human(timedelta(days=3)) == "3 dni"
+
+
+def test_classify_who_fixes():
+    """Człowiek tylko wtedy, gdy bez niego się nie da (klucz, hasło, konfiguracja, cisza w leadach) albo gdy naprawa
+    automatyczna nie pomaga zbyt długo."""
+    def c(key, detail, title="Poczta: nie działa", **extra):
+        return h.classify(key, {"title": title, "detail": detail, "since": h.iso(NOW - timedelta(minutes=20)), **extra}, NOW)
+    assert c("job:poczta:x", "LOGIN failed [AUTHENTICATIONFAILED]")[0] == "human"
+    assert c("job:clickup", "HTTPError: 401 Client Error: Unauthorized")[0] == "human"
+    assert c("job:raport", "Brak konfiguracji: ustaw SMTP_HOST")[0] == "human"
+    assert c("job:przeglad", "credit balance is too low")[0] == "human"
+    assert c("job:poczta:x", "TimeoutError: timed out") == ("auto", "wait")
+    assert c("job:pl_move", "OperationalError: server closed the connection unexpectedly (502)") == ("auto", "wait")
+    assert c("job:automaty", "AttributeError: 'NoneType' object has no attribute 'stage'") == ("auto", "code")
+    assert c("job:kampanie", "", title="Kampanie: stoi") == ("auto", "restart")
+    assert c("job:clickup_de", "Niemcy: nie znalazłem w ClickUp listy") == ("auto", "rediscover")
+    assert c("robot:Benio", "Agent ma wgraną osobowość innego wydarzenia", title="Robot Benio: brak osobowości") == ("auto", "robot")
+    assert c("quiet:mail:x", "ostatnio 10.11") == ("auto", "info")
+    assert c("quiet:leads:pl", "ostatnio 10.11")[0] == "human"
+    # naprawa automatyczna bez skutku → człowiek
+    assert c("job:kampanie", "", title="Kampanie: stoi", auto_tries=3)[0] == "human"
+    assert c("robot:Benio", "x", title="Robot Benio: brak osobowości", auto_tries=2)[0] == "human"
+    old = {"title": "Poczta: nie działa", "detail": "TimeoutError", "since": h.iso(NOW - timedelta(hours=7))}
+    who, why = h.classify("job:poczta:x", old, NOW)
+    assert who == "human" and "nie pomogła od 7 h" in why
+    assert [a["key"] for a in h.human_alarms({"a": {"who": "human", "level": "yellow"}, "b": {"who": "auto"}})] == ["a"]
