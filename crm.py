@@ -12,6 +12,7 @@ import logistics
 import market as markets
 import offers
 import poczta
+import health
 import pricing
 import sales_rules
 
@@ -1185,6 +1186,36 @@ _AUTO_REALIZE_EVERY = 600  # s
 
 NEXT_STEPS_BACKFILL_KEY = "next_steps_backfill_v1"
 
+# ---------- STRAŻNIK CRM: czujniki pracowników w tle (ocena, alarmy i strona — niżej, „STRAŻNIK CRM”) ----------
+HEALTH_BEAT_PREFIX = "hb:"
+HEALTH_STARTED_AT = datetime.utcnow()
+
+
+def health_beat(name, ok=True, info="", error=""):
+    """Czujnik: pracownik w tle po obiegu zapisuje notkę „OK” albo błąd. Własna sesja bazy (nie rusza pracy
+    pracownika) i nigdy nie wywraca pracownika — najwyżej notka się nie zapisze."""
+    try:
+        from sqlalchemy.orm import Session as _BeatSession
+        with app.app_context(), _BeatSession(db.engine) as s:
+            key = (HEALTH_BEAT_PREFIX + name)[:64]
+            row = s.get(AppSetting, key)
+            try:
+                cur = json.loads(row.value) if row is not None and row.value else {}
+            except ValueError:
+                cur = {}
+            value = json.dumps(health.beat_update(cur, ok, info, error), ensure_ascii=False)
+            if row is None:
+                s.add(AppSetting(key=key, value=value))
+            else:
+                row.value = value
+            s.commit()
+    except Exception:
+        app.logger.exception("health_beat %s", name)
+
+
+def health_fail(name, exc):
+    health_beat(name, False, error=f"{type(exc).__name__}: {exc}"[:500])
+
 
 def _realize_scheduler():
     """W tle, poza startem aplikacji i poza żądaniami, co 10 minut: przenoszenie zrealizowanych
@@ -1199,8 +1230,8 @@ def _realize_scheduler():
                     set_setting(NEXT_STEPS_BACKFILL_KEY, f"{added} @ {datetime.utcnow():%Y-%m-%d %H:%M}")
                     db.session.commit()
                 db.session.remove()
-        except Exception:
-            pass
+        except Exception as e:
+            health_fail("automaty", e)
         try:
             with app.app_context():
                 auto_realize_leads()
@@ -1211,8 +1242,10 @@ def _realize_scheduler():
                 cleanup_offer_audit_steps()
                 clear_form_day_event_dates()
                 db.session.remove()
-        except Exception:
-            pass
+            health_beat("automaty")
+        except Exception as e:
+            app.logger.exception("realize_scheduler")
+            health_fail("automaty", e)
         time.sleep(_AUTO_REALIZE_EVERY)
 
 
@@ -1482,10 +1515,11 @@ def _report_scheduler():
             now = datetime.now(WARSAW_TZ) if WARSAW_TZ else datetime.now()
             if now.hour == report_hour and last_sent != now.date():
                 with app.app_context():
-                    send_daily_report()
+                    ok, msg = send_daily_report()
                 last_sent = now.date()
-        except Exception:
-            pass
+                health_beat("raport", ok, info="raport wysłany", error=msg)
+        except Exception as e:
+            health_fail("raport", e)
         time.sleep(60)
 
 
@@ -1914,9 +1948,11 @@ def _clickup_scheduler():
     while True:
         try:
             with app.app_context():
-                sync_clickup_leads()
-        except Exception:
-            pass
+                ok, _n, msg = sync_clickup_leads()
+            health_beat("clickup", ok, info=msg, error=msg)
+        except Exception as e:
+            app.logger.exception("clickup")
+            health_fail("clickup", e)
         time.sleep(interval)
 
 
@@ -6055,8 +6091,10 @@ def _journey_scheduler():
                     scan_journey_mail()
                 journey_convert_pending()
                 db.session.remove()
-        except Exception:
-            pass
+            health_beat("journey")
+        except Exception as e:
+            app.logger.exception("journey_scheduler")
+            health_fail("journey", e)
         time.sleep(JOURNEY_POLL_SECONDS)
 
 
@@ -7044,6 +7082,15 @@ ASSISTANT_TOOLS = [
         },
     },
     {
+        "name": "crm_health",
+        "description": "Strażnik CRM: czy wszystko działa. Stan każdego pracownika w tle (poczta każdej skrzynki, import "
+                       "z ClickUp, przenoszenie leadów z CRM PL i wygranych do PL, Customer Journey, przegląd poczty, "
+                       "automaty), aktywne alarmy z diagnozą (przyczyna, co zrobić), cisza w leadach LT / DE i w mailach "
+                       "dłuższa niż zwykle i historia alarmów. Tylko odczyt. Użyj, gdy ktoś pyta, czy CRM działa, albo "
+                       "coś nie dochodzi. refresh=true najpierw robi świeże sprawdzenie (bez diagnozy).",
+        "input_schema": {"type": "object", "properties": {"refresh": {"type": "boolean"}}, "required": []},
+    },
+    {
         "name": "sales_performance",
         "description": "Panel skuteczności sprzedaży (zakładka Skuteczność): wartość wygranych wg miesiąca ZAMKNIĘCIA, osobno dla "
                        "Polski, Niemiec, Litwy i Rumunii, na tle celów (PL 150 tys. zł realnie / 200 tys. ambitnie, DE 30 tys. EUR, "
@@ -7568,6 +7615,13 @@ def _assistant_apply_lead_fields(lead, inp, user):
 def _assistant_execute(name, inp, user):
     """Wykonuje narzędzie asystenta. Zwraca (wynik-json-string, opis-akcji-albo-None)."""
     import json as _json
+    if name == "crm_health":
+        if inp.get("refresh"):
+            health_check_pass(diag=False)
+        r = health_report()
+        return _json.dumps({"all_ok": not r["alarms"], "checked_at_local": r["checked_text"],
+                            "watchdog_running": not r["watch_stale"], "alarms": r["alarms"], "jobs": r["jobs"],
+                            "history": r["log"]}, ensure_ascii=False, default=str), None
     if name == "find_leads":
         q = str(inp.get("query", "")).strip()
         if not q:
@@ -8770,10 +8824,12 @@ def _inbox_scheduler():
     while True:
         try:
             with app.app_context():
-                sync_inbox()
+                res = sync_inbox() or {}
                 db.session.remove()
-        except Exception:
-            pass
+            health_beat("inbox", not res.get("error"), info=res.get("info") or "", error=res.get("error") or "")
+        except Exception as e:
+            app.logger.exception("inbox_scheduler")
+            health_fail("inbox", e)
         time.sleep(interval)
 
 
@@ -9050,8 +9106,10 @@ def _campaign_scheduler():
             with app.app_context():
                 campaign_tick()
                 db.session.remove()
-        except Exception:
-            pass
+            health_beat("kampanie")
+        except Exception as e:
+            app.logger.exception("campaign_scheduler")
+            health_fail("kampanie", e)
         time.sleep(60)
 
 
@@ -9898,8 +9956,10 @@ def _lt_scheduler():
             with app.app_context():
                 lt_auto_mail()
                 db.session.remove()
-        except Exception:
-            pass
+            health_beat("lt_mail")
+        except Exception as e:
+            app.logger.exception("lt_scheduler")
+            health_fail("lt_mail", e)
         time.sleep(LT_POLL_SECONDS)
 
 
@@ -10765,18 +10825,24 @@ def _pl_move_scheduler():
     while True:
         try:
             with app.app_context():
-                run_pl_move()  # rynki z włączonym automatem (niemieckie — zawsze)
+                moved, errors = run_pl_move()  # rynki z włączonym automatem (niemieckie — zawsze)
                 db.session.remove()
-        except Exception:
+            errors = [e for e in errors or [] if "już trwa" not in str(e)]
+            health_beat("pl_move", not errors, info=f"przeniesione: {moved}", error="; ".join(map(str, errors[:3])))
+        except Exception as e:
             app.logger.exception("pl_move")
+            health_fail("pl_move", e)
         if time.time() - last_won >= PL_WON_EVERY:
             last_won = time.time()
             try:
                 with app.app_context():
-                    sync_won_to_pl()
+                    done, errors = sync_won_to_pl()
                     db.session.remove()
-            except Exception:
+                health_beat("pl_won", not errors, info=f"wysłane / odświeżone: {done}",
+                            error="; ".join(map(str, (errors or [])[:3])))
+            except Exception as e:
                 app.logger.exception("pl_won")
+                health_fail("pl_won", e)
         time.sleep(PL_MOVE_EVERY)
 
 
@@ -11246,14 +11312,19 @@ def _mail_scheduler():
     time.sleep(20)
     while True:
         try:
+            res = None
             with app.app_context():
                 if mail_boxes():
-                    mail_sync_all()
+                    res = mail_sync_all()
                     mail_fix_bad_translations()
                     mail_auto_translate()
                 db.session.remove()
-        except Exception:
+            for login, r in (res or {}).items():  # {} = poprzednia synchronizacja jeszcze trwa
+                health_beat(f"poczta:{login}", not r.get("error"), info=f"{r.get('new', 0)} nowych",
+                            error=r.get("error") or "")
+        except Exception as e:
             app.logger.exception("mail_sync")
+            health_fail("poczta", e)
         time.sleep(MAIL_SYNC_SECONDS)
 
 
@@ -12713,7 +12784,7 @@ def verify_mail_tasks(tasks=None, force=False):
             continue
         todo.append((t, ev))
     db.session.commit()
-    checked = len(todo) + closed
+    checked, error = len(todo) + closed, None
     system = MAIL_TASK_CHECK_SYSTEM + f" Dziś jest {to_local(now):%Y-%m-%d %H:%M} (czas polski)."
     for start in range(0, len(todo), MAIL_TASK_CHECK_BATCH):
         chunk = todo[start:start + MAIL_TASK_CHECK_BATCH]
@@ -12723,9 +12794,10 @@ def verify_mail_tasks(tasks=None, force=False):
             f"MAILE Z KLIENTEM I CRM:\n{ev}" for i, (t, ev) in enumerate(chunk))
         try:
             res = _ai_forced_tool(MAIL_REVIEW_AI_MODEL, system, text, MAIL_TASK_CHECK_TOOL, max_tokens=4000)
-        except Exception:
+        except Exception as e:
             db.session.rollback()
             app.logger.exception("verify_mail_tasks")
+            error = f"{type(e).__name__}: {e}"[:300]
             break  # reszta przy następnym obiegu
         for t, _ev in chunk:
             t.checked_at = now
@@ -12742,8 +12814,11 @@ def verify_mail_tasks(tasks=None, force=False):
                 t.status, t.done_at, t.done_how = "done", now, MAIL_TASK_DONE_HOW
                 closed += 1
         db.session.commit()
-    return {"info": f"Sprawdzono w poczcie {checked} spraw — zamknięte jako już załatwione: {closed}",
-            "closed": closed, "url": "/crm/poczta?sprawy=1"}
+    out = {"info": f"Sprawdzono w poczcie {checked} spraw — zamknięte jako już załatwione: {closed}",
+           "closed": closed, "url": "/crm/poczta?sprawy=1"}
+    if error:
+        out["error"] = error  # dla strażnika CRM (Claude nie odpowiedział — reszta spraw przy następnym obiegu)
+    return out
 
 
 def mail_tasks_autoclosed(days=7):
@@ -12758,9 +12833,11 @@ def mail_tasks_autoclosed(days=7):
 def _mail_review_scheduler():
     time.sleep(60)
     while True:
+        errs, info = [], "przegląd poczty wyłączony: brak klucza Claude'a albo skrzynek"
         try:
             with app.app_context():
                 if _ai_client() is not None and mail_boxes():
+                    info = ""
                     now = to_local(datetime.utcnow())
                     for h in MAIL_REVIEW_HOURS:
                         if now.hour >= h:
@@ -12768,19 +12845,25 @@ def _mail_review_scheduler():
                                 if _claim_once(f"mrev:{mc}:{now:%Y-%m-%d}:{h}"):
                                     try:
                                         mail_review(mc)
-                                    except Exception:
+                                    except Exception as e:
                                         db.session.rollback()
                                         app.logger.exception("mail_review")
+                                        errs.append(f"przegląd poczty {mc}: {type(e).__name__}: {e}")
                     mail_tasks_autoclose()
                     if _claim_once(f"mtchk:{now:%Y-%m-%d %H}"):
                         try:
-                            verify_mail_tasks()
-                        except Exception:
+                            res = verify_mail_tasks()
+                            if res.get("error"):
+                                errs.append(f"sprawdzanie spraw: {res['error']}")
+                        except Exception as e:
                             db.session.rollback()
                             app.logger.exception("verify_mail_tasks")
+                            errs.append(f"sprawdzanie spraw: {type(e).__name__}: {e}")
                 db.session.remove()
-        except Exception:
+            health_beat("przeglad", not errs, info=info, error="; ".join(errs))
+        except Exception as e:
             app.logger.exception("mail_review_scheduler")
+            health_fail("przeglad", e)
         time.sleep(300)
 
 
@@ -12790,6 +12873,289 @@ if os.environ.get("MAIL_REVIEW", "1") != "0":
 app.jinja_env.globals.update(mail_tasks_open=mail_tasks_open, mail_tasks_visible=mail_tasks_visible,
                              mail_tasks_autoclosed=mail_tasks_autoclosed,
                              review_hours=MAIL_REVIEW_HOURS, tasks_from=MAIL_TASKS_SHOW_FROM)
+
+
+# ---------- STRAŻNIK CRM: ocena czujników i ciągłości pracy, alarmy w CRM, diagnoza Claude'a ----------
+# Co kwadrans: czy każdy pracownik w tle działa (czujniki health_beat), czy leady (LT i DE) i maile przychodzą jak
+# zwykle, czy przenoszenie z CRM PL działa. Alarm: pasek na górze CRM + strona „Stan CRM” + narzędzie crm_health
+# w czacie. Nic nie naprawia i nic nie wysyła; alarm znika sam, gdy wszystko wróci do normy.
+HEALTH_ALARMS_KEY = "health_alarms"
+HEALTH_LOG_KEY = "health_log"
+HEALTH_CHECK_KEY = "health_check_at"
+HEALTH_AI_MODEL = os.environ.get("HEALTH_AI_MODEL", "").strip() or "claude-sonnet-5-5"
+HEALTH_DIAG_PER_PASS = 3
+HEALTH_DIAG_TRIES = 2
+HEALTH_QUIET_DAYS = 45  # z ilu dni strażnik zna „zwykły rytm” leadów i maili
+health.set_local_time(to_local)
+
+HEALTH_HINTS = {
+    "automaty": "Wątek automatów w tle (realizacje, duplikaty, kroki sprzedaży). Wyłącznik: AUTO_REALIZE, SALES_AUTOMATION.",
+    "clickup": "Railway → Variables: CLICKUP_API_TOKEN i CLICKUP_LIST_ID (lista główna) oraz CLICKUP_LIST_ID_DE "
+               "(lista niemiecka). Niemieckie zgłoszenia przychodzą też przez CRM PL (przenoszenie z PL).",
+    "journey": "Customer Journey czyta skrzynki LT/DE (hasła IMAP_PASS_* / SMTP_PASS_* w Railway) i zamienia "
+               "dokumenty na PDF.",
+    "inbox": "Skrzynki zapytań: INBOX_IMAP_USER / INBOX_IMAP_USER_DE i hasła (MAIL_PASSWORD albo INBOX_IMAP_PASS*); "
+             "rozpoznawanie zapytań: ANTHROPIC_API_KEY.",
+    "kampanie": "Wątek kampanii (Blitzkrieg) — wysyła tylko kampanie uruchomione ręcznie.",
+    "lt_mail": "Pierwsze maile do nowych leadów LT/DE: skrzynki SMTP_PASS_LT / SMTP_USER_LT (wyłącznik LT_AUTO_MAIL).",
+    "pl_move": "Przenoszenie nowych leadów LT/DE z CRM PL: PL_DATABASE_URL (adres bazy CRM PL w Railway). Błąd "
+               "połączenia = zmieniony adres bazy PL albo baza PL niedostępna.",
+    "pl_won": "Wygrane LT/DE wracają do CRM PL (logistyka): PL_DATABASE_URL.",
+    "poczta": "Hasło skrzynki w Railway (IMAP_PASS_* albo SMTP_PASS_*, MAIL_PASSWORD), serwer IMAP_HOST_LT / IMAP_HOST. "
+              "Błąd logowania = zmienione albo wygasłe hasło skrzynki.",
+    "przeglad": "Przegląd poczty i sprawdzanie spraw przez Claude'a: ANTHROPIC_API_KEY (i środki na koncie Anthropic).",
+    "raport": "Poranny raport: SMTP_HOST, SMTP_USER, SMTP_PASS, REPORT_EMAILS.",
+    "quiet:leads": "Brak nowych leadów dłużej niż zwykle: sprawdź formularz na stronie (LT / DE), reklamy, ClickUp i "
+                   "czujnik „Przenoszenie leadów z CRM PL”.",
+    "quiet:mail": "Brak nowych maili w skrzynce dłużej niż zwykle: zaloguj się do skrzynki w przeglądarce (czy poczta "
+                  "przychodzi) i sprawdź czujnik tej skrzynki.",
+}
+
+
+def _claim_every(key, seconds):
+    """Blokada „raz na tyle sekund” w jednym wierszu bazy (przy kilku procesach serwera wykona tylko jeden)."""
+    now = datetime.utcnow()
+    if db.session.get(AppSetting, key) is None:
+        return _claim_once(key)
+    n = db.session.execute(db.update(AppSetting).where(
+        AppSetting.key == key, AppSetting.value < health.iso(now - timedelta(seconds=seconds)))
+        .values(value=health.iso(now))).rowcount
+    db.session.commit()
+    return n == 1
+
+
+def _setting_json(key, default):
+    try:
+        return json.loads(get_setting(key) or "null") or default
+    except ValueError:
+        return default
+
+
+def health_jobs():
+    """Pracownicy w tle włączeni w tym CRM: klucz czujnika → (nazwa, najdłuższa dopuszczalna przerwa)."""
+    env = os.environ.get
+    jobs = {}
+
+    def add(key, name, minutes, on=True):
+        if on:
+            jobs[key] = (name, timedelta(minutes=minutes))
+
+    add("automaty", "Automaty sprzedaży (realizacje, duplikaty, następne kroki, audyt ofert)", 45,
+        env("AUTO_REALIZE", "1") != "0")
+    add("clickup", "Import leadów z ClickUp (LT i DE)", 30,
+        bool((env("CLICKUP_API_TOKEN") and env("CLICKUP_LIST_ID")) or clickup_de_config()[0]))
+    add("journey", "Customer Journey (umowy i bazy wiedzy ze skrzynek)", 45, env("JOURNEY_SCAN", "1") != "0")
+    add("inbox", "Zapytania ze skrzynek kontakt@ (LT / DE)", 30,
+        any(env(k, "").strip() for k in ("INBOX_IMAP_USER", "INBOX_IMAP_USER_DE", "MAIL_PASSWORD")))
+    add("kampanie", "Kampanie (Blitzkrieg)", 15)
+    add("lt_mail", "Pierwsze maile do nowych leadów LT/DE", 15, env("LT_AUTO_MAIL", "1") != "0")
+    pl_on = pl_move_configured() and env("PL_MOVE", "1") != "0"
+    add("pl_move", "Przenoszenie nowych leadów LT/DE z CRM PL", max(20, PL_MOVE_EVERY * 10 // 60), pl_on)
+    add("pl_won", "Wygrane LT/DE do CRM PL (logistyka)", max(60, PL_WON_EVERY * 5 // 60), pl_on)
+    if env("MAIL_SYNC", "1") != "0":
+        for b in mail_boxes():
+            add(f"poczta:{b['login']}", f"Poczta {b['login']}", 30)
+    add("przeglad", "Przegląd poczty przez Claude'a i sprawdzanie spraw", 30, env("MAIL_REVIEW", "1") != "0")
+    add("raport", "Poranny raport mailowy", 26 * 60, bool(env("SMTP_HOST")))
+    return jobs
+
+
+def _health_beats():
+    out = {}
+    for row in AppSetting.query.filter(AppSetting.key.like(HEALTH_BEAT_PREFIX + "%")).all():
+        try:
+            out[row.key[len(HEALTH_BEAT_PREFIX):]] = json.loads(row.value or "{}")
+        except ValueError:
+            continue
+    return out
+
+
+def health_lead_markets():
+    """Rynki, na których strażnik pilnuje dopływu leadów: [(klucz, nazwa, zapytanie)]."""
+    return [(code, f"Nowe leady {m['flag']} {m['name']}", all_markets(Lead.query.filter(Lead.market == code)))
+            for code, m in markets.MARKETS.items()]
+
+
+def health_continuity(now=None):
+    """Sygnały ciągłości (bez czujników): cisza w leadach i w skrzynkach dłuższa niż zwykle.
+    Zwraca {klucz alarmu: alarm}."""
+    now = now or datetime.utcnow()
+    since = now - timedelta(days=HEALTH_QUIET_DAYS)
+    found = {}
+    for code, name, q in health_lead_markets():
+        times = [r[0] for r in q.filter(Lead.created_at >= since).with_entities(Lead.created_at).all()]
+        text = health.quiet_alarm(times, now)
+        if text:
+            found[f"quiet:leads:{code}"] = {"level": "yellow", "title": f"{name}: cisza dłuższa niż zwykle", "detail": text}
+    if os.environ.get("MAIL_SYNC", "1") != "0":
+        for b in mail_boxes():
+            times = [r[0] for r in all_markets(db.session.query(MailMessage.date).filter(
+                MailMessage.mailbox == b["login"], MailMessage.folder == "in", MailMessage.date >= since)).all()]
+            text = health.quiet_alarm(times, now)
+            if text:
+                found[f"quiet:mail:{b['login']}"] = {"level": "yellow", "title": f"Poczta {b['login']}: brak nowych maili",
+                                                     "detail": text}
+    return found
+
+
+def health_robot_alarms():
+    """Robot i agenci ElevenLabs są tylko w CRM PL."""
+    return {}
+
+
+def _health_hint(key, alarm):
+    job = alarm.get("job") or ""
+    base = job.split(":", 1)[0] if job else ""
+    if key.startswith("quiet:leads"):
+        return HEALTH_HINTS["quiet:leads"]
+    if key.startswith("quiet:mail"):
+        return HEALTH_HINTS["quiet:mail"]
+    hint = HEALTH_HINTS.get(job) or HEALTH_HINTS.get(base) or ""
+    if "stoi" in (alarm.get("title") or ""):
+        hint += (" Wątek nie zgłasza się — zwykle pomaga restart usługi w Railway (Deployments → Restart); "
+                 "jeśli wraca, to błąd w kodzie.")
+    return hint.strip()
+
+
+HEALTH_DIAG_TOOL = {
+    "name": "health_diagnosis",
+    "description": "Diagnoza problemu w CRM po polsku, dla osoby nietechnicznej.",
+    "strict": True,
+    "input_schema": {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "cause": {"type": "string", "description": "Najbardziej prawdopodobna przyczyna: 1–2 proste zdania"},
+            "fix": {"type": "string", "description": "Co zrobić: najwyżej 3 krótkie kroki (gdzie kliknąć: Railway → "
+                                                     "Variables, ClickUp, skrzynka pocztowa…)"},
+            "urgent": {"type": "boolean", "description": "true, gdy przez to mogą przepadać leady albo maile od klientów"},
+        },
+        "required": ["cause", "fix", "urgent"],
+    },
+}
+HEALTH_DIAG_SYSTEM = (
+    "Jesteś technicznym asystentem CRM firmy 33Bots dla rynków Litwa i Niemcy (wynajem robota Unitree G1). CRM to "
+    "aplikacja Flask na Railway z bazą Postgres, kod na GitHubie; konfiguracja (klucze, hasła skrzynek, adres bazy "
+    "CRM PL) jest w Railway → Variables. Strażnik CRM wykrył problem. Napisz po polsku, prosto, dla osoby "
+    "nietechnicznej: najbardziej prawdopodobną przyczynę i co zrobić. Opieraj się tylko na podanym błędzie, opisie "
+    "i podpowiedzi; nie wymyślaj nazw zmiennych spoza podpowiedzi. Gdy błąd wygląda na chwilowy po stronie "
+    "zewnętrznej usługi (timeout, 5xx), napisz, że zwykle mija sam i kiedy zacząć się martwić. Cisza w leadach albo "
+    "w skrzynce nie musi być awarią — napisz, co sprawdzić. " + HUMAN_TYPO_RULE
+)
+
+
+def health_diagnose(alarm):
+    """Diagnoza Claude'a dla alarmu: {"cause", "fix", "urgent", "at"}."""
+    text = (f"Problem: {alarm.get('title')}\nSzczegóły: {alarm.get('detail') or '-'}\n"
+            f"Od: {health.fmt(health.parse(alarm.get('since')))} (czas polski)\n"
+            f"Podpowiedź (jak to działa w tym CRM): {alarm.get('hint') or '-'}")
+    res = _ai_forced_tool(HEALTH_AI_MODEL, HEALTH_DIAG_SYSTEM, text, HEALTH_DIAG_TOOL, max_tokens=900)
+    return {"cause": human_text(str(res.get("cause") or ""))[:600], "fix": human_text(str(res.get("fix") or ""))[:900],
+            "urgent": bool(res.get("urgent")), "at": health.iso(datetime.utcnow())}
+
+
+def health_check_pass(diag=True):
+    """Jeden obieg strażnika: czujniki + ciągłość → lista alarmów (nowe / trwające / zamknięte) + diagnoza nowych."""
+    now = datetime.utcnow()
+    jobs = health_jobs()
+    found, states = health.job_alarms(_health_beats(), jobs, now, HEALTH_STARTED_AT)
+    try:
+        found.update(health_continuity(now))
+    except Exception as e:
+        db.session.rollback()
+        app.logger.exception("health_continuity")
+        found["check:continuity"] = {"level": "yellow", "title": "Strażnik: nie udało się sprawdzić ciągłości pracy",
+                                     "detail": f"{type(e).__name__}: {e}"[:400]}
+    for key, alarm in found.items():
+        alarm["hint"] = _health_hint(key, alarm)
+    prev = _setting_json(HEALTH_ALARMS_KEY, {})
+    cur, new, closed = health.merge_alarms(prev, found, now)
+    for key in cur:  # próby diagnozy trwającego alarmu
+        if key in prev and prev[key].get("diag_tries") and not cur[key].get("diag"):
+            cur[key]["diag_tries"] = prev[key]["diag_tries"]
+    log = _setting_json(HEALTH_LOG_KEY, [])
+    for key in new:
+        log.insert(0, {"at": health.iso(now), "event": "open", "level": cur[key]["level"], "title": cur[key]["title"]})
+    for key in closed:
+        log.insert(0, {"at": health.iso(now), "event": "close", "level": prev[key].get("level"),
+                       "title": prev[key].get("title"), "since": prev[key].get("since")})
+    set_setting(HEALTH_ALARMS_KEY, json.dumps(cur, ensure_ascii=False))
+    set_setting(HEALTH_LOG_KEY, json.dumps(log[:40], ensure_ascii=False))
+    set_setting(HEALTH_CHECK_KEY, health.iso(now))
+    db.session.commit()
+    diagnosed = 0
+    if diag and _ai_client() is not None:
+        todo = [a["key"] for a in health.sorted_alarms(cur)
+                if not a.get("diag") and int(a.get("diag_tries") or 0) < HEALTH_DIAG_TRIES][:HEALTH_DIAG_PER_PASS]
+        for key in todo:
+            try:
+                cur[key]["diag"] = health_diagnose(cur[key])
+                diagnosed += 1
+            except Exception:
+                app.logger.exception("health_diagnose")
+                cur[key]["diag_tries"] = int(cur[key].get("diag_tries") or 0) + 1
+            set_setting(HEALTH_ALARMS_KEY, json.dumps(cur, ensure_ascii=False))
+            db.session.commit()
+    return {"alarms": cur, "states": states, "jobs": jobs, "new": new, "closed": closed, "diagnosed": diagnosed}
+
+
+def health_alarm_list():
+    """Alarmy do pokazania (najpierw czerwone) — odczyt raz na zapytanie (pasek i licznik w menu)."""
+    cache = request.environ if has_request_context() else {}
+    if "crm.health_alarms" not in cache:
+        try:
+            cache["crm.health_alarms"] = health.sorted_alarms(_setting_json(HEALTH_ALARMS_KEY, {}))
+        except Exception:
+            db.session.rollback()
+            cache["crm.health_alarms"] = []
+    return cache["crm.health_alarms"]
+
+
+def health_report():
+    """Pełny obraz dla strony „Stan CRM” i narzędzia crm_health w czacie (tylko odczyt)."""
+    now = datetime.utcnow()
+    jobs, beats = health_jobs(), _health_beats()
+    rows = []
+    for key, (name, max_age) in jobs.items():
+        st, text = health.job_state(beats.get(key), max_age, now, HEALTH_STARTED_AT)
+        rows.append({"key": key, "name": name, "state": st, "text": text})
+    checked = health.parse(get_setting(HEALTH_CHECK_KEY))
+    return {"alarms": health.sorted_alarms(_setting_json(HEALTH_ALARMS_KEY, {})), "jobs": rows,
+            "log": _setting_json(HEALTH_LOG_KEY, [])[:20], "checked_at": checked,
+            "checked_text": health.fmt(checked),
+            "watch_stale": checked is None or now - checked > timedelta(minutes=health.CHECK_MINUTES * 4),
+            "every_min": health.CHECK_MINUTES, "robot": False}
+
+
+def _health_scheduler():
+    time.sleep(90)
+    while True:
+        try:
+            with app.app_context():
+                if _claim_every(HEALTH_CHECK_KEY + ":lock", health.CHECK_MINUTES * 60 - 30):
+                    health_check_pass()
+                db.session.remove()
+        except Exception:
+            app.logger.exception("health_check")
+        time.sleep(60)
+
+
+if os.environ.get("HEALTH_WATCH", "1") != "0":
+    threading.Thread(target=_health_scheduler, daemon=True).start()
+
+app.jinja_env.globals.update(health_alarm_list=health_alarm_list,
+                             health_fmt=lambda ts: health.fmt(health.parse(ts)))
+
+
+@app.route("/crm/stan")
+def crm_health():
+    return render_template("crm/stan.html", r=health_report())
+
+
+@app.route("/crm/stan/sprawdz", methods=["POST"])
+def crm_health_check():
+    """„Sprawdź teraz” — obieg strażnika bez diagnozy Claude'a (ta dojdzie w tle przy następnym obiegu)."""
+    health_check_pass(diag=False)
+    return redirect(url_for("crm_health"))
 
 
 @app.route("/crm/sprawy/<int:tid>/<action>", methods=["POST"])

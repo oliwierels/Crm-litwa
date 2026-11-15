@@ -1,0 +1,54 @@
+{% extends "crm/base.html" %}
+{% block title %}Stan CRM – RoboRent CRM{% endblock %}
+{% block page_title %}🛡️ Stan CRM (strażnik){% endblock %}
+{% block topbar_actions %}
+<form method="post" action="{{ url_for('crm_health_check') }}" style="margin-left:auto">
+  <button class="btn btn-secondary btn-sm" title="Świeże sprawdzenie teraz (diagnoza Claude'a dojdzie przy następnym obiegu w tle)">🔄 Sprawdź teraz</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="panel" style="padding:14px 16px;max-width:1000px">
+  <p style="margin:0 0 10px;color:var(--muted);font-size:12.5px">
+    Strażnik co {{ r.every_min }} minut sprawdza, czy każdy pracownik w tle działa (poczta, ClickUp, Customer Journey{{ ', robot' if r.robot else ', przenoszenie z CRM PL' }}, przegląd poczty…),
+    czy leady i maile przychodzą jak zwykle{{ ' i czy robot ma osobowość na najbliższe wydarzenie' if r.robot }}. Nic nie naprawia i nic nie wysyła — tylko zgłasza.
+    Alarm znika sam, gdy wszystko wróci do normy.
+    Ostatnie sprawdzenie: <b style="color:{{ 'var(--red)' if r.watch_stale else 'inherit' }}">{{ r.checked_text }}</b>{% if r.watch_stale %} — strażnik dawno się nie zgłosił (po wdrożeniu startuje po ok. 2 min){% endif %}.
+  </p>
+
+  <h3 style="margin:14px 0 6px;font-size:15px">{{ '✅ Wszystko działa' if not r.alarms else '🚨 Alarmy (' ~ r.alarms|length ~ ')' }}</h3>
+  {% for a in r.alarms %}
+  <div style="border:1px solid {{ 'rgba(220,38,38,.55)' if a.level == 'red' else 'rgba(234,179,8,.55)' }};border-radius:8px;padding:10px 12px;margin:8px 0;background:{{ 'rgba(220,38,38,.08)' if a.level == 'red' else 'rgba(234,179,8,.08)' }}">
+    <b>{{ '🔴' if a.level == 'red' else '🟡' }} {{ a.title }}</b>
+    <span style="color:var(--muted);font-size:12px"> · od {{ health_fmt(a.since) }}</span>
+    {% if a.detail %}<div style="font-size:12.5px;margin-top:4px">{{ a.detail }}</div>{% endif %}
+    {% if a.diag %}
+    <div style="font-size:12.5px;margin-top:6px"><b>Diagnoza{{ ' (pilne)' if a.diag.urgent }}:</b> {{ a.diag.cause }}</div>
+    <div style="font-size:12.5px;margin-top:2px;white-space:pre-line"><b>Co zrobić:</b> {{ a.diag.fix }}</div>
+    {% elif a.hint %}
+    <div style="font-size:12px;margin-top:6px;color:var(--muted)">Podpowiedź: {{ a.hint }}{% if not a.diag %} · diagnoza Claude'a pojawi się przy następnym obiegu strażnika{% endif %}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <h3 style="margin:18px 0 6px;font-size:15px">Pracownicy w tle</h3>
+  <table style="width:100%;font-size:12.5px">
+    {% for j in r.jobs %}
+    <tr style="border-top:1px solid var(--border)">
+      <td style="width:28px;padding:6px 0">{{ {'ok': '🟢', 'failing': '🔴', 'stale': '🔴'}.get(j.state, '⚪') }}</td>
+      <td style="padding:6px 8px 6px 0;white-space:nowrap"><b>{{ j.name }}</b></td>
+      <td style="padding:6px 0;color:{{ 'var(--red)' if j.state in ['failing', 'stale'] else 'var(--muted)' }}">{{ j.text }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if r.log %}
+  <h3 style="margin:18px 0 6px;font-size:15px">Historia</h3>
+  <ul style="margin:0 0 0 18px;font-size:12.5px;color:var(--muted)">
+    {% for e in r.log %}
+    <li>{{ health_fmt(e.at) }} · {{ ('🔴' if e.level == 'red' else '🟡') if e.event == 'open' else '✅' }}
+      {{ e.title }}{% if e.event == 'close' %} — wróciło do normy (alarm od {{ health_fmt(e.since) }}){% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}

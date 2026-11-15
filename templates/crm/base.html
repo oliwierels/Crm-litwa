@@ -277,6 +277,7 @@ tr:hover td { background: var(--panel2); }
       (url_for('crm_offer_audit'), ep == 'crm_offer_audit', 'search', 'Audyt ofert', 0, '', ''),
       (url_for('crm_data_cleanup'), ep == 'crm_data_cleanup', 'wrench-adjustable', 'Porządki w danych', 0, '', ''),
       (url_for('crm_deliverability'), ep == 'crm_deliverability', 'shield-check', 'Dostarczalność', 0, '', ''),
+      (url_for('crm_health'), ep == 'crm_health', 'heart-pulse', 'Stan CRM', health_alarm_list()|length, 'var(--red)', 'Strażnik CRM: alarmy (coś nie działa albo podejrzana cisza)'),
     ]),
   ] %}
   <nav>
@@ -341,6 +342,7 @@ tr:hover td { background: var(--panel2); }
 <div class="main">
 {% include "crm/_alerts.html" %}
 {% include "crm/_callback.html" %}
+{% include "crm/_health.html" %}
   <div class="topbar">
     <div class="topbar-title">{% block page_title %}{% endblock %}</div>
     {% block topbar_actions %}{% endblock %}
