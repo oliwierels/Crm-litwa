@@ -35,6 +35,7 @@ def api_assign_activity(aid):
     if user_id not in USERS_BY_ID:
         abort(400)
     a.assigned_to = user_id
+    a.created_by = get_current_user(request)["id"]  # przekazanie zadania innej osobie = zlecenie
     db.session.commit()
     return jsonify({"ok": True, "user_id": user_id})
 

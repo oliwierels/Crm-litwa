@@ -76,7 +76,7 @@ const cal = new FullCalendar.Calendar(document.getElementById('calendar'), {
   events: '/crm/api/activities',
   eventClick(info) {
     const p = info.event.extendedProps;
-    const icons = {call:'📞',email:'✉️',online:'💻',meeting:'🤝',note:'📝'};
+    const icons = {call:'📞',email:'✉️',online:'💻',meeting:'🤝',task:'📌',note:'📝'};
 
     if (p.event_type === 'lead_event') {
       curId = null;

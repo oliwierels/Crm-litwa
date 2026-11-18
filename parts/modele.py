@@ -30,6 +30,9 @@ class Activity(db.Model):
     voice_note = db.Column(db.Text, nullable=True)  # data: URL nagranej wiadomości głosowej (komentarze)
     outcome = db.Column(db.String(20), nullable=True)  # wynik kontaktu: odebral | nie_odebral | odpisal | bez_odpowiedzi
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # kto utworzył / zlecił zadanie albo napisał komentarz (osoba); None = automat CRM. Zadanie zlecone przez inną
+    # osobę niż wykonawca (created_by != assigned_to) trzeba rozliczyć w raporcie dnia.
+    created_by = db.Column(db.Integer, nullable=True)
 
 
 class ActivityComment(db.Model):

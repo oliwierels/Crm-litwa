@@ -112,12 +112,12 @@ STAGE_COLORS = {  # Kontakt/Negocjacje zostają tylko dla starych wpisów w hist
     "Stracony": "#6b7280",
 }
 
-ACTIVITY_KINDS = ["call", "sms", "email", "online", "meeting", "note"]
-ACTIVITY_KIND_ICONS = {"call": "📞", "sms": "💬", "email": "✉️", "online": "💻", "meeting": "🤝", "note": "📝",
-                       "decision": "⚖️"}
+ACTIVITY_KINDS = ["call", "sms", "email", "online", "meeting", "task", "note"]
+ACTIVITY_KIND_ICONS = {"call": "📞", "sms": "💬", "email": "✉️", "online": "💻", "meeting": "🤝", "task": "📌",
+                       "note": "📝", "decision": "⚖️"}
 ACTIVITY_KIND_LABELS = {
     "call": "Telefon", "sms": "SMS", "email": "E-mail", "online": "Prezentacja online",
-    "meeting": "Spotkanie na żywo", "note": "Notatka", "decision": "Decyzja",
+    "meeting": "Spotkanie na żywo", "task": "Zadanie", "note": "Notatka", "decision": "Decyzja",
 }
 
 ROBOT_MODELS = [
@@ -449,6 +449,8 @@ def ensure_schema():
             conn.exec_driver_sql("ALTER TABLE activities ADD COLUMN voice_note TEXT NULL")
         if "outcome" not in act_cols:
             conn.exec_driver_sql("ALTER TABLE activities ADD COLUMN outcome VARCHAR(20) NULL")
+        if "created_by" not in act_cols:  # kto utworzył / zlecił zadanie (raport dnia: zlecone zadania)
+            conn.exec_driver_sql("ALTER TABLE activities ADD COLUMN created_by INTEGER NULL")
         # lead_id przestało być wymagane (zadania własne, bez firmy) — stare bazy mają NOT NULL
         lead_id_col = next((c for c in act_cols_full if c["name"] == "lead_id"), None)
         if lead_id_col is not None and not lead_id_col["nullable"]:
@@ -3405,7 +3407,7 @@ ASSISTANT_TOOLS = [
             "type": "object",
             "properties": {
                 "lead_id": {"type": "integer"},
-                "kind": {"type": "string", "enum": [k for k in ACTIVITY_KINDS if k != "note"], "description": "call = telefon, sms, email, online, meeting"},
+                "kind": {"type": "string", "enum": [k for k in ACTIVITY_KINDS if k != "note"], "description": "call = telefon, sms, email, online, meeting, task = inne zadanie (np. zlecone komuś)"},
                 "due_date": {"type": "string", "description": "YYYY-MM-DD"},
                 "notes": {"type": "string"},
                 "assigned_to": {"type": "string", "description": "Imię użytkownika CRM"},
@@ -3561,6 +3563,19 @@ ASSISTANT_TOOLS = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "team_reports",
+        "description": "Raporty dnia i historia pracy osób z zespołu (rangi: Zarząd, Kierownik, Pracownik, Wykonawca). Dla "
+                       "każdego dnia: stan raportu (w terminie / spóźniony / brak / dzień wolny), liczby zebrane przez CRM "
+                       "(telefony odebrane i nieodebrane, maile, oferty, obsłużone leady, odhaczone zadania, wygrane, czas "
+                       "aktywności), zlecone zadania zrobione i niezrobione z powodami, treść raportu (co zrobione, blokery, "
+                       "plan). Do tego podsumowanie okresu i średnie wg dnia tygodnia (by_weekday) — do pytań typu „w które "
+                       "dni jest najmniej efektywny”, „ile zleconych zadań robi”, „czy raportuje w terminie”. Tylko odczyt; "
+                       "zwraca osoby, których raporty pytający może widzieć.",
+        "input_schema": {"type": "object", "properties": {
+            "person": {"type": "string", "description": "Imię osoby, np. Jerzy (domyślnie wszyscy z obowiązkiem raportu)"},
+            "days": {"type": "integer", "description": "Ile ostatnich dni (7–370, domyślnie 60)"}}, "required": []},
     },
     {
         "name": "crm_health",
@@ -3855,6 +3870,8 @@ _include("asystent_pola")
 def _assistant_execute(name, inp, user):
     """Wykonuje narzędzie asystenta. Zwraca (wynik-json-string, opis-akcji-albo-None)."""
     import json as _json
+    if name == "team_reports":
+        return _json.dumps(team_tool(inp, user), ensure_ascii=False, default=str), None
     if name == "crm_health":
         if inp.get("refresh"):
             health_check_pass(diag=False, fix=False)
@@ -3974,7 +3991,7 @@ def _assistant_execute(name, inp, user):
             due = datetime.combine(date.today(), datetime.min.time())
         assigned = _assistant_resolve_user(inp.get("assigned_to"), (lead.assigned_to if lead else None) or user["id"])
         act = Activity(lead_id=lead.id if lead else None, kind=kind, due_date=due,
-                       notes=str(inp.get("notes", "")).strip(), assigned_to=assigned)
+                       notes=str(inp.get("notes", "")).strip(), assigned_to=assigned, created_by=user["id"])
         db.session.add(act)
         db.session.commit()
         who = USERS_BY_ID.get(assigned, {}).get("name", "?")
@@ -3989,7 +4006,9 @@ def _assistant_execute(name, inp, user):
         tasks = [
             {"id": a.id, "kind": a.kind, "due": a.due_date.strftime("%Y-%m-%d") if a.due_date else None,
              "lead": a.lead.company if a.lead else "Zadanie własne",
-             "assigned_to": USERS_BY_ID.get(a.assigned_to, {}).get("name", ""), "notes": a.notes or ""}
+             "assigned_to": USERS_BY_ID.get(a.assigned_to, {}).get("name", ""), "notes": a.notes or "",
+             "ordered_by": (USERS_BY_ID.get(a.created_by, {}).get("name")
+                            if a.created_by and a.created_by != a.assigned_to else None)}
             for a in q.order_by(Activity.due_date).limit(50).all()
         ]
         return _json.dumps({"tasks": tasks}, ensure_ascii=False), None
@@ -8916,6 +8935,7 @@ def crm_mail_review_now():
     return redirect(url_for("crm_job", jid=_start_job("Claude przegląda pocztę", mail_review, code)))
 
 
+_include("raporty_dnia")
 
 with app.app_context():
     db.create_all()

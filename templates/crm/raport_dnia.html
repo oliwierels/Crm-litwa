@@ -1,0 +1,194 @@
+{% extends "crm/base.html" %}
+{% block title %}Raport dnia – RoboRent CRM{% endblock %}
+{% block page_title %}📝 Raport dnia · {{ owner.name }} · {{ day_label }}.{{ day.year }}{% endblock %}
+{% block topbar_actions %}
+<a class="btn btn-secondary btn-sm" style="margin-left:auto" href="{{ url_for('crm_team', osoba=owner.id) }}">📊 Historia i zestawienia</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.rd-wrap { max-width: 980px; display: flex; flex-direction: column; gap: 14px; }
+.rd-msg { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; line-height: 1.5; }
+.rd-ok { background: #22c55e1a; border: 1px solid #22c55e55; color: var(--green); }
+.rd-warn { background: #eab3081a; border: 1px solid #eab30855; color: #fde68a; }
+.rd-err { background: #ef44441a; border: 1px solid #ef444466; color: #fca5a5; }
+.rd-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.rd-tile { background: var(--panel2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
+.rd-tile b { display: block; font-size: 19px; }
+.rd-tile span { font-size: 11.5px; color: var(--muted); }
+.rd-task { border-top: 1px solid var(--border); padding: 10px 0; font-size: 13px; }
+.rd-task:first-child { border-top: none; }
+.rd-task .meta { color: var(--muted); font-size: 12px; }
+.rd-choice { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.rd-choice label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; margin: 0; text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
+.rd-wrap textarea { width: 100%; min-height: 84px; }
+.rd-wrap input[type=text], .rd-wrap select { max-width: 100%; }
+.rd-text { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; }
+.rd-muted { color: var(--muted); font-size: 12px; }
+.rd-chat { border-top: 1px solid var(--border); padding: 8px 0; font-size: 13px; }
+.rd-chat:first-child { border-top: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rd-wrap">
+  {% if saved %}<div class="rd-msg rd-ok">✅ Raport zapisany{{ ' — jako spóźniony (złożony po dniu, którego dotyczy)' if report and report.late }}.</div>{% endif %}
+  {% if gate and gate.missing and edit %}
+  <div class="rd-msg rd-warn">⚠️ Brakuje raportów za: {% for m in gate.missing %}<a href="{{ url_for('crm_day_report_day', day=m.iso) }}" style="color:inherit;font-weight:{{ '700' if m.iso == day.isoformat() else '400' }}">{{ m.label }}</a>{{ ', ' if not loop.last }}{% endfor %}.
+    Dopóki ich nie uzupełnisz, reszta CRM jest zablokowana. Jeśli tego dnia nie pracowałeś — zaznacz „Dzień wolny”.</div>
+  {% endif %}
+  {% for e in errors %}<div class="rd-msg rd-err">⛔ {{ e }}</div>{% endfor %}
+
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-activity"></i> {{ 'Twój dzień' if mine else 'Dzień' }} w CRM — zebrane automatycznie</div>
+    <div class="panel-body">
+      <div class="rd-tiles">
+        {% for key, label in metrics %}
+        <div class="rd-tile"><b>{{ ('%d'|format(stats[key])) if key == 'wins_pln' else stats[key] }}</b><span>{{ label }}</span></div>
+        {% endfor %}
+      </div>
+      <div class="rd-muted" style="margin-top:8px">
+        {% if stats.active_from %}Pierwsza i ostatnia zapisana czynność: {{ stats.active_from }}–{{ stats.active_to }}.{% else %}Tego dnia CRM nie zapisał żadnej czynności tej osoby.{% endif %}
+        Liczby rosną w ciągu dnia (odhaczone zadania, wysłane maile i oferty, obsłużone leady, zmiany etapów).
+        {% if own_open %}Pozostałe własne i automatyczne zadania z terminem do tego dnia: <b>{{ own_open }}</b> otwartych.{% endif %}
+      </div>
+      {% if timeline %}
+      <details style="margin-top:8px"><summary class="rd-muted" style="cursor:pointer">Pokaż czynności po kolei ({{ timeline|length }})</summary>
+        <div style="font-size:12.5px;margin-top:6px;columns:2;column-gap:24px">{% for t, text in timeline %}<div><span class="rd-muted">{{ t }}</span> {{ text }}</div>{% endfor %}</div>
+      </details>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if edit %}
+  {# ---------- formularz ---------- #}
+  {% set f_status = form.get('status', report.status if report else 'work') %}
+  <form method="post" class="panel" id="rd-form">
+    <div class="panel-header"><i class="bi bi-pencil-square"></i> Raport za {{ day_label }}{{ ' — obowiązkowy' if required }}{{ ' · po terminie (zapisze się jako spóźniony)' if day < today }}</div>
+    <div class="panel-body" style="display:flex;flex-direction:column;gap:14px">
+      <div class="rd-choice" style="margin:0">
+        <label><input type="radio" name="status" value="work" {{ 'checked' if f_status != 'off' }} onchange="rdStatus()"> Pracowałem tego dnia</label>
+        <label><input type="radio" name="status" value="off" {{ 'checked' if f_status == 'off' }} onchange="rdStatus()"> 🌴 Dzień wolny (urlop, choroba, święto)</label>
+      </div>
+
+      <div id="rd-off" {{ 'hidden' if f_status != 'off' }}>
+        <label>Powód dnia wolnego</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <select name="off_reason" style="width:auto">
+            <option value="">— wybierz —</option>
+            {% for k, label in team.OFF_REASONS.items() %}<option value="{{ k }}" {{ 'selected' if form.get('off_reason') == k }}>{{ label }}</option>{% endfor %}
+          </select>
+          <input type="text" name="off_note" maxlength="150" placeholder="dopisek (opcjonalnie)" value="{{ form.get('off_note', '') }}" style="flex:1;min-width:200px">
+        </div>
+      </div>
+
+      <div id="rd-work" {{ 'hidden' if f_status == 'off' }} style="display:flex;flex-direction:column;gap:14px">
+        <div>
+          <label>Zadania zlecone Ci przez innych — z terminem do tego dnia ({{ due_list|length }})</label>
+          {% if not due_list %}<div class="rd-muted">Brak zleconych zadań do rozliczenia w tym raporcie.</div>{% endif %}
+          {% for t in due_list %}
+          <div class="rd-task">
+            <div><b>{{ t.icon }} {{ t.what }}</b>
+              {% if t.lead_id %} · <a href="{{ url_for('crm_lead_detail', lead_id=t.lead_id) }}" target="_blank">{{ t.lead or 'lead' }}</a>{% endif %}</div>
+            <div class="meta">zlecił: <b>{{ t.by }}</b>{% if t.due %} · termin {{ t.due[8:10] }}.{{ t.due[5:7] }}{% endif %}{% if t.due and t.due < day.isoformat() %} · <span style="color:var(--red)">po terminie</span>{% endif %}</div>
+            {% if t.state == 'done' %}<div style="color:var(--green);margin-top:4px">✅ Odhaczone tego dnia</div>
+            {% elif t.state == 'done_later' %}<div style="color:var(--yellow);margin-top:4px">✅ Zrobione później (po tym dniu)</div>
+            {% else %}
+            {% set ch = form.get('task_' ~ t.id, '') %}
+            <div class="rd-choice">
+              <label><input type="radio" name="task_{{ t.id }}" value="done" {{ 'checked' if ch == 'done' }}> ✅ Zrobione</label>
+              {% if t.needs_outcome %}
+              <select name="outcome_{{ t.id }}" title="Wynik kontaktu — wymagany, gdy zrobione" style="width:auto;padding:4px 8px">
+                <option value="">wynik kontaktu…</option>
+                {% for k, label in t.outcomes.items() %}<option value="{{ k }}" {{ 'selected' if form.get('outcome_' ~ t.id) == k }}>{{ label }}</option>{% endfor %}
+              </select>
+              {% endif %}
+              <label><input type="radio" name="task_{{ t.id }}" value="not_done" {{ 'checked' if ch == 'not_done' }}> ❌ Niezrobione</label>
+              <input type="text" name="reason_{{ t.id }}" maxlength="500" value="{{ form.get('reason_' ~ t.id, '') }}" placeholder="dlaczego niezrobione (wymagane) / uwaga do zrobionego" style="flex:1;min-width:240px">
+            </div>
+            {% endif %}
+          </div>
+          {% endfor %}
+          {% if later %}
+          <details style="margin-top:6px"><summary class="rd-muted" style="cursor:pointer">Zlecone na później albo bez terminu ({{ later|length }}) — nie trzeba ich teraz rozliczać</summary>
+            {% for t in later %}<div class="rd-muted" style="margin-top:4px">{{ t.icon }} {{ t.what }}{% if t.lead %} · {{ t.lead }}{% endif %} — zlecił {{ t.by }}{% if t.due %}, termin {{ t.due[8:10] }}.{{ t.due[5:7] }}{% endif %}</div>{% endfor %}
+          </details>
+          {% endif %}
+        </div>
+        <div>
+          <label>Co zrobiłem tego dnia <span style="color:var(--red)">*</span></label>
+          <textarea name="summary" maxlength="6000" placeholder="Konkretnie: z kim rozmawiałem, co wysłałem, co domknąłem, co robiłem poza CRM (np. realizacja, dojazd)…">{{ form.get('summary', report.summary if report else '') }}</textarea>
+        </div>
+        <div>
+          <label>Co mnie zablokowało / czego potrzebuję (opcjonalnie)</label>
+          <textarea name="blockers" maxlength="6000" style="min-height:56px">{{ form.get('blockers', report.blockers if report else '') }}</textarea>
+        </div>
+        <div>
+          <label>Plan na jutro (opcjonalnie)</label>
+          <textarea name="plan" maxlength="6000" style="min-height:56px">{{ form.get('plan', report.plan if report else '') }}</textarea>
+        </div>
+      </div>
+      <div><button class="btn btn-primary" type="submit">Zapisz raport</button>
+        <span class="rd-muted" style="margin-left:8px">{{ 'Dzisiejszy raport możesz poprawiać do końca dnia.' if day == today else 'Raportu za miniony dzień nie da się potem zmienić.' }}</span></div>
+    </div>
+  </form>
+  <script>
+  function rdStatus() {
+    const off = document.querySelector('input[name=status][value=off]').checked;
+    document.getElementById('rd-off').hidden = !off;
+    document.getElementById('rd-work').hidden = off;
+  }
+  </script>
+
+  {% elif report %}
+  {# ---------- podgląd ---------- #}
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-journal-text"></i> Raport za {{ day_label }}
+      <span style="margin-left:auto;text-transform:none;letter-spacing:0">
+        {% if report.status == 'off' %}🌴 dzień wolny{% elif report.late %}<span style="color:var(--yellow)">🕐 spóźniony</span>{% else %}<span style="color:var(--green)">✅ w terminie</span>{% endif %}
+        · złożony {{ to_local(report.created_at).strftime('%d.%m %H:%M') if report.created_at }}</span></div>
+    <div class="panel-body" style="display:flex;flex-direction:column;gap:12px">
+      {% if report.status == 'off' %}
+        <div class="rd-text">🌴 {{ report.off_reason }}</div>
+      {% else %}
+        <div><label>Co zrobione</label><div class="rd-text">{{ report.summary }}</div></div>
+        {% if report.blockers %}<div><label>Co zablokowało / czego potrzeba</label><div class="rd-text">{{ report.blockers }}</div></div>{% endif %}
+        {% if report.plan %}<div><label>Plan na jutro</label><div class="rd-text">{{ report.plan }}</div></div>{% endif %}
+        <div><label>Zlecone zadania ({{ snapshot|length }})</label>
+          {% if not snapshot %}<div class="rd-muted">Brak zleconych zadań z terminem do tego dnia.</div>{% endif %}
+          {% for t in snapshot %}
+          <div class="rd-task">
+            {% if t.status == 'not_done' %}<b style="color:var(--red)">❌ Niezrobione</b>{% elif t.status == 'done_later' %}<b style="color:var(--yellow)">✅ Zrobione później</b>{% else %}<b style="color:var(--green)">✅ Zrobione</b>{% endif %}
+            · {{ t.what }}{% if t.lead_id %} · <a href="{{ url_for('crm_lead_detail', lead_id=t.lead_id) }}">{{ t.lead or 'lead' }}</a>{% endif %}
+            <span class="meta">· zlecił {{ t.by }}{% if t.due %} · termin {{ t.due[8:10] }}.{{ t.due[5:7] }}{% endif %}</span>
+            {% if t.reason %}<div style="margin-top:3px">Powód: {{ t.reason }}</div>{% endif %}
+            {% if t.note %}<div class="meta" style="margin-top:3px">Uwaga: {{ t.note }}</div>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% if editable %}<div><a class="btn btn-secondary btn-sm" href="{{ url_for('crm_day_report_day', day=day.isoformat(), edytuj=1) }}">✏️ Popraw (do końca dnia)</a></div>{% endif %}
+    </div>
+  </div>
+
+  <div class="panel" id="rozmowa">
+    <div class="panel-header"><i class="bi bi-chat-dots"></i> Rozmowa pod raportem</div>
+    <div class="panel-body">
+      {% if not comments %}<div class="rd-muted">Brak komentarzy. Tu przełożony może dopytać, a autor odpowiedzieć — wszystko zostaje przy raporcie.</div>{% endif %}
+      {% for c in comments %}
+      <div class="rd-chat"><b style="color:{{ (users_by_id.get(c.by) or {}).get('color', 'inherit') }}">{{ c.name }}</b>
+        <span class="rd-muted">· {{ c.at[8:10] }}.{{ c.at[5:7] }} {{ c.at[11:16] }} UTC</span>
+        <div class="rd-text">{{ c.text }}</div></div>
+      {% endfor %}
+      <form method="post" action="{{ url_for('crm_day_report_comment', rid=report.id) }}" style="display:flex;gap:8px;margin-top:10px">
+        <input type="text" name="text" maxlength="2000" placeholder="Napisz komentarz…" style="flex:1" required>
+        <button class="btn btn-secondary" type="submit">Wyślij</button>
+      </form>
+    </div>
+  </div>
+
+  {% else %}
+  <div class="rd-msg rd-warn">Za ten dzień nie ma raportu.</div>
+  {% endif %}
+</div>
+{% endblock %}

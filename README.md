@@ -51,6 +51,14 @@ wystarczy dopisać parę do `lt_strings.py`.
 
 3. Settings → Networking → Generate Domain.
 
+## 👥 Zespół: rangi, zlecone zadania, raport dnia
+
+Ten sam kod co w CRM PL (`team.py`, `parts/raporty_dnia.py`) — opis w README CRM PL. Różnice tutaj:
+
+- **raport dnia jest domyślnie wyłączony** (`DAY_REPORTS=1` w Railway go włącza) — zespół składa jeden raport dziennie,
+  w CRM PL; tu działa zlecanie zadań (menu → Zespół), rangi i liczby dnia z tego CRM (także narzędzie `team_reports`),
+- rangi zapisują się w bazie tego CRM osobno — zmianę rangi trzeba zrobić w obu CRM.
+
 ## 🚨 Nowe leady — obsłużyć tego samego dnia
 
 Każdy nowy lead (osobno dla Litwy i Niemiec) wyskakuje w oknie, które zasłania CRM na każdej stronie, aż zostanie

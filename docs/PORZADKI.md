@@ -14,8 +14,10 @@ Bazy danych i zmienne zostają osobne, kod jest wspólny.
 ## Stan (15.11.2026)
 
 **Wspólne pliki** (identyczne w Moja-apka i Crm-litwa): `sales_rules.py`, `health.py` (strażnik CRM),
-`logistics.py`, `poczta.py`, **cały katalog `parts/`**; testy: `test_sales_rules.py`, `test_health_rules.py`,
-`test_health_crm.py`, `test_mail_task_check.py`, `test_pages_open.py`, `test_ai_forced_tool.py`.
+`team.py` (rangi i raport dnia), `logistics.py`, `poczta.py`, **cały katalog `parts/`**; testy: `test_sales_rules.py`,
+`test_health_rules.py`, `test_health_crm.py`, `test_mail_task_check.py`, `test_pages_open.py`,
+`test_ai_forced_tool.py`, `test_team_rules.py`, `test_team_reports.py`; szablony zespołu: `raport_dnia.html`,
+`zespol.html`, `_raport_gate.html`.
 
 **`parts/` — wspólne części `crm.py` (39 plików tematycznych, ok. 4,5 tys. linii):** modele, logowanie, bramki
 etapów, follow-upy, automaty, czujniki i strona strażnika, daty wydarzeń, raport dzienny, ClickUp (mapowanie,

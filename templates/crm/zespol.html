@@ -1,0 +1,217 @@
+{% extends "crm/base.html" %}
+{% block title %}Zespół – RoboRent CRM{% endblock %}
+{% block page_title %}👥 Zespół · raporty dnia i zlecone zadania{% endblock %}
+{% block topbar_actions %}
+{% if reports_on %}<a class="btn btn-primary btn-sm" style="margin-left:auto" href="{{ url_for('crm_day_report') }}">📝 Mój raport dnia</a>{% endif %}
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.zs-wrap { max-width: 1180px; display: flex; flex-direction: column; gap: 14px; }
+.zs-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.zs-pill { padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text); text-decoration: none; background: var(--panel2); }
+.zs-pill.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+.zs-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.zs-tile { background: var(--panel2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
+.zs-tile b { display: block; font-size: 19px; }
+.zs-tile span { font-size: 11.5px; color: var(--muted); }
+.zs-scroll { overflow-x: auto; }
+.zs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.zs-table th { text-align: right; font-weight: 600; color: var(--muted); font-size: 11px; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.zs-table td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.zs-table th:first-child, .zs-table td:first-child, .zs-table .l { text-align: left; }
+.zs-table td.wrap { white-space: normal; min-width: 240px; width: 38%; }
+.zs-table tr:hover td { background: rgba(255,255,255,.03); }
+.zs-muted { color: var(--muted); font-size: 12px; }
+.zs-msg { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; background: #22c55e1a; border: 1px solid #22c55e55; }
+.zs-note { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; background: #eab3081a; border: 1px solid #eab30855; }
+.zs-task { border-top: 1px solid var(--border); padding: 8px 0; font-size: 13px; }
+.zs-task:first-child { border-top: none; }
+.zs-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.zs-form > div { display: flex; flex-direction: column; }
+</style>
+{% endblock %}
+
+{% macro val(v) %}{{ '—' if v is none else ('%g'|format(v)) }}{% endmacro %}
+{% set show = ['calls_ok', 'calls_fail', 'mails_sent', 'offers', 'leads_handled', 'tasks_done', 'wins', 'active_h'] %}
+{% set labels = dict(metrics) %}
+{% set show_day = ['calls_ok', 'calls_fail', 'mails_sent', 'offers', 'tasks_done', 'active_h'] %}
+{% set short = {'calls_ok': 'Tel. odebr.', 'calls_fail': 'Tel. nieodebr.', 'mails_sent': 'Maile', 'offers': 'Oferty', 'leads_handled': 'Nowe leady', 'tasks_done': 'Zadania', 'wins': 'Wygrane', 'active_h': 'Aktywność (h)'} %}
+
+{% block content %}
+<div class="zs-wrap">
+  {% if msg %}<div class="zs-msg">{{ msg }}</div>{% endif %}
+  {% if request.args.get('zlecone') %}<div class="zs-msg">✅ Zadanie zlecone — pojawi się tej osobie w zadaniach i w raporcie dnia z terminu.</div>{% endif %}
+  {% if not reports_on %}<div class="zs-note">W tym CRM raport dnia jest wyłączony — zespół składa jeden raport, w CRM PL. Zlecanie zadań i liczby z tego CRM działają normalnie.</div>{% endif %}
+
+  {# ---------- zlecone mnie ---------- #}
+  {% set my_due, my_later = mine %}
+  {% set my_open = my_due|selectattr('state', 'equalto', 'open')|list %}
+  {% if my_open or my_later %}
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-pin-angle"></i> Zadania zlecone mnie ({{ my_open|length }} z terminem do dziś{% if my_later %}, {{ my_later|length }} na później{% endif %})</div>
+    <div class="panel-body">
+      {% for t in my_open %}
+      <div class="zs-task"><b>{{ t.icon }} {{ t.what }}</b>{% if t.lead_id and role.data %} · <a href="{{ url_for('crm_lead_detail', lead_id=t.lead_id) }}">{{ t.lead or 'lead' }}</a>{% elif t.lead %} · {{ t.lead }}{% endif %}
+        <span class="zs-muted">· zlecił {{ t.by }} · termin {{ t.due[8:10] }}.{{ t.due[5:7] }}{% if t.due < today.isoformat() %} · <span style="color:var(--red)">po terminie</span>{% endif %}</span></div>
+      {% endfor %}
+      {% for t in my_later %}
+      <div class="zs-task zs-muted">{{ t.icon }} {{ t.what }}{% if t.lead %} · {{ t.lead }}{% endif %} · zlecił {{ t.by }}{% if t.due %} · termin {{ t.due[8:10] }}.{{ t.due[5:7] }}{% else %} · bez terminu{% endif %}</div>
+      {% endfor %}
+      {% if my_open and reports_on %}<div style="margin-top:8px"><a class="btn btn-secondary btn-sm" href="{{ url_for('crm_day_report_day', day=today.isoformat(), edytuj=1) }}">Rozlicz w raporcie dnia →</a>
+        <span class="zs-muted">zrobione odhaczysz też normalnie w leadzie albo na Dashboardzie</span></div>
+      {% elif my_open %}<div class="zs-muted" style="margin-top:8px">Odhacz je w leadzie albo na Dashboardzie.</div>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ---------- zlecanie i zlecone przeze mnie ---------- #}
+  {% if role.data %}
+  <div class="panel" id="zlecone">
+    <div class="panel-header"><i class="bi bi-send"></i> Zleć zadanie</div>
+    <div class="panel-body">
+      <form method="post" action="{{ url_for('crm_quick_add_task') }}" class="zs-form">
+        <input type="hidden" name="next" value="zespol">
+        <input type="hidden" name="kind" value="task">
+        <div><label>Komu</label>
+          <select name="assigned_to" required style="width:auto">
+            {% for u in assignable if u.id != viewer.id %}<option value="{{ u.id }}" {{ 'selected' if u.id == person.id }}>{{ u.name }}</option>{% endfor %}
+          </select></div>
+        <div style="flex:1;min-width:260px"><label>Co ma zrobić</label>
+          <input type="text" name="notes" maxlength="500" required placeholder="np. Obdzwonić wszystkich z etapu Oferta starszych niż 7 dni"></div>
+        <div><label>Lead (opcjonalnie)</label>
+          <select name="lead_id" style="width:200px">
+            <option value="">— bez leada —</option>
+            {% for lid, company in quick_task_leads %}<option value="{{ lid }}">{{ company }}</option>{% endfor %}
+          </select></div>
+        <div><label>Termin</label><input type="date" name="due_date" value="{{ today.isoformat() }}" required></div>
+        <button class="btn btn-primary" type="submit">Zleć</button>
+      </form>
+      <div class="zs-muted" style="margin-top:6px">Zlecone zadanie trafia do zadań tej osoby, a w dniu terminu do jej raportu dnia — musi zaznaczyć „zrobione” albo „niezrobione” i napisać dlaczego. Telefon / mail / spotkanie przy konkretnym leadzie zlecisz też przyciskiem „+” w prawym dolnym rogu.</div>
+
+      {% set o_open = ordered|selectattr('state', 'equalto', 'open')|list %}
+      {% set o_done = ordered|selectattr('state', 'equalto', 'done')|list %}
+      <label style="margin-top:14px">Zlecone przeze mnie — otwarte ({{ o_open|length }})</label>
+      {% if not o_open %}<div class="zs-muted">Nic otwartego.</div>{% endif %}
+      {% for t in o_open %}
+      <div class="zs-task"><b>{{ t.icon }} {{ t.what }}</b>{% if t.lead_id %} · <a href="{{ url_for('crm_lead_detail', lead_id=t.lead_id) }}">{{ t.lead or 'lead' }}</a>{% endif %}
+        <span class="zs-muted">· dla: <b>{{ t.to }}</b>{% if t.due %} · termin {{ t.due[8:10] }}.{{ t.due[5:7] }}{% else %} · bez terminu{% endif %}</span>
+        {% if t.overdue %}<span style="color:var(--red);font-size:12px"> · {{ t.overdue }} dn. po terminie</span>{% endif %}
+        {% if t.reason %}<div style="font-size:12.5px;margin-top:2px;color:#fca5a5">{{ t.reason }}</div>{% endif %}
+      </div>
+      {% endfor %}
+      {% if o_done %}
+      <details style="margin-top:8px"><summary class="zs-muted" style="cursor:pointer">Zrobione w ostatnich 14 dniach ({{ o_done|length }})</summary>
+        {% for t in o_done %}<div class="zs-task zs-muted">✅ {{ t.what }}{% if t.lead %} · {{ t.lead }}{% endif %} · {{ t.to }} · {{ t.done_at }}</div>{% endfor %}
+      </details>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ---------- historia osoby ---------- #}
+  <div class="panel">
+    <div class="panel-header"><i class="bi bi-clock-history"></i> Historia pracy</div>
+    <div class="panel-body" style="display:flex;flex-direction:column;gap:12px">
+      <div class="zs-bar">
+        {% for u in visible %}<a class="zs-pill {{ 'on' if u.id == person.id }}" href="{{ url_for('crm_team', osoba=u.id, dni=days) }}">{{ u.name }}</a>{% endfor %}
+        <span style="flex:1"></span>
+        {% for d, label in [(30, '30 dni'), (90, '3 mies.'), (180, 'pół roku'), (365, 'rok')] %}<a class="zs-pill {{ 'on' if d == days }}" href="{{ url_for('crm_team', osoba=person.id, dni=d) }}">{{ label }}</a>{% endfor %}
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_team_export', fmt='csv', osoba=person.id, dni=days) }}" title="Do Excela">⬇ CSV</a>
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_team_export', fmt='json', osoba=person.id, dni=days) }}" title="Do wklejenia w Claude'a">⬇ JSON</a>
+      </div>
+      <div class="zs-muted"><b style="color:var(--text)">{{ person.full_name or person.name }}</b> · ranga: {{ person_role.name }} ·
+        {% if person_must %}raport dnia obowiązkowy{% if data.since %} od {{ data.since.strftime('%d.%m.%Y') }}{% else %} (liczy się od pierwszego wejścia tej osoby do CRM){% endif %}{% else %}bez obowiązku raportu{% endif %}
+        · okres {{ data.from.strftime('%d.%m.%Y') }}–{{ data.to.strftime('%d.%m.%Y') }}.
+        Tę samą historię Claude czyta sam przez konektor (narzędzie <code>team_reports</code>) — wystarczy zapytać np. „w które dni tygodnia {{ person.name }} jest najmniej skuteczny?”.</div>
+
+      {% set t = data.summary.total %}
+      <div class="zs-tiles">
+        <div class="zs-tile"><b>{{ t.worked }}</b><span>dni przepracowanych</span></div>
+        {% if person_must %}
+        <div class="zs-tile"><b>{{ '—' if t.on_time_pct is none else t.on_time_pct ~ '%' }}</b><span>raportów w terminie</span></div>
+        <div class="zs-tile"><b style="color:{{ 'var(--yellow)' if t.reports_late else 'inherit' }}">{{ t.reports_late }}</b><span>raportów spóźnionych</span></div>
+        <div class="zs-tile"><b style="color:{{ 'var(--red)' if t.reports_missing else 'inherit' }}">{{ t.reports_missing }}</b><span>dni bez raportu</span></div>
+        {% endif %}
+        <div class="zs-tile"><b>{{ '—' if t.ordered_done_pct is none else t.ordered_done_pct ~ '%' }}</b><span>zleconych zadań zrobionych ({{ t.ordered_done }} z {{ t.ordered_done + t.ordered_not_done }})</span></div>
+        <div class="zs-tile"><b>{{ t.off }}</b><span>dni wolnych</span></div>
+        {% for k in ['calls_ok', 'mails_sent', 'offers', 'wins'] %}
+        <div class="zs-tile"><b>{{ val(t.sum[k]) }}</b><span>{{ labels[k] }} · śr. {{ val(t.avg_per_worked_day[k]) }} / dzień</span></div>
+        {% endfor %}
+      </div>
+
+      <div>
+        <label>Średnio w dniu tygodnia (z dni przepracowanych)</label>
+        <div class="zs-scroll"><table class="zs-table">
+          <tr><th>Dzień</th><th>Dni</th>{% for k in show %}<th title="{{ labels[k] }}">{{ short[k] }}</th>{% endfor %}<th>Zlecone zrobione</th><th>Spóźn.</th><th>Brak</th></tr>
+          {% for w in data.summary.by_weekday %}
+          <tr><td>{{ w.weekday }}</td><td>{{ w.days }}</td>{% for k in show %}<td>{{ val(w.avg[k]) }}</td>{% endfor %}
+            <td>{{ '—' if w.ordered_done_pct is none else w.ordered_done_pct ~ '%' }}</td>
+            <td style="color:{{ 'var(--yellow)' if w.reports_late else 'inherit' }}">{{ w.reports_late }}</td>
+            <td style="color:{{ 'var(--red)' if w.reports_missing else 'inherit' }}">{{ w.reports_missing }}</td></tr>
+          {% endfor %}
+        </table></div>
+      </div>
+
+      <div>
+        <label>Dzień po dniu ({{ data.rows|length }})</label>
+        {% if not data.rows %}<div class="zs-muted">W tym okresie nie ma jeszcze żadnych raportów ani czynności tej osoby.</div>{% endif %}
+        <div class="zs-scroll"><table class="zs-table">
+          {% if data.rows %}<tr><th>Dzień</th><th class="l">Raport</th>{% for k in show_day %}<th title="{{ labels[k] }}">{{ short[k] }}</th>{% endfor %}<th>Zlecone</th><th class="l">Co zrobione / uwagi</th></tr>{% endif %}
+          {% for r in data.rows %}
+          <tr>
+            <td>{{ r.weekday }} {{ r.day.strftime('%d.%m') }}</td>
+            <td class="l">
+              {% if r.report %}<a href="{{ url_for('crm_day_report_view', rid=r.report.id) }}" style="color:inherit">{{ team.STATES[r.state] }}</a>
+              {% else %}<span style="color:{{ 'var(--red)' if r.state == 'missing' else 'var(--muted)' }}">{{ team.STATES[r.state] }}</span>{% endif %}
+              {% if can_waive and r.state in ('missing', 'today') %}
+              <form method="post" action="{{ url_for('crm_team_waive', dni=days) }}" style="display:inline" onsubmit="return confirm('Zwolnić {{ person.name }} z raportu za {{ r.day.strftime('%d.%m') }}?')">
+                <input type="hidden" name="user_id" value="{{ person.id }}"><input type="hidden" name="day" value="{{ r.day.isoformat() }}">
+                <button class="btn btn-secondary btn-sm" style="padding:1px 6px;font-size:11px" title="Zwolnij z raportu za ten dzień (np. cały dzień na realizacji)">zwolnij</button>
+              </form>{% endif %}
+            </td>
+            {% for k in show_day %}<td style="color:{{ 'var(--muted)' if not r.metrics[k] else 'inherit' }}">{{ val(r.metrics[k]) }}</td>{% endfor %}
+            <td>{% if r.ordered_done or r.ordered_open %}<span style="color:var(--green)">{{ r.ordered_done }}✓</span>{% if r.ordered_open %} <span style="color:var(--red)">{{ r.ordered_open }}✗</span>{% endif %}{% else %}<span class="zs-muted">—</span>{% endif %}</td>
+            <td class="l wrap">
+              {% if r.report and r.report.status == 'off' %}<span class="zs-muted">🌴 {{ r.report.off_reason }}</span>
+              {% elif r.report %}{{ (r.report.summary or '')|truncate(150) }}{% if r.report.blockers %} <span style="color:#fde68a">⚠ {{ r.report.blockers|truncate(80) }}</span>{% endif %}{% endif %}
+              {% for nd in r.not_done %}<div style="color:#fca5a5;font-size:12px">✗ {{ nd.what|truncate(60) }} — {{ nd.reason|truncate(90) }}</div>{% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        </table></div>
+        <div class="zs-muted" style="margin-top:6px">Liczby CRM zbiera sam z zapisanych czynności (odhaczone zadania, wysłane maile i oferty, obsłużone leady, zmiany etapów). Aktywność = od pierwszej do ostatniej czynności dnia. Kliknij stan raportu, żeby go przeczytać i skomentować.</div>
+      </div>
+    </div>
+  </div>
+
+  {# ---------- rangi ---------- #}
+  <div class="panel" id="rangi">
+    <div class="panel-header"><i class="bi bi-shield-lock"></i> Rangi</div>
+    <div class="panel-body">
+      <div class="zs-scroll"><table class="zs-table">
+        <tr><th>Osoba</th><th class="l">Ranga</th><th class="l">Co oznacza</th><th class="l">Raport dnia</th></tr>
+        {% for row in roles %}
+        <tr><td><b style="color:{{ row.user.color }}">{{ row.user.name }}</b></td>
+          <td class="l">
+            {% if role.manage %}
+            <form method="post" action="{{ url_for('crm_team_role') }}" style="display:flex;gap:6px">
+              <input type="hidden" name="user_id" value="{{ row.user.id }}">
+              <select name="role" onchange="this.form.submit()" style="padding:3px 6px;font-size:12.5px">
+                {% for key, r in team.ROLES.items() %}<option value="{{ key }}" {{ 'selected' if key == row.role.key }}>{{ r.name }}</option>{% endfor %}
+              </select>
+            </form>
+            {% else %}{{ row.role.name }}{% endif %}
+          </td>
+          <td class="l wrap">{{ row.role.about }}</td>
+          <td class="l">{% if not row.role.report %}<span class="zs-muted">nie dotyczy</span>{% elif not reports_on %}<span class="zs-muted">wyłączony w tym CRM</span>{% elif row.since %}obowiązkowy od {{ row.since.strftime('%d.%m.%Y') }}{% else %}obowiązkowy — od pierwszego wejścia{% endif %}</td></tr>
+        {% endfor %}
+      </table></div>
+      <div class="zs-muted" style="margin-top:8px">
+        {% if role.manage %}Rangę zmieniasz z listy — działa od razu.{% else %}Rangi nadaje Zarząd.{% endif %}
+        Raport dnia: każdy dzień roboczy (pn–pt bez świąt). Raport złożony po swoim dniu zapisuje się jako spóźniony; brak raportu z jednego z ostatnich {{ team.GATE_DAYS }} dni roboczych blokuje tej osobie CRM, aż go uzupełni albo zgłosi dzień wolny. Osoba z wyższą rangą może zwolnić z raportu za konkretny dzień (przycisk „zwolnij” w tabeli).
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -27,9 +27,12 @@ def crm_quick_add_task():
         due_date=due,
         notes=request.form.get("notes", "").strip(),
         assigned_to=assigned,
+        created_by=get_current_user(request)["id"],
     )
     db.session.add(act)
     db.session.commit()
+    if request.form.get("next") == "zespol":
+        return redirect(url_for("crm_team", zlecone=1))
     if lead:
         return redirect(url_for("crm_lead_detail", lead_id=lead.id))
     return redirect(url_for("crm_dashboard"))
@@ -50,6 +53,7 @@ def crm_add_activity(lead_id):
         due_date=parse_date(request.form.get("due_date", "")),
         notes=request.form.get("notes", "").strip(),
         assigned_to=assigned,
+        created_by=get_current_user(request)["id"],
     )
     db.session.add(act)
     db.session.commit()
@@ -70,6 +74,7 @@ def crm_add_comment(lead_id):
         db.session.add(Activity(
             lead_id=lead_id, kind="note", done=True, done_at=now,
             notes=text, voice_note=voice_note or None, assigned_to=get_current_user(request)["id"],
+            created_by=get_current_user(request)["id"],
         ))
         db.session.commit()
     return redirect(url_for("crm_lead_detail", lead_id=lead_id))

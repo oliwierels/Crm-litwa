@@ -252,6 +252,7 @@ tr:hover td { background: var(--panel2); }
   {% set ep = request.endpoint %}
   {% set view = request.args.get('view', 'kanban') %}
   {# grupy menu: (id, nazwa, [(adres, aktywna, ikona, etykieta, licznik, kolor licznika, opis licznika)]) #}
+  {% set tb = team_badges() %}
   {% set nav_groups = [
     ('sales', 'Sales', [
       (url_for('crm_mail'), (ep or '').startswith('crm_mail'), 'envelope', 'Poczta', mail_unseen_count(), 'var(--accent)', 'Nowe maile od klientów (ostatnie 30 dni)'),
@@ -271,6 +272,11 @@ tr:hover td { background: var(--panel2); }
       (url_for('crm_clickup_inbox'), ep == 'crm_clickup_inbox', 'cloud-download', 'Z ClickUp', clickup_pending_count or 0, 'var(--accent)', 'Leady z ClickUp do zatwierdzenia'),
       (url_for('crm_campaigns'), ep in ['crm_campaigns', 'crm_campaign', 'crm_campaign_new'], 'megaphone', 'Blitzkrieg', campaigns_running or 0, 'var(--green)', 'Trwające kampanie'),
     ]),
+    ('zespol', 'Zespół', ([
+      (url_for('crm_day_report'), ep in ['crm_day_report_day', 'crm_day_report_view'], 'journal-check', 'Raport dnia', tb.todo, 'var(--red)', 'Do zrobienia: brakujące raporty dnia i zlecone Ci zadania z terminem do dziś'),
+    ] if tb.on else []) + [
+      (url_for('crm_team'), ep == 'crm_team', 'people', 'Zespół', tb.unread if tb.on else tb.todo, 'var(--accent)', 'Nowe raporty i komentarze, których jeszcze nie widziałeś' if tb.on else 'Zlecone Ci zadania z terminem do dziś'),
+    ]),
     ('raporty', 'Raporty', [
       (url_for('crm_stats'), ep == 'crm_stats', 'graph-up', 'Statystyki', 0, '', ''),
       (url_for('crm_sales_panel'), ep == 'crm_sales_panel', 'bullseye', 'Skuteczność', 0, '', ''),
@@ -281,10 +287,12 @@ tr:hover td { background: var(--panel2); }
     ]),
   ] %}
   <nav>
+    {% if tb.data %}
     <a href="{{ url_for('crm_dashboard') }}" class="nav-dash {% if ep == 'crm_dashboard' %}active{% endif %}">
       <i class="bi bi-house"></i> Dashboard
     </a>
-    {% for gid, gname, items in nav_groups %}
+    {% endif %}
+    {% for gid, gname, items in nav_groups if tb.data or gid == 'zespol' %}
     {% set group_active = items|selectattr(1)|list|length > 0 %}
     {% set group_count = items|sum(attribute=4) %}
     <details class="nav-group" data-group="{{ gid }}" {{ 'open' if group_active }} {{ 'data-active' if group_active }}>
@@ -343,6 +351,7 @@ tr:hover td { background: var(--panel2); }
 {% include "crm/_alerts.html" %}
 {% include "crm/_callback.html" %}
 {% include "crm/_health.html" %}
+{% include "crm/_raport_gate.html" %}
   <div class="topbar">
     <div class="topbar-title">{% block page_title %}{% endblock %}</div>
     {% block topbar_actions %}{% endblock %}
