@@ -11,54 +11,56 @@ Bazy danych i zmienne zostają osobne, kod jest wspólny.
   internetu i bez wysyłki).
 - Pliki wspólne są identyczne w obu repozytoriach — zmiana w jednym = ta sama zmiana w drugim (sprawdzić `md5sum`).
 
-## Stan (15.11.2026)
+## Stan (23.11.2026)
 
-**Wspólne pliki** (identyczne w Moja-apka i Crm-litwa): `sales_rules.py`, `health.py` (strażnik CRM),
-`team.py` (rangi i raport dnia), `logistics.py`, `poczta.py`, **cały katalog `parts/`**; testy: `test_sales_rules.py`,
-`test_health_rules.py`, `test_health_crm.py`, `test_mail_task_check.py`, `test_pages_open.py`,
-`test_ai_forced_tool.py`, `test_team_rules.py`, `test_team_reports.py`, `test_daily_report.py`, `test_next_step.py`, `test_callback.py`; szablony zespołu: `raport_dnia.html`,
-`zespol.html`, `_raport_gate.html`; okno następnego kroku: `_next_step_gate.html`.
+**Rynki w kodzie (R1).** `market.py` (identyczny w obu repozytoriach) zna trzy rynki: `pl`, `lt`, `de` — język,
+waluta, domena i skrzynki, teksty do klienta, ustawienia (np. `auto_send`, `translate_mail`, `contract_vat`,
+`contractors`, `offer_second_step`). Serwis włącza swoje rynki zmienną **`CRM_MARKETS`** (Railway: CRM PL `pl`,
+CRM LT/DE `lt,de`). Kod nie pyta „czy to CRM PL”, tylko o ustawienie rynku leada.
 
-**`parts/` — wspólne części `crm.py` (39 plików tematycznych, ok. 4,5 tys. linii):** modele, logowanie, bramki
-etapów, follow-upy, automaty, czujniki i strona strażnika, daty wydarzeń, raport dzienny, ClickUp (mapowanie,
-import), użytkownicy, statystyki, próby kontaktu, zadania, karta leada, audyt ofert, dostarczalność, duplikaty,
-logistyka (plan i strony), Customer Journey (stan, umowa, dokumenty, poczta, strony), poczta wysłana, oferty,
-asystent, konektor MCP, sprawy z poczty. `crm.py` wczytuje każdą część przez `_include("nazwa")` dokładnie
-w miejscu, w którym kod był wcześniej, w tej samej przestrzeni nazw — zachowanie bez zmian (sprawdzone odciskiem:
-nazwy, adresy stron, kolejność obsługi zapytań, tabele — identyczne przed i po). `crm.py`: PL 12,8 → 8,3 tys.
-linii, LT/DE 13,4 → 8,9 tys. W `crm.py` zostaje to, co się (jeszcze) różni między CRM-ami.
+**Wspólne modele i baza (R2a).** Te same modele i to samo `ensure_schema` w obu CRM: każdy lead, mail, sprawa
+z poczty, kampania i zapytanie ma rynek. Migracja tylko dodaje kolumny i uzupełnia rynek starych wierszy
+(sprawdzane na kopii bazy założonej kodem z produkcji — na SQLite i na Postgresie).
 
-Jak zmieniać część: edytować plik w `parts/` i skopiować go do drugiego repozytorium (`diff -rq parts ../…/parts`).
-Kolejne części powstają tak samo: funkcja ujednolicona w obu `crm.py` → przeniesiona do `parts/`.
+**Wspólne funkcje (R2b–e).** Waluty, kraj, marka, podpis maila, Poczta (skrzynki rynku, zapis maili, przegląd
+poczty przez Claude osobno dla każdego rynku, tłumaczenie włączane ustawieniem rynku), alarm nowych leadów
+(jedna reguła: nieodebrany telefon to jeszcze nie kontakt), statystyki zamkniętych leadów, Customer Journey
+(umowa, maile, instrukcja bazy wiedzy według rynku leada; wybór wykonawcy Bartosz / Oliwier tylko na rynku
+z `contractors`).
 
-**Usunięte jako martwe:** `app.py` (stary planer stolików, nic go nie uruchamiało), `render.yaml` (Render — nie
-używany), nieużywane funkcje `_setting_number`, `in_cur`, `logistics.daterange`, wpis „granica” w tabeli miast.
+**Wspólne pliki** (identyczne w Moja-apka i Crm-litwa): `market.py`, `journey.py`, `robot_agent.py`,
+`sales_rules.py`, `health.py`, `team.py`, `logistics.py`, `poczta.py`, **cały katalog `parts/`**, `static/docs/`
+(instrukcje bazy wiedzy PL / LT / DE), CI `.github/workflows/testy.yml`; wspólne testy m.in. `test_mail_market.py`,
+`test_mail_task_check.py`, `test_pages_open.py`, `test_next_step.py`, `test_daily_report.py`.
 
-**ClickUp — 3 listy, 3 importy:**
-- lista polska → CRM PL (`CLICKUP_API_TOKEN`, `CLICKUP_LIST_ID` w serwisie PL);
-- lista litewska → CRM LT/DE (`CLICKUP_API_TOKEN`, `CLICKUP_LIST_ID` w serwisie LT/DE);
-- lista niemiecka → **CRM LT/DE** (od 23.11.2026): `CLICKUP_API_TOKEN_DE` + `CLICKUP_LIST_ID_DE` w serwisie LT/DE.
-  CRM PL jej już nie czyta (w serwisie PL nie ma `CLICKUP_LIST_ID_DE`; kod importu w PL został, ale jest uśpiony).
-  Przy pierwszym odczycie wprost CRM LT/DE zapamiętał moment podłączenia (`clickup_de_direct_since`): zgłoszenia
-  sprzed niego, których w LT/DE nie ma, nie stają się leadami — przyszły wcześniej przez CRM PL. Gdyby obie drogi
-  działały naraz, przenoszenie z PL rozpozna zadanie ClickUp, które już jest w LT/DE, i usunie duplikat w PL.
-- Poczta (kontakt@, skrzynki) to osobna droga: zapytania z maili, nie z ClickUp.
+**`parts/` — wspólne części `crm.py`:** `crm.py` wczytuje każdą część przez `_include("nazwa")` w miejscu, w którym
+kod był wcześniej, w tej samej przestrzeni nazw. Jak zmieniać część: edytować plik w `parts/` i skopiować go do
+drugiego repozytorium (`diff -rq parts ../…/parts`).
 
-**Duplikacja `crm.py`** (PL ↔ LT/DE, pomiar 15.11): 319 identycznych funkcji (4,8 tys. linii), 149 różnych
-(ok. 4,4 tys.), 60 tylko w PL (ok. 1 tys.: robot / ElevenLabs, koszty z paragonów, inFakt, ClickUp DE),
-103 tylko w LT/DE (ok. 1,5 tys.: rynki, tłumaczenia, przenoszenie z PL, maile LT, Viber).
+**Duplikacja `crm.py`** (pomiar 23.11, funkcje najwyższego poziomu): 198 identycznych (3,0 tys. linii; na starcie
+R2: 105), 74 różnych (ok. 2,7 tys.), 52 tylko w PL (ok. 0,9 tys.: robot / ElevenLabs, koszty z paragonów, inFakt,
+lista do obdzwonienia), 77 tylko w LT/DE (ok. 1,2 tys.: przenoszenie z PL, wyceny i maile LT, WhatsApp / Viber,
+tłumaczenie interfejsu).
+
+**Testy i CI:** każdy push uruchamia pełne testy dwa razy — na SQLite i na Postgresie 16 (jak produkcja;
+`TEST_DATABASE_URL` w `tests/conftest.py`).
+
+**Usunięte jako martwe:** `app.py`, `render.yaml`, nieużywane funkcje `_setting_number`, `in_cur`,
+`logistics.daterange`, wpis „granica” w tabeli miast.
+
+**ClickUp — 3 listy, 3 importy:** polska → CRM PL; litewska i niemiecka → CRM LT/DE (`CLICKUP_API_TOKEN_DE` +
+`CLICKUP_LIST_ID_DE` w serwisie LT/DE; zgłoszenia sprzed podłączenia nie stają się leadami). Poczta (kontakt@,
+skrzynki) to osobna droga: zapytania z maili.
 
 ## Kolejne etapy
 
-1. **Wspólne części z `crm.py`** — zrobione dla wszystkich identycznych bloków (`parts/`). Dalej: ujednolicać
-   funkcje, które różnią się drobiazgami (np. `sync_inbox`, `mail_ai_draft`, `_assistant_execute`, `mail_boxes`,
-   `health_jobs`), i przenosić je do `parts/`.
-2. **Ujednolicenie różnic** — to, czym PL różni się od LT/DE, jako ustawienia rynku (`market.py`), nie osobny kod.
-   PL = rynek „pl”, funkcje tylko-PL (robot, inFakt) włączane ustawieniem serwisu.
-3. **Jedno repozytorium** — serwis CRM LT/DE w Railway przepięty na repozytorium Moja-apka (zmienna rynków,
-   np. `CRM_MARKETS=lt,de`, w PL `pl`). Najpierw próbny serwis Railway na kopii bazy, potem przełączenie.
+1. **R2 dalej** — ujednolicić pozostałe różne funkcje tematami (ClickUp, oferty i pisanie maili, asystent,
+   strażnik, inFakt i faktury, statystyki) i dołożyć do drugiego CRM funkcje jednostronne, uśpione ustawieniem rynku
+   albo brakiem klucza (robot, koszty, WhatsApp / Viber, przenoszenie z PL). Cel: oba `crm.py` identyczne.
+2. **R3** — wspólne szablony, `pricing.py`, `offers.py`.
+3. **R4 — jedno repozytorium**: serwis CRM LT/DE w Railway przepięty na Moja-apka (`CRM_MARKETS=lt,de` już
+   ustawione), testy w CI dla obu ustawień rynków; potem `parts/` jako zwykłe moduły zamiast `exec`.
    Crm-litwa zostaje jako archiwum.
-4. Usunąć z CRM PL uśpiony kod importu niemieckiej listy ClickUp (klucz jest już w LT/DE, etap zamknięty 23.11.2026).
 
 ## Do zrobienia przez zespół (Railway)
 
