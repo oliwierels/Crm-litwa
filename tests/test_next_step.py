@@ -96,10 +96,15 @@ def test_won_lead_loses_open_tasks_keeps_history(app):
     crm.db.session.commit()
     assert open_tasks(lead) == [], "otwarte zadania z lejka znikają — dalej Customer Journey"
     assert crm.db.session.get(crm.Activity, done.id) and crm.db.session.get(crm.Activity, note.id), "historia zostaje"
-    later = task(lead, notes="Zawieźć roll-up na event")  # człowiek dodał zadanie już po wygranej
+    later = task(lead, notes="Zawieźć roll-up na event", created_by=1)  # człowiek dodał zadanie już po wygranej
+    assert [a.id for a in open_tasks(lead)] == [later.id]
     assert crm.record_stage_change(lead, "Zrealizowany", None)
     crm.db.session.commit()
-    assert [a.id for a in open_tasks(lead)] == [later.id], "Wygrany → Zrealizowany nie kasuje zadań dodanych po wygranej"
+    assert open_tasks(lead) == [], "zrealizowany lead nie ma otwartych zadań (np. telefonu za miesiąc)"
+    kept = crm.db.session.get(crm.Activity, later.id)
+    assert kept is not None and kept.kind == "note" and kept.notes.startswith(crm.CLEAN_PREFIX), \
+        "zadanie od człowieka zostaje w historii jako „nieaktualne”, nie znika"
+    assert "Zawieźć roll-up" in kept.notes
 
 
 def test_one_time_cleanup_of_already_won_leads(app):

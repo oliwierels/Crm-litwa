@@ -7,6 +7,8 @@
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='icons/bootstrap-icons.min.css') }}">
+<script>window.CRM_ME = {{ {'id': user.id, 'name': user.name}|tojson }};</script>
+<script src="{{ url_for('static', filename='wygrana.js') }}?v=1" defer></script>
 <script>/* motyw: ciemny firmowy (jak oferty i strona 33bots) domyślnie, jasny zapamiętany w przeglądarce */
 (function () { var t = null; try { t = localStorage.getItem('crm-theme'); } catch (e) {}
   if (t !== 'light') document.documentElement.dataset.theme = 'dark'; })();
@@ -231,6 +233,8 @@ label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px
 .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow-sm); }
 .stat-val { font-size: 22px; font-weight: 700; margin-bottom: 2px; letter-spacing: -.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .stat-label { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+.stat-val, .hero-kpi-val { overflow: hidden; text-overflow: ellipsis; }
+.stat-sub { font-size: 12.5px; color: var(--muted); font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .stat .stat-label + .stat-val { margin: 4px 0 0; }
 a.stat:hover { border-color: var(--border-strong); }
 
@@ -383,6 +387,27 @@ a.stat:hover { transform: translateY(-2px); }
 .k-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0, 0, 0, .18); border-color: var(--border-strong); }
 .k-card.dragging { transform: rotate(2deg) scale(1.02); }
 
+/* LEAD Z POCZTY / FORMULARZA — sam do nas napisał (zwykle lepszy niż reklama z ClickUp): złota ramka z poświatą */
+.k-card.k-direct { position: relative; border-color: rgba(227, 166, 59, .6);
+  box-shadow: 0 0 0 1px rgba(227, 166, 59, .22), 0 8px 26px -12px rgba(227, 166, 59, .6); }
+html .k-card.k-direct, html[data-theme="dark"] .k-card.k-direct {
+  background-image: linear-gradient(180deg, rgba(227, 166, 59, .11), rgba(227, 166, 59, 0) 80px); }
+.k-card.k-direct::before { content: ""; position: absolute; left: -1px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0;
+  background: linear-gradient(#ffd166, #e3a63b); box-shadow: 0 0 10px rgba(255, 209, 102, .7); }
+.k-card.k-direct:hover { border-color: rgba(227, 166, 59, .9); box-shadow: 0 0 0 1px rgba(227, 166, 59, .35), 0 14px 32px -10px rgba(227, 166, 59, .65); }
+.k-direct-row { margin: -2px 0 6px; }
+.direct-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--yellow); background: var(--yellow-soft); border: 1px solid rgba(227, 166, 59, .4);
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap; line-height: 1.6; vertical-align: middle; }
+.direct-tag-lg { font-size: 11.5px; padding: 2px 10px; text-transform: none; letter-spacing: 0; }
+.direct-spark { display: inline-block; animation: crm-twinkle 2.6s ease-in-out infinite; }
+@keyframes crm-twinkle { 0%, 100% { opacity: 1; transform: scale(1) rotate(0); } 50% { opacity: .55; transform: scale(.8) rotate(25deg); } }
+tr.row-direct td:first-child { box-shadow: inset 3px 0 0 #e3a63b; }
+tr.row-direct { background: linear-gradient(90deg, rgba(227, 166, 59, .07), transparent 40%); }
+.only-direct .k-card:not(.k-direct), .only-direct tr[data-row]:not(.row-direct) { display: none; }
+.direct-filter .direct-spark { color: var(--yellow); }
+.btn-primary.direct-filter .direct-spark { color: #fff; }
+
 /* pasek u góry: narzędzia (szukaj, motyw) */
 .topbar-tools { display: flex; gap: 6px; align-items: center; margin-left: 4px; }
 .tool-btn { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border);
@@ -427,6 +452,12 @@ html:not([data-theme="dark"]) .theme-ico-light { display: inline; }
 @media (max-width: 700px) { .hero { flex-direction: column; align-items: flex-start; } .hero-kpi { margin-left: 0; text-align: left; } }
 
 /* POWIADOMIENIA (dzwonek) */
+.bell-readall { margin-left: auto; background: none; border: 0; color: var(--accent); font-size: 11.5px; cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 600; }
+.bell-item.unread { background: var(--accent-soft); color: var(--text); }
+.bell-item.ev-win.unread { background: linear-gradient(90deg, rgba(255, 209, 102, .16), transparent); }
+.bell-body { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+.bell-when { display: block; color: var(--faint); font-size: 11px; margin-top: 2px; }
+.bell-menu { max-height: 70vh; overflow-y: auto; }
 .bell-wrap { position: relative; }
 .bell-btn { position: relative; padding: 0 9px; }
 .bell-count { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--red);
@@ -463,28 +494,7 @@ html:not([data-theme="dark"]) .theme-ico-light { display: inline; }
 .pal-empty { padding: 18px; color: var(--muted); text-align: center; }
 .pal-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--faint); }
 
-/* WYGRANA 🎉 */
-.win-layer { position: fixed; inset: 0; z-index: 9900; pointer-events: none; }
-.win-card { position: fixed; left: 50%; top: 38%; transform: translate(-50%, -50%) scale(.6); z-index: 9901; pointer-events: auto; cursor: pointer;
-            min-width: 340px; padding: 26px 34px 24px; text-align: center; border-radius: 22px; color: #fff;
-            background: radial-gradient(120% 140% at 50% 0%, #2f6fe0 0%, #1b3f8f 45%, #0a0c10 100%);
-            box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .12), 0 0 90px rgba(47, 111, 224, .55);
-            animation: win-in .55s cubic-bezier(.2, 1.4, .3, 1) forwards; }
-.win-card .win-emoji { font-size: 56px; line-height: 1; display: block; animation: win-bounce 1s ease-in-out infinite; }
-.win-card .win-title { font-family: 'Poppins', sans-serif; font-size: 34px; font-weight: 700; letter-spacing: .04em; margin-top: 8px;
-                       background: linear-gradient(90deg, #fff, #ffe58a, #fff); -webkit-background-clip: text; background-clip: text; color: transparent;
-                       background-size: 200% 100%; animation: win-shine 1.6s linear infinite; }
-.win-card .win-company { font-size: 15px; opacity: .9; margin-top: 2px; }
-.win-card .win-money { font-family: 'Poppins', sans-serif; font-size: 40px; font-weight: 700; color: #7dffb0; margin-top: 8px;
-                       text-shadow: 0 0 24px rgba(125, 255, 176, .55); font-variant-numeric: tabular-nums; }
-.win-card.out { animation: win-out .4s ease forwards; }
-@keyframes win-in { to { transform: translate(-50%, -50%) scale(1); } }
-@keyframes win-out { to { transform: translate(-50%, -60%) scale(.9); opacity: 0; } }
-@keyframes win-bounce { 0%, 100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-8px) rotate(6deg); } }
-@keyframes win-shine { to { background-position: -200% 0; } }
-.win-flash { position: fixed; inset: 0; z-index: 9899; pointer-events: none; background: radial-gradient(circle at 50% 40%, rgba(255, 229, 138, .35), transparent 60%);
-             animation: win-flash .9s ease-out forwards; }
-@keyframes win-flash { from { opacity: 1; } to { opacity: 0; } }
+/* WYGRANA 🏆 — pokaz w static/wygrana.js */
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9700; background: var(--panel); color: var(--text);
          border: 1px solid var(--border-strong); border-radius: 12px; padding: 10px 16px; box-shadow: var(--shadow-lg); font-size: 13.5px;
          animation: crm-pop .18s ease both; }
@@ -705,16 +715,28 @@ html:not([data-theme="dark"]) .theme-ico-light { display: inline; }
       {% if request.endpoint != 'crm_health' %}{% for h in health_alarm_list() %}{% set _ = notes.append(('🛡️', 'Strażnik CRM: ' ~ h.title, url_for('crm_health'), 'danger' if h.level == 'red' else 'warn')) %}{% endfor %}{% endif %}
       {% if callback_ask %}{% set _ = notes.append(('📲', 'Czy ktoś dziś do Ciebie oddzwaniał? Zapisz numer przy leadzie', 'javascript:cbShow()', 'info')) %}{% endif %}
       {% if alerts and alerts.team_waiting %}{% set _ = notes.append(('👥', alerts.team_waiting ~ (' nowy lead czeka' if alerts.team_waiting == 1 else ' nowe leady czekają') ~ ' na obsługę u innych osób', url_for('crm_leads') ~ '?view=list', 'info')) %}{% endif %}
+      {% set feed = notices_for(user.id) %}
+      {% set unread = feed|selectattr('read_at', 'none')|list|length %}
       <div class="bell-wrap">
         <button type="button" class="tool-btn bell-btn" onclick="document.getElementById('bellMenu').classList.toggle('open')" title="Powiadomienia" aria-label="Powiadomienia">
-          <i class="bi bi-bell"></i>{% if notes %}<span class="bell-count">{{ notes|length }}</span>{% endif %}</button>
+          <i class="bi bi-bell"></i>{% if notes or unread %}<span class="bell-count">{{ notes|length + unread }}</span>{% endif %}</button>
         <div class="bell-menu" id="bellMenu">
-          <div class="bell-head">Powiadomienia</div>
+          <div class="bell-head">Do zrobienia</div>
           {% for ico, text, href, kind in notes %}
           <a class="bell-item {{ kind }}" href="{{ href }}"><span class="bell-ico">{{ ico }}</span><span>{{ text }}</span></a>
           {% else %}
-          <div class="bell-empty">Wszystko ogarnięte ✨</div>
+          <div class="bell-empty" style="padding:8px 10px;text-align:left">Wszystko ogarnięte ✨</div>
           {% endfor %}
+          {% if feed %}
+          <div class="bell-head" style="display:flex;align-items:center">Co się wydarzyło
+            {% if unread %}<button type="button" class="bell-readall" onclick="fetch('/crm/api/powiadomienia/przeczytane', {method: 'POST'}).then(() => location.reload())">oznacz jako przeczytane</button>{% endif %}</div>
+          {% for n in feed %}
+          <a class="bell-item ev-{{ n.kind }} {{ 'unread' if not n.read_at }}" href="{{ url_for('crm_notice_open', nid=n.id) }}">
+            <span class="bell-ico">{{ {'win': '🏆', 'blocked': '✅', 'lost': '⚠️', 'reply': '✉️', 'info': '🔄'}.get(n.kind, '🔔') }}</span>
+            <span><b>{{ n.title }}</b>{% if n.body %}<span class="bell-body">{{ n.body|truncate(140) }}</span>{% endif %}
+              <span class="bell-when">{{ to_local(n.created_at).strftime('%d.%m %H:%M') if n.created_at else '' }}</span></span></a>
+          {% endfor %}
+          {% endif %}
         </div>
       </div>
       <button type="button" class="tool-btn search-btn" onclick="crmPalette()" title="Szukaj leada albo strony (Ctrl + K)">
@@ -1673,59 +1695,16 @@ document.querySelectorAll('.evt-chips[data-prefix]').forEach(el => {
   });
 })();
 
-/* ===== WYGRANA: konfetti, deszcz monet i karta z kwotą ===== */
-function crmCelebrate(lead) {
-  lead = lead || {};
-  const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const fmt = v => Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  const flash = document.createElement('div'); flash.className = 'win-flash'; document.body.appendChild(flash);
-  setTimeout(() => flash.remove(), 1000);
-  const card = document.createElement('div'); card.className = 'win-card';
-  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-  card.innerHTML = `<span class="win-emoji">🏆</span><div class="win-title">WYGRANA!</div><div class="win-company">${esc(lead.company || '')}</div>`
-    + (lead.value ? `<div class="win-money">+<span class="win-num">0</span> ${esc(lead.currency || '')}</div>` : '');
-  document.body.appendChild(card);
-  const close = () => { card.classList.add('out'); setTimeout(() => card.remove(), 420); };
-  card.addEventListener('click', close);
-  const num = card.querySelector('.win-num');
-  if (num) { const t0 = performance.now(), dur = 1100;
-    (function tick(t) { const k = Math.min(1, (t - t0) / dur); num.textContent = fmt(lead.value * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(tick); })(t0); }
-  setTimeout(close, 3800);
-  if (reduce) return new Promise(r => setTimeout(r, 1600));
-  const cv = document.createElement('canvas'); cv.className = 'win-layer'; document.body.appendChild(cv);
-  const dpr = Math.min(2, window.devicePixelRatio || 1), W = innerWidth, H = innerHeight;
-  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
-  const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
-  const colors = ['#2f6fe0', '#7fa8f5', '#ffe58a', '#7dffb0', '#ff8fb1', '#ffffff', '#ffd166'];
-  const emojis = ['💰', '💸', '🪙', '🤑', '💵', '🎉', '🤖'];
-  const parts = [];
-  for (let i = 0; i < 170; i++) {  // konfetti z dwóch armatek
-    const left = i % 2 === 0, a = (left ? -60 : -120) * Math.PI / 180 + (Math.random() - .5) * .9, v = 9 + Math.random() * 9;
-    parts.push({x: left ? 0 : W, y: H * .75, vx: Math.cos(a) * v, vy: Math.sin(a) * v, w: 6 + Math.random() * 6, h: 8 + Math.random() * 8,
-                r: Math.random() * 6, vr: (Math.random() - .5) * .4, c: colors[i % colors.length], life: 0});
-  }
-  for (let i = 0; i < 46; i++)  // deszcz pieniędzy
-    parts.push({emoji: emojis[i % emojis.length], x: Math.random() * W, y: -40 - Math.random() * H * .8, vx: (Math.random() - .5) * 1.2,
-                vy: 2.5 + Math.random() * 3.5, r: Math.random() * 6, vr: (Math.random() - .5) * .08, s: 22 + Math.random() * 18, life: 0});
-  const t0 = performance.now();
-  (function frame(t) {
-    const el = t - t0;
-    ctx.clearRect(0, 0, W, H);
-    for (const p of parts) {
-      p.life++; p.x += p.vx; p.y += p.vy; p.r += p.vr;
-      if (p.emoji) { p.vy += .03; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.font = p.s + 'px serif'; ctx.fillText(p.emoji, -p.s / 2, p.s / 2); ctx.restore(); }
-      else { p.vy += .28; p.vx *= .99; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c;
-        ctx.globalAlpha = Math.max(0, 1 - el / 3600); ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h * Math.abs(Math.cos(p.r))); ctx.restore(); }
-    }
-    if (el < 3800) requestAnimationFrame(frame); else cv.remove();
-  })(t0);
-  return new Promise(r => setTimeout(r, 2300));  // strona odświeża się dopiero po głównej części pokazu
-}
-// wygrana zapisana przed przeładowaniem strony (np. zapis z formularza edycji) — pokaż po wczytaniu
+{% set cel = celebration_for(user.id) %}
+{% if cel %}
+// wygrana kogoś z zespołu, której ta osoba jeszcze nie widziała — pokaz 🏆 przy wejściu do CRM
 document.addEventListener('DOMContentLoaded', () => {
-  let w = null; try { w = JSON.parse(sessionStorage.getItem('crm-win') || 'null'); sessionStorage.removeItem('crm-win'); } catch (e) {}
-  if (w) crmCelebrate(w);
+  setTimeout(() => {
+    crmCelebrate({id: {{ cel.lead_id|tojson }}, company: {{ cel.company|tojson }}, value: {{ cel.value|tojson }}, currency: {{ cel.currency|tojson }}}, {self: false});
+    fetch('/crm/api/powiadomienia/{{ cel.id }}/pokazane', {method: 'POST'});
+  }, 600);
 });
+{% endif %}
 function crmToast(text) {
   const t = document.createElement('div'); t.className = 'toast'; t.textContent = text; document.body.appendChild(t);
   setTimeout(() => t.remove(), 2600);

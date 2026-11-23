@@ -62,6 +62,30 @@ def page_usage(days=30):
     return out + [(ep, 0, 0, None) for ep in pages if ep not in seen]
 
 
+# ---- leady, które same do nas napisały (formularz na stronie, mail na kontakt@) — lepsze niż reklama z ClickUp ----
+
+_DIRECT_SOURCE = re.compile(r"(?i)^\s*(formularz|formspree|mail|e-?mail|kontakt@|strona|www)")
+_FORM_SOURCE = re.compile(r"(?i)^\s*(formularz|formspree|strona|www)")
+
+
+def is_direct_lead(lead_or_source):
+    """Lead z formularza 33bots.pl/.lt/.de albo z maila (źródło „Formularz …”, „Mail kontakt@…”, „Mail”) — nie z ClickUp.
+    Przyjmuje leada albo samo źródło (np. z okna nowych leadów)."""
+    src = lead_or_source if isinstance(lead_or_source, str) else (getattr(lead_or_source, "source", None) or "")
+    return bool(_DIRECT_SOURCE.search(src or "")) and "clickup" not in (src or "").lower()
+
+
+def direct_label(lead_or_source):
+    src = lead_or_source if isinstance(lead_or_source, str) else (getattr(lead_or_source, "source", None) or "")
+    return "Formularz" if _FORM_SOURCE.search(src or "") else "Mail"
+
+
+@app.template_filter("money_parts")
+def money_parts(totals):
+    """['503 715 PLN', '16 300 EUR'] — kafelki pokazują główną walutę dużo, pozostałe małą linią pod spodem."""
+    return fmt_money(totals).split(" + ")
+
+
 def av_style(uid):
     """Styl kółka z inicjałem osoby (jasne tło w kolorze osoby, mocny tekst)."""
     color = USERS_BY_ID.get(uid, {}).get("color", "#94a3b8")
@@ -91,4 +115,5 @@ def crm_api_search():
     return jsonify({"leads": out})
 
 
-app.jinja_env.globals.update(has_route=has_route, av_style=av_style, page_usage=page_usage)
+app.jinja_env.globals.update(has_route=has_route, av_style=av_style, page_usage=page_usage, is_direct_lead=is_direct_lead,
+                             direct_label=direct_label)

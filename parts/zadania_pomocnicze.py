@@ -73,6 +73,10 @@ def record_stage_change(lead, new_stage, actor_id, reason=None, note=None):
         ensure_journey(lead)  # wygrany wpada do Customer Journey (umowa do wysłania)
     if new_stage in WON_STAGES and was_open:
         clear_open_tasks(lead)  # wygrany: dalej prowadzi Customer Journey — otwarte zadania z lejka znikają
+    elif new_stage == "Zrealizowany":
+        clear_open_tasks(lead, "lead zrealizowany")  # wydarzenie minęło — zadania sprzed realizacji są nieaktualne
+    elif new_stage == "Stracony":
+        clear_open_tasks(lead, "lead stracony")
     return True
 
 

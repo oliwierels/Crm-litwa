@@ -1,6 +1,7 @@
 """Nowy wygląd (wspólny base.html, nagłówek karty leada, „Mój dzień”): strony się renderują, zmiana opiekuna z nagłówka
 przenosi zadania i zostawia ślad, a CRM nie zależy od zewnętrznych CDN (ikony, czcionka i kalendarz są w static/)."""
 import os
+import re
 from datetime import date, datetime
 
 import pytest
@@ -114,3 +115,39 @@ def test_menu_sections_tabs_and_bell(client, lead):
     assert 'class="subnav"' in html and ">Tablica<" in html and ">Duplikaty<" in html, "Leady: zakładki sekcji"
     assert 'class="bell-wrap"' in html and 'id="palBg"' in html and "crmCelebrate" in html
     assert html.count('class="nav-link') <= 12, "płaskie menu: jedna pozycja na sekcję"
+
+
+def test_direct_leads_from_mail_and_form_stand_out(client):
+    """Leady, które same napisały (formularz na stronie, mail na kontakt@), są wyróżnione na tablicy, liście
+    i w nagłówku — leady z ClickUp nie."""
+    dom = crm.M(CODE).get("domain") or "33bots.pl"
+    assert crm.is_direct_lead(f"Formularz {dom}") and crm.is_direct_lead(f"Mail kontakt@{dom}") and crm.is_direct_lead("Mail")
+    assert not crm.is_direct_lead("ClickUp") and not crm.is_direct_lead("ClickUp DE") and not crm.is_direct_lead("")
+    assert not crm.is_direct_lead("Polecenie") and crm.direct_label(f"Formularz {dom}") == "Formularz"
+    made = []
+    for company, source in (("Z Formularza Sp. z o.o.", f"Formularz {dom}"), ("Z Reklamy Sp. z o.o.", "ClickUp")):
+        lead = crm.Lead(company=company, stage="Nowy", assigned_to=BARTEK, market=CODE, source=source)
+        crm.db.session.add(lead)
+        made.append(lead)
+    crm.db.session.commit()
+    try:
+        board = client.get("/crm/leads?view=kanban").get_data(as_text=True)
+        cls = {int(i): c for c, i in re.findall(r'<div class="k-card([^"]*)"[^>]*data-lead="(\d+)"', board)}
+        assert "k-direct" in cls[made[0].id], "karta leada z formularza ma złotą ramkę"
+        assert "k-direct" not in cls[made[1].id], "lead z ClickUp bez wyróżnienia"
+        assert 'id="directFilter"' in board
+        listing = client.get("/crm/leads?view=list").get_data(as_text=True)
+        assert "row-direct" in listing
+        header = client.get(f"/crm/leads/{made[0].id}").get_data(as_text=True)
+        assert "direct-tag-lg" in header
+    finally:
+        for lead in made:
+            lead.stage = "Stracony"
+        crm.db.session.commit()
+
+
+def test_multi_currency_tile_does_not_overflow(app):
+    parts = crm.money_parts({"PLN": 503715, "EUR": 16300})
+    assert sorted(parts) == ["16 300 EUR", "503 715 PLN"] and parts[0].endswith(crm.M(CODE)["currency"]), \
+        "kafelek: waluta rynku duża, druga małą linią"
+    assert crm.money_parts({}) == [f"0 {crm.M()['currency']}"]

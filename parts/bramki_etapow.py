@@ -45,7 +45,10 @@ def gated_stage_change(lead, new_stage, actor_id, data=None):
             "umowa" if lead.contract_signed else None)
         lead.win_confirmation = conf
         reason = conf
+    was_won = lead.stage in WON_STAGES
     record_stage_change(lead, new_stage, actor_id, reason=reason, note=note)
+    if new_stage == "Wygrany" and not was_won and actor_id is not None:
+        notify_team_win(lead, actor_id)  # zespół dostaje powiadomienie z pokazem 🏆 (silnik_porzadku.py)
     if conf == "umowa" and lead.stage in WON_STAGES:  # umowa już podpisana — Customer Journey tego nie zgubi
         j = ensure_journey(lead) if lead.stage in JOURNEY_STAGES else None
         if j is not None:

@@ -13,7 +13,8 @@
       <div class="ld-tags">
         <span class="qual-badge" style="background:{{ quality_colors[q] }}1f;color:{{ quality_colors[q] }}">{{ quality_icons[q] }} {{ q }}</span>
         {% if lead.client_type %}<span class="chip">{{ client_types.get(lead.client_type, lead.client_type) }}</span>{% endif %}
-        {% if lead.source %}<span class="chip" title="Źródło leada"><i class="bi bi-box-arrow-in-right"></i> {{ lead.source }}</span>{% endif %}
+        {% if is_direct_lead(lead) %}<span class="direct-tag direct-tag-lg" title="Sam do nas napisał — lead z poczty, zwykle lepszy niż z reklamy w ClickUp"><span class="direct-spark">✦</span> {{ lead.source }}</span>
+        {% elif lead.source %}<span class="chip" title="Źródło leada"><i class="bi bi-box-arrow-in-right"></i> {{ lead.source }}</span>{% endif %}
         <span class="chip" title="Ostatni kontakt {{ inactive_days }} dni temu"><span class="dot dot-{{ inactive_color }}"></span> {{ ic_text[inactive_color] }} · {{ inactive_days }} d</span>
         {% if lead.created_at %}<span class="ld-muted">dodany {{ lead.created_at.strftime('%d.%m.%Y') }}</span>{% endif %}
       </div>

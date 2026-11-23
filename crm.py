@@ -644,6 +644,11 @@ def _realize_scheduler():
         try:
             with app.app_context():
                 auto_realize_leads()
+                try:  # wygrane / zrealizowane / stracone bez zadań sprzed zamknięcia (silnik_porzadku.py)
+                    stage_hygiene_pass()
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception("stage_hygiene")
                 auto_merge_duplicates()
                 if os.environ.get("SALES_AUTOMATION", "1") != "0":
                     sales_automation_pass()
@@ -7432,6 +7437,13 @@ def _mail_scheduler():
                 if mail_boxes():
                     res = mail_sync_all()
                     mail_tasks_autoclose()
+                    try:  # silnik porządku: nowe maile klientów → wygrana / nieaktualne zadania / powiadomienia
+                        mail_engine_pass()
+                        health_beat("silnik_poczty")
+                    except Exception as e:
+                        db.session.rollback()
+                        app.logger.exception("mail_engine")
+                        health_fail("silnik_poczty", e)
                     mail_fix_bad_translations()
                     mail_auto_translate()
                 db.session.remove()
@@ -9079,6 +9091,7 @@ def crm_mail_review_now():
 _include("nastepny_krok")
 _include("opiekun")
 _include("wyglad")
+_include("silnik_porzadku")
 _include("raporty_dnia")
 
 with app.app_context():

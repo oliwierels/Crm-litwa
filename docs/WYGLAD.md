@@ -10,7 +10,17 @@
 - **Szukajka Ctrl+K** (albo „/”): leady po firmie, osobie, telefonie, mailu + strony + akcje.
 - **Dzwonek** 🔔: przypomnienia, które nie blokują pracy (raport dnia, strażnik, „czy ktoś oddzwaniał?”, leady czekające
   u innych). Blokują tylko: nowy lead u jego opiekuna i brakujący raport dnia z poprzednich dni.
-- **Wygrana** 🏆: przejście leada na „Wygrany” (tablica, nagłówek, edycja) pokazuje konfetti, deszcz monet i kwotę.
+- **Wygrana** 🏆 (`static/wygrana.js`): przejście leada na „Wygrany” (tablica, nagłówek, edycja) to pokaz jak główna
+  wygrana w kasynie (klimat i grafika kasyna, nazwy nasze): szkolny dzwonek „brrrr” i trzęsienie ziemi strony →
+  WYGRANA! (wybuch i fontanna monet, licznik kwoty, światełka dookoła) → „JERZY ZAMYKA TEMAT!” (imię osoby) →
+  „TEMAT ZAMKNIĘTY!” (armata pieniędzy, fajerwerki, fanfara) → tańczący robot, samoloty z banerami, smok i lampiony,
+  oklaski oraz która to wygrana w miesiącu, suma miesiąca i „REKORD MIESIĄCA”. Dźwięk (syntezowany, bez plików)
+  wyłącza 🔊 w rogu; Esc / „Dawaj następnego! 🚀” zamyka; przy ograniczonych animacjach w systemie — spokojna karta.
+  Reszta zespołu dostaje powiadomienie w dzwonku i ten sam pokaz przy następnym wejściu do CRM.
+- **Leady z poczty** ✦: lead, który sam napisał (źródło „Formularz …”, „Mail kontakt@…”, „Mail”), ma na tablicy złotą
+  ramkę z poświatą i plakietkę FORMULARZ / MAIL; na liście złoty pasek, w nagłówku leada złote źródło. Przycisk
+  „✦ Z poczty” nad tablicą pokazuje tylko takie leady (`is_direct_lead` w `parts/wyglad.py`).
+- **Kwoty w kilku walutach** na kafelkach: waluta rynku duża, pozostałe małą linią pod spodem (`money_parts`).
 - **Statystyki użycia stron** (System → Stan CRM): każde otwarcie strony; strony z zerem po kilku tygodniach to kandydaci
   do usunięcia.
 - **Kolory tylko ze zmiennych** w `templates/crm/base.html` (`--bg`, `--panel`, `--panel2`, `--border`, `--text`, `--muted`,
@@ -41,3 +51,15 @@
 Te pliki są identyczne w obu repozytoriach (różnice rynku robią warunki: `all_mkts|length > 1`, `has_route(...)`,
 `ui_langs is defined`, `mkt.currency`): `base.html`, `_alerts.html`, `_callback.html`, `_raport_gate.html`, `_health.html`,
 `_lead_header.html`, `dashboard.html`, `leads.html`, `login.html`. Tłumaczenia interfejsu LT: `lt_strings.py` (CRM LT/DE).
+
+## Silnik porządku (`parts/silnik_porzadku.py`)
+
+- Co 2 minuty (po synchronizacji poczty) każdy **nowy mail klienta przypisany do leada** czyta Claude:
+  akceptacja / prośba o umowę (pewna) → lead na **Wygrany** (bramki jak u człowieka: data, kwota; potwierdzenie „mail”),
+  przy brakach — powiadomienie, czego brakuje; rezygnacja → powiadomienie z propozycją „Stracony” (zamyka człowiek);
+  pytanie → „klient czeka na odpowiedź”. Stracony lead, który pisze → „odezwał się”.
+- Zadania „pogoni” (follow-up, przypomnienie, telefon po ofercie) sprzed maila klienta stają się nieaktualne.
+- Co 10 minut: wygrany, zrealizowany i stracony lead nie ma otwartych zadań sprzed zamknięcia.
+- **Nic nie znika**: zadanie od człowieka zamienia się w komentarz „🧹 Nieaktualne — powód: …”; automatyczne
+  przypomnienie (bez autora) jest usuwane, a przy leadzie zostaje komentarz, ile zadań i dlaczego. Leadów silnik nie usuwa.
+- Każda decyzja = komentarz przy leadzie + powiadomienie w dzwonku (sekcja „Co się wydarzyło”).

@@ -17,15 +17,13 @@ def lead_open_tasks(lead_id):
     return Activity.query.filter(Activity.lead_id == lead_id, Activity.done.isnot(True), Activity.kind != "note")
 
 
-def clear_open_tasks(lead):
-    """Usuwa otwarte zadania leada (wygrany: dalej Customer Journey). Komentarze zadań znikają razem z nimi.
-    Zwraca liczbę usuniętych."""
+def clear_open_tasks(lead, reason="lead wygrany (dalej Customer Journey)"):
+    """Zamyka otwarte zadania leada (wygrany / zrealizowany / stracony) przez silnik porządku: automatyczne znikają,
+    zadania od człowieka zostają w historii jako komentarz „🧹 Nieaktualne” (parts/silnik_porzadku.py).
+    Zwraca liczbę zamkniętych."""
     if lead is None or not lead.id:
         return 0
-    tasks = lead_open_tasks(lead.id).all()
-    for a in tasks:
-        db.session.delete(a)
-    return len(tasks)
+    return retire_tasks(lead, lead_open_tasks(lead.id).all(), reason)
 
 
 def lead_needs_next_step(lead):

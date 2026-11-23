@@ -1104,4 +1104,11 @@ LT = {
     'w najbliższych dniach': 'artimiausiomis dienomis',
     'Jasny / ciemny motyw': 'Šviesi / tamsi tema',
     'Szukaj leada albo strony (Ctrl + K)': 'Ieškoti užklausos arba puslapio (Ctrl + K)',
+    # --- silnik porządku, powiadomienia, leady z poczty ---
+    'Co się wydarzyło': 'Kas nutiko',
+    'oznacz jako przeczytane': 'pažymėti kaip perskaitytus',
+    'Z poczty': 'Iš pašto',
+    'Formularz': 'Forma',
+    'Pokaż tylko leady, które same do nas napisały (formularz na stronie, mail) — bez leadów z reklam w ClickUp': 'Rodyti tik užklausas, kurios parašė mums pačios (svetainės forma, el. laiškas) — be užklausų iš ClickUp reklamų',
+    'Sam do nas napisał — lead z poczty, zwykle lepszy niż z reklamy w ClickUp': 'Parašė mums pats — užklausa iš pašto, paprastai geresnė nei iš ClickUp reklamos',
 }

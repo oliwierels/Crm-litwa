@@ -19,7 +19,8 @@
   </div>
   <div class="hero-kpi" title="Wartość otwartych leadów (Nowy + Oferta)">
     <div class="hero-kpi-label">W grze</div>
-    <div class="hero-kpi-val">{{ open_value|money }}</div>
+    {% set mp = open_value|money_parts %}
+    <div class="hero-kpi-val">{{ mp[0] }}</div>{% if mp|length > 1 %}<div class="stat-sub">+ {{ mp[1:]|join(' + ') }}</div>{% endif %}
   </div>
 </section>
 <script>(function () { const h = new Date().getHours(); document.getElementById('heroGreet').textContent = h < 5 ? 'Dobranoc' : h < 12 ? 'Dzień dobry' : h < 18 ? 'Cześć' : 'Dobry wieczór'; })();</script>
@@ -36,11 +37,13 @@
   </div>
   <a class="stat" href="{{ url_for('crm_stats') }}#przychod" title="Leady na etapie Zrealizowany — ostatni dzień wynajmu już minął">
     <div class="stat-label">Przychód zrealizowany</div>
-    <div class="stat-val" style="font-size:{{ '15px' if realized_value|length > 1 else '22px' }}">{{ realized_value|money }}</div>
+    {% set mp = realized_value|money_parts %}
+    <div class="stat-val">{{ mp[0] }}</div>{% if mp|length > 1 %}<div class="stat-sub">+ {{ mp[1:]|join(' + ') }}</div>{% endif %}
   </a>
   <a class="stat" href="{{ url_for('crm_stats') }}#przychod" title="Leady na etapie Wygrany — wynajem jeszcze przed nami">
     <div class="stat-label">Do realizacji (wygrane)</div>
-    <div class="stat-val" style="color:var(--green);font-size:{{ '15px' if to_realize_value|length > 1 else '22px' }}">{{ to_realize_value|money }}</div>
+    {% set mp = to_realize_value|money_parts %}
+    <div class="stat-val" style="color:var(--green)">{{ mp[0] }}</div>{% if mp|length > 1 %}<div class="stat-sub">+ {{ mp[1:]|join(' + ') }}</div>{% endif %}
   </a>
   <div class="stat">
     <div class="stat-label" {% if mkt.code == 'pl' %}title="Tylko leady polskiego CRM — wygrane z CRM LT/DE są w kwotach wygranych, ale nie w skuteczności"{% endif %}>Skuteczność (wygrane / zamknięte)</div>

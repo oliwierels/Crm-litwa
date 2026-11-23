@@ -71,7 +71,7 @@
     {% set nocall = "Dzwoniliśmy do klienta w sprawie jego zapytania, ale nie odebrał. " ~ ask %}
     <div class="al-row {{ 'al-old' if l.old }}" data-lead="{{ l.id }}">
       <div class="al-top">
-        <b>{{ l.flag ~ ' ' if l.flag }}{{ l.company }}</b>
+        <b>{{ l.flag ~ ' ' if l.flag }}{{ l.company }}</b>{% if l.source and is_direct_lead(l.source) %} <span class="direct-tag" title="Sam do nas napisał ({{ l.source }}) — zwykle lepszy lead niż z reklamy"><span class="direct-spark">✦</span> {{ direct_label(l.source) }}</span>{% endif %}
         <span class="al-meta">{{ l.contact }}{% if l.phone %} · 📞 <a href="tel:{{ l.phone }}" style="color:inherit">{{ l.phone }}</a>{% endif %}{% if l.email %} · ✉️ {{ l.email }}{% endif %}{% if l.source %} · {{ l.source }}{% endif %}</span>
         <span class="al-age">{{ '⚠️ z poprzedniego dnia · ' if l.old }}wpadł {{ l.when }}{% if l.age_h < 24 %} ({{ l.age_h|round|int }} h temu){% endif %}</span>
         {% if l.resp_min is not none %}<span class="al-age {{ 'al-late' if l.late }}">⏱ {{ response_label(l.resp_min) }} pracy bez odpowiedzi{{ ' — przekroczony cel ' ~ l.target ~ ' min' if l.late }}</span>{% endif %}

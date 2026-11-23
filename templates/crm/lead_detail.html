@@ -882,7 +882,7 @@ async function editLeadGate(e) {
   }
   editGateOk = true;
   if (stage === 'Wygrany') {  // pokaz wygranej po zapisie i przeładowaniu strony
-    try { sessionStorage.setItem('crm-win', JSON.stringify({company: f.querySelector('[name="company"]').value,
+    try { sessionStorage.setItem('crm-win', JSON.stringify({id: {{ lead.id }}, company: f.querySelector('[name="company"]').value,
       value: +(f.querySelector('[name="value_pln"]').value || 0), currency: f.querySelector('[name="currency"]').value})); } catch (e) {}
   }
   f.requestSubmit ? f.requestSubmit() : f.submit();
