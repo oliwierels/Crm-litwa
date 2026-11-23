@@ -3801,6 +3801,10 @@ def _smtp_send(to_addr, subject, body, sender_name, attachments=None, sender=Non
     from email.mime.multipart import MIMEMultipart
     from email.utils import formataddr, formatdate, make_msgid
     _smtp_send.last_warning = _smtp_send.last_msgid = None
+    problem = outgoing_mail_problem(  # parts/formularze.py: nigdy do automatu, nigdy z cytatem Formspree
+        email_list(*(to_addr if isinstance(to_addr, (list, tuple)) else [to_addr])) + email_list(*(cc or [])), body)
+    if problem:
+        return problem
     subject, body = human_text(subject), human_text(body)  # do klienta nigdy nie idą „AI-owe” myślniki
     skey = re.sub(r"[^A-Z0-9]", "_", (sender or {}).get("name", "").upper())
     host = (os.environ.get(f"SMTP_HOST_{skey}", "").strip() if skey else "") or os.environ.get("SMTP_HOST", "").strip()
@@ -4846,7 +4850,11 @@ def process_inbox_message(rec, force=False):
         rec.status, rec.reason = "pominiety", str(res.get("reason") or "")[:300]
         return
     contact_email = str(res.get("contact_email") or "").strip()
-    if not contact_email and not is_form and "@" in sender:
+    if is_machine_address(contact_email):  # nigdy adres automatu (Formspree, no-reply) jako e-mail klienta
+        contact_email = ""
+    if not contact_email and is_form:
+        contact_email = form_client_email(rec)  # parts/formularze.py: „email: …” z treści formularza
+    if not contact_email and not is_form and "@" in sender and not is_machine_address(sender):
         contact_email = sender
     lead = _find_lead_by_contact(contact_email, res.get("contact_phone"))
     if lead:
@@ -7470,10 +7478,14 @@ def mail_query_for_addrs(addrs):
 
 
 def mail_lead_for(row):
-    """Lead, z którym związany jest mail (adres klienta w Od/Do/DW)."""
+    """Lead, z którym związany jest mail (adres klienta w Od/Do/DW; przy formularzu — adres z treści)."""
+    if is_form_notification(row):  # parts/formularze.py: klient jest w treści, nadawca to automat
+        lead, _addr = form_reply_target(row)
+        if lead is not None:
+            return lead
     own = _own_addresses()
     for addr in (row.addrs or "").split():
-        if addr in own or addr.split("@")[-1] in OWN_DOMAINS:
+        if addr in own or addr.split("@")[-1] in OWN_DOMAINS or is_machine_address(addr):
             continue
         lead = Lead.query.filter(db.or_(db.func.lower(Lead.contact_email) == addr,
                                         db.func.lower(Lead.contact_email2) == addr)).order_by(Lead.created_at.desc()).first()
@@ -8014,6 +8026,14 @@ def crm_mail_compose():
         quoted = _quote_for_reply(fwd, M()["lang"])
     elif lead:
         to = to or ", ".join(lead.emails)
+    machine = is_machine_mail(reply)
+    if machine:  # powiadomienie z formularza / automat (parts/formularze.py): DO KLIENTA, nowy wątek, bez cytatu
+        f_lead, f_addr = form_reply_target(reply)
+        lead = lead if request.args.get("lead") else (f_lead or lead)
+        to = ", ".join(lead.emails) if lead is not None and lead.emails else f_addr
+        cc, quoted = "", ""
+        subject = form_reply_subject(lead)
+        subject_pl = subject
     if not from_box:
         mine = next((b for b in boxes if b.get("user_id") == user["id"]), None)
         from_box = (mine or (boxes[0] if boxes else {"login": ""}))["login"]
@@ -8040,7 +8060,7 @@ def crm_mail_compose():
         quoted=quoted, task=task, ai_instruction=ai_instruction, ai_auto=request.args.get("auto") == "1",
         reply=reply, fwd=fwd, lead=lead, target_lang=M()["lang"], lang_names=MAIL_LANG_NAMES,
         draft=draft if draft_body else None, draft_body=draft_body,
-        lang_flags=MAIL_LANG_FLAGS, signatures={b["login"]: mail_signature(b, user) for b in boxes}, ai_ok=bool(_ai_client()),
+        lang_flags=MAIL_LANG_FLAGS, signatures={b["login"]: mail_signature(b, user) for b in boxes}, ai_ok=bool(_ai_client()), machine_reply=machine,
     )
 
 
@@ -8063,7 +8083,10 @@ def _mail_send_from_form(boxes, user):
         return jsonify({"error": "Uzupełnij temat i treść (w języku klienta — kliknij „Przetłumacz”)."}), 400
     if f.get("signature") == "1":
         body = body.rstrip() + "\n\n" + mail_signature(box, user)
-    body += (f.get("quoted") or "").replace("\r\n", "\n")[:60000]
+    reply = db.session.get(MailMessage, f.get("reply", type=int) or 0)
+    machine = is_machine_mail(reply)  # odpowiedź na formularz / automat: bez cytatu i bez wątku (parts/formularze.py)
+    if not machine:
+        body += (f.get("quoted") or "").replace("\r\n", "\n")[:60000]
     files = []
     total = 0
     for up in request.files.getlist("files"):
@@ -8082,9 +8105,8 @@ def _mail_send_from_form(boxes, user):
         if type_err:
             return jsonify({"error": type_err}), 400
         files.append((offer.filename, offer.pdf, "application/pdf"))
-    reply = db.session.get(MailMessage, f.get("reply", type=int) or 0)
     headers = {}
-    if reply and reply.message_id:
+    if reply and reply.message_id and not machine:
         headers["In-Reply-To"] = reply.message_id
         headers["References"] = ((reply.refs or "") + " " + reply.message_id).strip()[-3000:]
     owner = USERS_BY_ID.get(box.get("user_id")) or {}
@@ -8099,7 +8121,7 @@ def _mail_send_from_form(boxes, user):
     body_pl = (f.get("body") or "").strip()
     row = MailMessage(mailbox=box["login"], market=box["market"], folder="sent", uid=None, message_id=msg_id[:400],
                       in_reply_to=headers.get("In-Reply-To"), refs=headers.get("References"),
-                      thread_key=(reply.thread_key if reply else msg_id)[:400], from_addr=box["login"],
+                      thread_key=(reply.thread_key if reply and reply.thread_key and not machine else msg_id)[:400], from_addr=box["login"],
                       from_name=sender["full_name"], to_addrs=", ".join(recipients), to_names=", ".join(recipients),
                       cc_addrs=", ".join(cc), addrs=" " + " ".join(sorted(set([box["login"]] + recipients + cc))) + " ",
                       subject=subject, date=now, body_text=body[:poczta.BODY_LIMIT], snippet=re.sub(r"\s+", " ", body)[:300],
@@ -9093,6 +9115,7 @@ _include("opiekun")
 _include("wyglad")
 _include("silnik_porzadku")
 _include("blitzkrieg_dane")
+_include("formularze")
 _include("raporty_dnia")
 
 with app.app_context():

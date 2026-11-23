@@ -31,6 +31,11 @@
   <input type="hidden" name="lead" value="{{ lead.id if lead else '' }}">
   <input type="hidden" name="task" value="{{ task.id if task else '' }}">
   <textarea name="quoted" id="mc-quoted" hidden>{{ quoted }}</textarea>
+{% if machine_reply %}
+<div class="notice notice-warn" style="margin-bottom:12px">📝 To było powiadomienie z formularza / automatu ({{ reply.from_addr }}) —
+  odpisujesz <b>klientowi</b>{% if to %}: {{ to }}{% endif %}, w nowym wątku i bez cytatu (powiadomienie Formspree ma link do
+  wypisania naszego formularza).{% if not to %} <b>Nie znalazłem adresu klienta w formularzu — wpisz go.</b>{% endif %}</div>
+{% endif %}
   <div class="mc-head">
     <label>Od</label>
     <select name="from" id="mc-from" onchange="mcSig()">
