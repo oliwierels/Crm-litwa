@@ -125,4 +125,8 @@ def api_set_stage(lead_id):
         db.session.commit()
     else:
         db.session.rollback()
-    return jsonify(_gate_json(gate)), (200 if not gate["message"] else 422)
+    out = _gate_json(gate)
+    if gate.get("changed"):  # do animacji wygranej na tablicy / w nagłówku leada
+        out["lead"] = {"id": lead.id, "company": lead.company, "stage": lead.stage, "value": lead.value_pln or 0,
+                       "currency": lead.currency or M(lead_market(lead))["currency"]}
+    return jsonify(out), (200 if not gate["message"] else 422)

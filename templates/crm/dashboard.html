@@ -9,6 +9,20 @@
 
 {% block content %}
 {% set ki = kind_icons %}
+<section class="hero">
+  <div>
+    <div class="hero-hi"><span id="heroGreet">Dzień dobry</span>, {{ user.name }} 👋</div>
+    <div class="hero-sub">
+      {% if overdue %}<b style="color:var(--red)">{{ overdue|length }} zaległe</b> · {% endif %}{{ today_acts|length }} na dziś · {{ soon_acts|length }} w najbliższych dniach
+      {% if not overdue and not today_acts %} — czysto, można polować na nowe wygrane 🚀{% endif %}
+    </div>
+  </div>
+  <div class="hero-kpi" title="Wartość otwartych leadów (Nowy + Oferta)">
+    <div class="hero-kpi-label">W grze</div>
+    <div class="hero-kpi-val">{{ open_value|money }}</div>
+  </div>
+</section>
+<script>(function () { const h = new Date().getHours(); document.getElementById('heroGreet').textContent = h < 5 ? 'Dobranoc' : h < 12 ? 'Dzień dobry' : h < 18 ? 'Cześć' : 'Dobry wieczór'; })();</script>
 
 <!-- STATS -->
 <div class="stats-row">
@@ -19,10 +33,6 @@
   <div class="stat">
     <div class="stat-label">Na dziś</div>
     <div class="stat-val">{{ today_acts|length }}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Pipeline (otwarte)</div>
-    <div class="stat-val" style="font-size:{{ '15px' if open_value|length > 1 else '22px' }}">{{ open_value|money }}</div>
   </div>
   <a class="stat" href="{{ url_for('crm_stats') }}#przychod" title="Leady na etapie Zrealizowany — ostatni dzień wynajmu już minął">
     <div class="stat-label">Przychód zrealizowany</div>

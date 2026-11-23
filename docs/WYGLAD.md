@@ -2,7 +2,17 @@
 
 ## Zasady
 
-- **Jasny motyw domyślnie**, ciemny włącza się w menu konta (na dole menu bocznego → „Ciemny motyw”); wybór zostaje w tej przeglądarce.
+- **Firmowy ciemny motyw domyślnie** (barwy z ofert PDF 33bots: tło #0A0C10, panele #15171C, akcent #2F6FE0 / #7FA8F5,
+  nagłówki Poppins), jasny jednym kliknięciem: ☀ / 🌙 na pasku u góry (albo w menu konta); wybór zostaje w przeglądarce.
+- **Menu: jedna pozycja na sekcję** (Mój dzień, Leady, Poczta, Oferty, Customer Journey, Kalendarz, Logistyka, Kampanie,
+  Zespół, Raporty, System); strony sekcji są zakładkami u góry strony (np. Leady: Tablica / Lista / Do obdzwonienia /
+  Z ClickUp / Duplikaty).
+- **Szukajka Ctrl+K** (albo „/”): leady po firmie, osobie, telefonie, mailu + strony + akcje.
+- **Dzwonek** 🔔: przypomnienia, które nie blokują pracy (raport dnia, strażnik, „czy ktoś oddzwaniał?”, leady czekające
+  u innych). Blokują tylko: nowy lead u jego opiekuna i brakujący raport dnia z poprzednich dni.
+- **Wygrana** 🏆: przejście leada na „Wygrany” (tablica, nagłówek, edycja) pokazuje konfetti, deszcz monet i kwotę.
+- **Statystyki użycia stron** (System → Stan CRM): każde otwarcie strony; strony z zerem po kilku tygodniach to kandydaci
+  do usunięcia.
 - **Kolory tylko ze zmiennych** w `templates/crm/base.html` (`--bg`, `--panel`, `--panel2`, `--border`, `--text`, `--muted`,
   `--accent`, `--green`, `--yellow`, `--red`, `--blue`, `--purple` i wersje `-soft` na tła). Nowe ekrany nie wpisują kolorów
   na sztywno — wtedy działają w obu motywach.

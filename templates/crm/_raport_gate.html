@@ -16,9 +16,4 @@
     <div style="font-size:11.5px;color:var(--muted);margin-top:12px">Uzupełniony po terminie zapisze się jako spóźniony. Zwolnić z raportu za dany dzień może osoba z wyższą rangą (Zespół → tabela dni).</div>
   </div>
 </div>
-{% elif tg and tg.remind %}
-<a href="{{ url_for('crm_day_report') }}" class="notice notice-warn">
-  <span>📝 <b>Raport dnia:</b> dzisiejszy jeszcze nie złożony — zrób to przed końcem pracy.</span>
-  <span style="margin-left:auto;white-space:nowrap">Wypełnij →</span>
-</a>
 {% endif %}

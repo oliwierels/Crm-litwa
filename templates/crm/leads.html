@@ -1,10 +1,10 @@
 {% extends "crm/base.html" %}
 {% block title %}Leady – {{ crm_brand }}{% endblock %}
-{% block page_title %}{% if german_view %}🇩🇪 Nowe leady z Niemiec{% elif view == 'kanban' %}Tablica leadów{% else %}Lista leadów{% endif %}{% endblock %}
+{% block page_title %}{% if german_view %}🇩🇪 Nowe leady z Niemiec{% else %}Leady{% endif %}{% endblock %}
 
 {% block topbar_actions %}
 <form method="get" style="display:flex;gap:8px;align-items:center">
-  <input name="q" value="{{ search }}" style="width:200px" placeholder="Szukaj firmy, osoby, telefonu…" type="search">
+  <input name="q" value="{{ search }}" style="width:220px" placeholder="Filtruj: firma, osoba, telefon…" type="search">
   <select name="assigned" onchange="this.form.submit()" style="width:auto">
     <option value="">Wszyscy opiekunowie</option>
     {% for u in users %}<option value="{{ u.id }}" {% if assigned==u.id|string %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
@@ -12,7 +12,6 @@
   <input type="hidden" name="view" value="{{ view }}">
   {% if show_lost %}<input type="hidden" name="show_lost" value="1">{% endif %}
   {% if german_view %}<input type="hidden" name="de" value="1">{% endif %}
-  <button type="submit" class="btn btn-secondary btn-sm">Szukaj</button>
 </form>
 {% if view == 'list' %}
 <a href="{{ url_for('crm_leads') }}?view=list&q={{ search|urlencode }}&assigned={{ assigned }}{% if not show_lost %}&show_lost=1{% endif %}"
@@ -26,12 +25,8 @@
 <a href="{{ url_for('crm_leads') }}?view={{ view }}&assigned={{ assigned }}&de=1" class="btn btn-secondary btn-sm"
    title="Nowe leady z Niemiec / Austrii / Szwajcarii bez oferty — ukryte tutaj, żeby nie mieszały się z polskimi. Zaofertowane są na tablicy normalnie.">🇩🇪 Niemieckie nowe <span class="k-count">{{ german_count }}</span></a>
 {% endif %}
-<a href="{{ url_for('crm_leads') }}?view={{ 'list' if view=='kanban' else 'kanban' }}{{ '&de=1' if german_view }}" class="btn btn-secondary btn-sm">
-  <i class="bi bi-{{ 'list-ul' if view=='kanban' else 'kanban' }}"></i>
-  {{ 'Lista' if view=='kanban' else 'Kanban' }}
-</a>
-<a href="{{ url_for('crm_export_leads') }}?q={{ search|urlencode }}&assigned={{ assigned }}" class="btn btn-secondary btn-sm" title="Eksport do CSV (uwzględnia filtry)">
-  <i class="bi bi-download"></i> CSV
+<a href="{{ url_for('crm_export_leads') }}?q={{ search|urlencode }}&assigned={{ assigned }}" class="btn btn-secondary btn-sm btn-icon" title="Eksport do CSV (uwzględnia filtry)">
+  <i class="bi bi-download"></i>
 </a>
 {% endblock %}
 

@@ -80,3 +80,37 @@ def test_bundled_assets_exist():
                 "static/fonts/inter/inter-latin-wght-normal.woff2", "static/fonts/inter/inter-latin-ext-wght-normal.woff2",
                 "static/vendor/fullcalendar/index.global.min.js", "static/vendor/fullcalendar/locales/pl.global.min.js"):
         assert os.path.getsize(os.path.join(ROOT, rel)) > 200, rel
+
+
+def test_search_api_finds_leads_by_company_and_phone(client, lead):
+    data = client.get("/crm/api/szukaj?q=Wygląd Test").get_json()
+    assert any(l["id"] == lead.id for l in data["leads"])
+    data = client.get("/crm/api/szukaj?q=600000111").get_json()
+    assert any(l["id"] == lead.id for l in data["leads"]), "po numerze bez spacji"
+    assert client.get("/crm/api/szukaj?q=a").get_json() == {"leads": []}
+
+
+def test_page_views_are_counted_per_page_person_and_day(client, lead):
+    def views():
+        return crm.db.session.query(crm.db.func.sum(crm.PageView.views)).filter(
+            crm.PageView.endpoint == "crm_lead_detail", crm.PageView.user_id == BARTEK).scalar() or 0
+    before = views()
+    client.get(f"/crm/leads/{lead.id}")
+    client.get(f"/crm/leads/{lead.id}")
+    client.get("/crm/api/szukaj?q=xx")  # API się nie liczy
+    assert views() == before + 2
+    usage = dict((ep, n) for ep, n, _p, _l in crm.page_usage(30))
+    assert usage.get("crm_lead_detail", 0) >= 2 and "crm_dashboard" in usage, "strony bez wejść też są na liście"
+
+
+def test_stage_api_returns_lead_for_win_celebration(client, lead):
+    r = client.post(f"/crm/api/leads/{lead.id}/stage", json={"stage": "Nowy"})
+    d = r.get_json()
+    assert d["ok"] and d["changed"] and d["lead"]["company"] == lead.company and d["lead"]["value"] == 4900
+
+
+def test_menu_sections_tabs_and_bell(client, lead):
+    html = client.get("/crm/leads?view=list").get_data(as_text=True)
+    assert 'class="subnav"' in html and ">Tablica<" in html and ">Duplikaty<" in html, "Leady: zakładki sekcji"
+    assert 'class="bell-wrap"' in html and 'id="palBg"' in html and "crmCelebrate" in html
+    assert html.count('class="nav-link') <= 12, "płaskie menu: jedna pozycja na sekcję"

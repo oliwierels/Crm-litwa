@@ -1,6 +1,6 @@
 {# Raz dziennie (od 16:00, na każdym komputerze osobno): czy ktoś oddzwaniał? — numer zapisuje się przy leadzie #}
 {% if callback_ask %}
-<div id="cbCard" style="position:fixed;left:calc(var(--sidebar) + 16px);bottom:16px;z-index:9000;width:320px;max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--accent);border-radius:12px;box-shadow:var(--shadow-lg);padding:12px 14px;font-size:13px">
+<div id="cbCard" style="display:none;position:fixed;left:calc(var(--sidebar) + 16px);bottom:16px;z-index:9000;width:320px;max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--accent);border-radius:12px;box-shadow:var(--shadow-lg);padding:12px 14px;font-size:13px">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
     <b>📲 Czy ktoś dziś do Ciebie oddzwaniał?</b>
     <button type="button" title="Zapytaj za godzinę" onclick="cbSend({action:'later'}).then(cbHide)" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">×</button>
@@ -18,6 +18,7 @@ async function cbSend(body) {
   const r = await fetch('{{ url_for('crm_callback') }}', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   return r.json().catch(() => ({ok: false}));
 }
+function cbShow() { const c = document.getElementById('cbCard'); if (c) { c.style.display = 'block'; const i = document.getElementById('cbPhone'); if (i) i.focus(); } document.getElementById('bellMenu')?.classList.remove('open'); }
 function cbHide() { const c = document.getElementById('cbCard'); if (c) c.remove(); }
 async function cbPhoneSave() {
   const inp = document.getElementById('cbPhone'), msg = document.getElementById('cbMsg'), phone = inp.value.trim();

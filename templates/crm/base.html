@@ -7,8 +7,9 @@
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='icons/bootstrap-icons.min.css') }}">
-<script>/* motyw: jasny domyślnie, ciemny zapamiętany w przeglądarce */
-try { if (localStorage.getItem('crm-theme') === 'dark') document.documentElement.dataset.theme = 'dark'; } catch (e) {}
+<script>/* motyw: ciemny firmowy (jak oferty i strona 33bots) domyślnie, jasny zapamiętany w przeglądarce */
+(function () { var t = null; try { t = localStorage.getItem('crm-theme'); } catch (e) {}
+  if (t !== 'light') document.documentElement.dataset.theme = 'dark'; })();
 </script>
 <style>
 @font-face { font-family: 'Inter Var'; font-style: normal; font-display: swap; font-weight: 100 900;
@@ -17,15 +18,18 @@ try { if (localStorage.getItem('crm-theme') === 'dark') document.documentElement
 @font-face { font-family: 'Inter Var'; font-style: normal; font-display: swap; font-weight: 100 900;
   src: url("{{ url_for('static', filename='fonts/inter/inter-latin-wght-normal.woff2') }}") format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Poppins'; font-weight: 500; font-display: swap; src: url("{{ url_for('static', filename='fonts/Poppins-Medium.ttf') }}") format('truetype'); }
+@font-face { font-family: 'Poppins'; font-weight: 700; font-display: swap; src: url("{{ url_for('static', filename='fonts/Poppins-Bold.ttf') }}") format('truetype'); }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* System kolorów CRM (wspólny dla PL i LT/DE). Jasny motyw domyślny, ciemny: html[data-theme=dark].
-   Szablony używają tylko zmiennych — kolor zmienia się tutaj. */
+/* System kolorów CRM (wspólny dla PL i LT/DE). Firmowy ciemny motyw domyślnie (html[data-theme=dark] — barwy jak
+   w ofertach PDF 33bots: prawie czarne tło, elektryczny niebieski), jasny po przełączeniu. Szablony używają tylko
+   zmiennych — kolor zmienia się tutaj. */
 :root {
   --sidebar: 232px;
   --radius: 10px;
   --radius-sm: 7px;
-  --bg: #f4f5f7;
+  --bg: #f4f6fa;
   --panel: #ffffff;
   --panel2: #f2f4f7;
   --panel3: #e8ebf0;
@@ -35,9 +39,11 @@ try { if (localStorage.getItem('crm-theme') === 'dark') document.documentElement
   --text2: #3d4350;
   --muted: #697080;
   --faint: #98a0ad;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef0ff;
+  --accent: #2f6fe0;
+  --accent-hover: #2459c4;
+  --accent-soft: #e8f0fd;
+  --accent-2: #5b8ff0;
+  --glow: rgba(47, 111, 224, .07);
   --on-accent: #ffffff;
   --green: #14955a;
   --green-soft: #e7f6ee;
@@ -49,45 +55,50 @@ try { if (localStorage.getItem('crm-theme') === 'dark') document.documentElement
   --blue-soft: #e9f0fe;
   --purple: #7c3aed;
   --purple-soft: #f2ebfe;
-  --sidebar-bg: #fbfbfc;
+  --sidebar-bg: #fbfcfe;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, .06);
   --shadow: 0 1px 3px rgba(16, 24, 40, .08), 0 1px 2px rgba(16, 24, 40, .04);
   --shadow-lg: 0 16px 40px rgba(16, 24, 40, .16);
   color-scheme: light;
 }
 html[data-theme="dark"] {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel2: #1e222b;
-  --panel3: #262b36;
-  --border: #272c37;
-  --border-strong: #353b48;
-  --text: #e7e9f0;
-  --text2: #c3c8d4;
-  --muted: #8a92a6;
-  --faint: #626a7c;
-  --accent: #6d6bff;
-  --accent-hover: #807eff;
-  --accent-soft: #6d6bff22;
+  --bg: #0a0c10;
+  --panel: #111419;
+  --panel2: #171a21;
+  --panel3: #1f232c;
+  --border: #22262f;
+  --border-strong: #303541;
+  --text: #eef1f6;
+  --text2: #c4cad6;
+  --muted: #8a8f98;
+  --faint: #5e636c;
+  --accent: #3b7bf0;
+  --accent-hover: #5a91f5;
+  --accent-soft: rgba(59, 123, 240, .16);
+  --accent-2: #7fa8f5;
+  --glow: rgba(47, 111, 224, .16);
   --green: #34c477;
-  --green-soft: #34c47720;
+  --green-soft: rgba(52, 196, 119, .13);
   --yellow: #e3a63b;
-  --yellow-soft: #e3a63b20;
+  --yellow-soft: rgba(227, 166, 59, .13);
   --red: #f0645a;
-  --red-soft: #f0645a20;
-  --blue: #5b8cff;
-  --blue-soft: #5b8cff20;
-  --purple: #a07cf7;
-  --purple-soft: #a07cf720;
-  --sidebar-bg: #13161c;
+  --red-soft: rgba(240, 100, 90, .13);
+  --blue: #7fa8f5;
+  --blue-soft: rgba(127, 168, 245, .13);
+  --purple: #a78bfa;
+  --purple-soft: rgba(167, 139, 250, .13);
+  --sidebar-bg: #0d0f13;
   --shadow-sm: none;
-  --shadow: 0 1px 2px rgba(0, 0, 0, .3);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, .55);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, .6);
   color-scheme: dark;
 }
 
-body { font-family: 'Inter Var', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13.5px; background: var(--bg);
-       color: var(--text); display: flex; min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+body { font-family: 'Inter Var', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13.5px;
+       background: radial-gradient(1100px 520px at 78% -8%, var(--glow), transparent 62%), radial-gradient(700px 400px at 8% 105%, var(--glow), transparent 60%), var(--bg);
+       background-attachment: fixed; color: var(--text); display: flex; min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+h1, h2, h3, .topbar-title, .ld-name, .stat-val, .modal-head, .logo, .k-val, .ld-money { font-family: 'Poppins', 'Inter Var', Inter, sans-serif; }
+::selection { background: var(--accent-soft); }
 a { color: inherit; text-decoration: none; }
 input, select, textarea, button { font-family: inherit; font-size: 13.5px; }
 [hidden] { display: none !important; }  /* atrybut hidden wygrywa z display przycisków (.btn) */
@@ -352,6 +363,132 @@ tbody tr:hover td { background: var(--panel2); }
 ::-webkit-scrollbar-thumb { background: var(--panel3); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: padding-box; border: 2px solid transparent; }
 
+/* ===== WYGLĄD 33BOTS: głębia, ruch, narzędzia ===== */
+.nav-sep { height: 1px; background: var(--border); margin: 8px 10px; }
+.nav-link { position: relative; }
+.nav-link.active::before { content: ""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 3px; border-radius: 0 3px 3px 0;
+                           background: linear-gradient(var(--accent), var(--accent-2)); }
+.logo-icon { background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 4px 14px var(--glow); }
+.btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0; }
+.btn-primary:hover { background: linear-gradient(135deg, var(--accent-hover), var(--accent-2)); box-shadow: 0 6px 18px var(--glow); }
+html[data-theme="dark"] .panel, html[data-theme="dark"] .stat, html[data-theme="dark"] .k-card, html[data-theme="dark"] .modal {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, .025), rgba(255, 255, 255, 0) 120px); }
+html[data-theme="dark"] .topbar { background: color-mix(in srgb, var(--bg) 72%, transparent); }
+html[data-theme="dark"] .sidebar { background: linear-gradient(180deg, #0f1218, #0b0d11); }
+.stat { position: relative; overflow: hidden; transition: transform .15s, border-color .15s; }
+.stat::after { content: ""; position: absolute; inset: auto -30% -60% auto; width: 140px; height: 140px; border-radius: 50%;
+               background: radial-gradient(circle, var(--glow), transparent 70%); pointer-events: none; }
+a.stat:hover { transform: translateY(-2px); }
+.k-card { transition: border-color .15s, box-shadow .15s, transform .15s; }
+.k-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0, 0, 0, .18); border-color: var(--border-strong); }
+.k-card.dragging { transform: rotate(2deg) scale(1.02); }
+
+/* pasek u góry: narzędzia (szukaj, motyw) */
+.topbar-tools { display: flex; gap: 6px; align-items: center; margin-left: 4px; }
+.tool-btn { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border);
+            background: var(--panel); color: var(--muted); cursor: pointer; font-size: 13px; transition: border-color .12s, color .12s; }
+.tool-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.search-btn { min-width: 190px; }
+.search-btn .search-hint { flex: 1; text-align: left; }
+.theme-ico-light { display: none; }
+html:not([data-theme="dark"]) .theme-ico-dark { display: none; }
+html:not([data-theme="dark"]) .theme-ico-light { display: inline; }
+
+/* zakładki sekcji (np. Leady: Tablica / Lista / Do obdzwonienia / Z ClickUp / Duplikaty) */
+.subnav { display: flex; gap: 2px; padding: 0 28px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 80%, transparent);
+          overflow-x: auto; scrollbar-width: none; }
+.subnav-tab { position: relative; padding: 11px 12px 10px; font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.subnav-tab:hover { color: var(--text); }
+.subnav-tab.on { color: var(--text); }
+.subnav-tab.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px;
+                        background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.subnav-count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; font-size: 11px; line-height: 17px;
+                text-align: center; background: var(--red-soft); color: var(--red); }
+
+/* wejście strony: treść wjeżdża łagodnie (bez ruchu przy „ogranicz animacje”) */
+@keyframes crm-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.content > * { animation: crm-rise .38s cubic-bezier(.2, .7, .2, 1) both; }
+.content > *:nth-child(2) { animation-delay: .04s; } .content > *:nth-child(3) { animation-delay: .08s; }
+.content > *:nth-child(4) { animation-delay: .12s; } .content > *:nth-child(n+5) { animation-delay: .16s; }
+.k-col .k-card { animation: crm-rise .32s ease both; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* POWITANIE na „Mój dzień” */
+.hero { display: flex; align-items: center; gap: 20px; padding: 22px 26px; margin-bottom: 18px; border-radius: 18px; position: relative; overflow: hidden;
+        background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 22%, var(--panel)) 0%, var(--panel) 55%), var(--panel);
+        border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); }
+.hero::after { content: ""; position: absolute; right: -60px; top: -80px; width: 280px; height: 280px; border-radius: 50%;
+               background: radial-gradient(circle, color-mix(in srgb, var(--accent-2) 35%, transparent), transparent 70%); pointer-events: none; }
+.hero-hi { font-family: 'Poppins', sans-serif; font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
+.hero-sub { color: var(--text2); margin-top: 4px; font-size: 14px; }
+.hero-kpi { margin-left: auto; text-align: right; position: relative; z-index: 1; }
+.hero-kpi-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+.hero-kpi-val { font-family: 'Poppins', sans-serif; font-size: 26px; font-weight: 700; white-space: nowrap; }
+@media (max-width: 700px) { .hero { flex-direction: column; align-items: flex-start; } .hero-kpi { margin-left: 0; text-align: left; } }
+
+/* POWIADOMIENIA (dzwonek) */
+.bell-wrap { position: relative; }
+.bell-btn { position: relative; padding: 0 9px; }
+.bell-count { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--red);
+              color: #fff; font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; box-shadow: 0 0 0 2px var(--bg); }
+.bell-menu { position: absolute; right: 0; top: calc(100% + 8px); width: 360px; max-width: calc(100vw - 24px); background: var(--panel);
+             border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 6px; display: none; z-index: 300; }
+.bell-menu.open { display: block; animation: crm-pop .14s ease both; }
+.bell-head { font-size: 11.5px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; padding: 8px 10px 6px; }
+.bell-item { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border-radius: 9px; font-size: 13px; color: var(--text2); }
+.bell-item:hover { background: var(--panel2); color: var(--text); }
+.bell-item.danger { box-shadow: inset 3px 0 0 var(--red); }
+.bell-item.warn { box-shadow: inset 3px 0 0 var(--yellow); }
+.bell-ico { font-size: 15px; line-height: 1.3; }
+.bell-empty { padding: 16px; text-align: center; color: var(--muted); }
+
+/* SZUKAJKA (Ctrl+K) */
+.pal-bg { position: fixed; inset: 0; z-index: 9800; background: rgba(5, 7, 10, .55); backdrop-filter: blur(6px); display: none;
+          align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.pal-bg.open { display: flex; }
+.pal { width: 620px; max-width: calc(100vw - 32px); background: var(--panel); border: 1px solid var(--border-strong); border-radius: 16px;
+       box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, .03); overflow: hidden; animation: crm-pop .16s ease both; }
+@keyframes crm-pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+.pal-in { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.pal-in i { color: var(--muted); font-size: 16px; }
+.pal-in input { border: 0; background: transparent; box-shadow: none !important; font-size: 16px; padding: 0; min-height: 0; }
+.pal-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
+.pal-group { font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; padding: 8px 10px 4px; }
+.pal-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px; cursor: pointer; color: var(--text2); }
+.pal-item .pal-ico { width: 28px; height: 28px; border-radius: 8px; background: var(--panel2); display: inline-flex; align-items: center;
+                     justify-content: center; font-size: 14px; flex-shrink: 0; }
+.pal-item .pal-sub { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pal-item.sel { background: var(--accent-soft); color: var(--text); }
+.pal-item.sel .pal-ico { background: var(--accent); color: #fff; }
+.pal-empty { padding: 18px; color: var(--muted); text-align: center; }
+.pal-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--faint); }
+
+/* WYGRANA 🎉 */
+.win-layer { position: fixed; inset: 0; z-index: 9900; pointer-events: none; }
+.win-card { position: fixed; left: 50%; top: 38%; transform: translate(-50%, -50%) scale(.6); z-index: 9901; pointer-events: auto; cursor: pointer;
+            min-width: 340px; padding: 26px 34px 24px; text-align: center; border-radius: 22px; color: #fff;
+            background: radial-gradient(120% 140% at 50% 0%, #2f6fe0 0%, #1b3f8f 45%, #0a0c10 100%);
+            box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .12), 0 0 90px rgba(47, 111, 224, .55);
+            animation: win-in .55s cubic-bezier(.2, 1.4, .3, 1) forwards; }
+.win-card .win-emoji { font-size: 56px; line-height: 1; display: block; animation: win-bounce 1s ease-in-out infinite; }
+.win-card .win-title { font-family: 'Poppins', sans-serif; font-size: 34px; font-weight: 700; letter-spacing: .04em; margin-top: 8px;
+                       background: linear-gradient(90deg, #fff, #ffe58a, #fff); -webkit-background-clip: text; background-clip: text; color: transparent;
+                       background-size: 200% 100%; animation: win-shine 1.6s linear infinite; }
+.win-card .win-company { font-size: 15px; opacity: .9; margin-top: 2px; }
+.win-card .win-money { font-family: 'Poppins', sans-serif; font-size: 40px; font-weight: 700; color: #7dffb0; margin-top: 8px;
+                       text-shadow: 0 0 24px rgba(125, 255, 176, .55); font-variant-numeric: tabular-nums; }
+.win-card.out { animation: win-out .4s ease forwards; }
+@keyframes win-in { to { transform: translate(-50%, -50%) scale(1); } }
+@keyframes win-out { to { transform: translate(-50%, -60%) scale(.9); opacity: 0; } }
+@keyframes win-bounce { 0%, 100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-8px) rotate(6deg); } }
+@keyframes win-shine { to { background-position: -200% 0; } }
+.win-flash { position: fixed; inset: 0; z-index: 9899; pointer-events: none; background: radial-gradient(circle at 50% 40%, rgba(255, 229, 138, .35), transparent 60%);
+             animation: win-flash .9s ease-out forwards; }
+@keyframes win-flash { from { opacity: 1; } to { opacity: 0; } }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9700; background: var(--panel); color: var(--text);
+         border: 1px solid var(--border-strong); border-radius: 12px; padding: 10px 16px; box-shadow: var(--shadow-lg); font-size: 13.5px;
+         animation: crm-pop .18s ease both; }
+
 /* telefon / tablet: menu wysuwane przyciskiem ☰ (z „Nowy lead” i „Zadanie”), zamyka się kliknięciem obok albo Esc */
 .mnav-btn { display: none; }
 .mnav-shade { display: none; }
@@ -361,6 +498,8 @@ tbody tr:hover td { background: var(--panel2); }
   body.nav-open .sidebar { transform: none; }
   body.nav-open .mnav-shade { display: block; position: fixed; inset: 0; background: rgba(15, 17, 21, .45); z-index: 450; }
   .mnav-btn { display: inline-flex; }
+  .search-btn { min-width: 0; } .search-btn .search-hint, .search-btn .kbd { display: none; }
+  .subnav { padding: 0 12px; }
   .topbar, .content { padding-left: 16px; padding-right: 16px; }
   .notice { margin-left: 16px; margin-right: 16px; }
   .al-bar { padding-left: 16px; padding-right: 16px; }
@@ -452,90 +591,69 @@ tbody tr:hover td { background: var(--panel2); }
     {% endfor %}
   </notr>
   {% endif %}
-  {% set ep = request.endpoint %}
+  {% set ep = request.endpoint or '' %}
   {% set view = request.args.get('view', 'kanban') %}
-  {# grupy menu: (id, nazwa, [(adres, aktywna, ikona, etykieta, licznik, kolor licznika, opis licznika)]) #}
   {% set tb = team_badges() %}
-  {% set nav_groups = [
-    ('sales', 'Sprzedaż', [
-      (url_for('crm_mail'), (ep or '').startswith('crm_mail'), 'envelope', 'Poczta', mail_unseen_count(), 'var(--accent)', 'Nowe maile od klientów (ostatnie 30 dni)'),
-      (url_for('crm_leads') ~ '?view=kanban', ep in ['crm_leads', 'crm_lead_detail'] and view == 'kanban', 'kanban', 'Tablica leadów', 0, '', ''),
-      (url_for('crm_leads') ~ '?view=list', ep == 'crm_leads' and view == 'list', 'list-ul', 'Lista leadów', 0, '', ''),
-    ] + ([
-      (url_for('crm_clickup_uncontacted'), ep == 'crm_clickup_uncontacted', 'telephone-outbound', 'Do obdzwonienia', clickup_uncontacted_count or 0, 'var(--red)', 'Nowe leady, z którymi nikt jeszcze nie próbował się skontaktować'),
-    ] if has_route('crm_clickup_uncontacted') else []) + [
-      (url_for('crm_offers'), ep in ['crm_offers', 'crm_offer_review'], 'file-earmark-text', 'Oferty', offer_drafts_count or 0, 'var(--yellow)', 'Oferty czekające na sprawdzenie i wysyłkę'),
-      (url_for('crm_calculator'), ep == 'crm_calculator', 'calculator', 'Kalkulator', 0, '', ''),
-      (url_for('crm_duplicates'), ep == 'crm_duplicates', 'files', 'Duplikaty', 0, '', ''),
-    ]),
-    ('ops', 'Realizacja', [
-      (url_for('crm_journey'), (ep or '').startswith('crm_journey'), 'signpost-2', 'Customer Journey', journey_badge or 0, 'var(--red)', 'Klienci, przy których trzeba teraz coś zrobić: umowa, przypomnienie, nowy dokument'),
-      (url_for('crm_calendar'), ep == 'crm_calendar', 'calendar3', 'Kalendarz', 0, '', ''),
-      (url_for('crm_logistics'), ep in ['crm_logistics', 'crm_operator_jobs'], 'truck', 'Logistyka', 0, '', ''),
-    ]),
-    ('marketing', 'Pozyskanie', [
-      (url_for('crm_inbox'), ep == 'crm_inbox', 'inbox', 'Skrzynka kontakt@', 0, '', ''),
-      (url_for('crm_clickup_inbox'), ep == 'crm_clickup_inbox', 'cloud-download', 'Z ClickUp', clickup_pending_count or 0, 'var(--accent)', 'Leady z ClickUp do zatwierdzenia'),
-      (url_for('crm_campaigns'), ep in ['crm_campaigns', 'crm_campaign', 'crm_campaign_new'], 'megaphone', 'Kampanie', campaigns_running or 0, 'var(--green)', 'Trwające kampanie'),
-    ]),
-    ('zespol', 'Zespół', ([
-      (url_for('crm_day_report'), ep in ['crm_day_report_day', 'crm_day_report_view'], 'journal-check', 'Raport dnia', tb.todo, 'var(--red)', 'Do zrobienia: brakujące raporty dnia i zlecone Ci zadania z terminem do dziś'),
-    ] if tb.on else []) + [
-      (url_for('crm_team'), ep == 'crm_team', 'people', 'Zespół', tb.unread if tb.on else tb.todo, 'var(--accent)', 'Nowe raporty i komentarze, których jeszcze nie widziałeś' if tb.on else 'Zlecone Ci zadania z terminem do dziś'),
-    ]),
-    ('raporty', 'Raporty', [
-      (url_for('crm_stats'), ep == 'crm_stats', 'graph-up', 'Statystyki', 0, '', ''),
-      (url_for('crm_sales_panel'), ep == 'crm_sales_panel', 'bullseye', 'Skuteczność', 0, '', ''),
-      (url_for('crm_offer_audit'), ep == 'crm_offer_audit', 'search', 'Audyt ofert', 0, '', ''),
-    ]),
-    ('system', 'Ustawienia', [
-      (url_for('crm_health'), ep == 'crm_health', 'heart-pulse', 'Stan CRM', health_alarm_list()|length, 'var(--red)', 'Strażnik CRM: alarmy (coś nie działa albo podejrzana cisza)'),
-      (url_for('crm_data_cleanup'), ep == 'crm_data_cleanup', 'wrench-adjustable', 'Porządki w danych', 0, '', ''),
-      (url_for('crm_deliverability'), ep == 'crm_deliverability', 'shield-check', 'Dostarczalność', 0, '', ''),
-    ]),
+  {% set uncontacted = (clickup_uncontacted_count or 0) if has_route('crm_clickup_uncontacted') else 0 %}
+  {# SEKCJE: (id, etykieta, ikona, adres, licznik, kolor licznika, opis licznika, [zakładki: (etykieta, adres, aktywna, licznik)])
+     Menu ma jedną pozycję na sekcję; strony sekcji są zakładkami u góry strony. #}
+  {% set sections = [
+    ('home', 'Mój dzień', 'house-door', url_for('crm_dashboard'), 0, '', '', [], ep == 'crm_dashboard'),
+    ('leady', 'Leady', 'kanban', url_for('crm_leads') ~ '?view=kanban', uncontacted + (clickup_pending_count or 0), 'var(--red)',
+      'Nowe leady bez próby kontaktu i leady z ClickUp do zatwierdzenia', [
+        ('Tablica', url_for('crm_leads') ~ '?view=kanban', ep in ['crm_leads', 'crm_lead_detail'] and view == 'kanban', 0),
+        ('Lista', url_for('crm_leads') ~ '?view=list', ep == 'crm_leads' and view == 'list', 0),
+      ] + ([('Do obdzwonienia', url_for('crm_clickup_uncontacted'), ep == 'crm_clickup_uncontacted', uncontacted)] if has_route('crm_clickup_uncontacted') else []) + [
+        ('Z ClickUp', url_for('crm_clickup_inbox'), ep == 'crm_clickup_inbox', clickup_pending_count or 0),
+        ('Duplikaty', url_for('crm_duplicates'), ep == 'crm_duplicates', 0),
+      ], ep in ['crm_leads', 'crm_lead_detail', 'crm_clickup_uncontacted', 'crm_clickup_inbox', 'crm_duplicates']),
+    ('poczta', 'Poczta', 'envelope', url_for('crm_mail'), mail_unseen_count(), 'var(--accent)', 'Nowe maile od klientów (ostatnie 30 dni)', [],
+      ep.startswith('crm_mail')),
+    ('oferty', 'Oferty', 'file-earmark-text', url_for('crm_offers'), offer_drafts_count or 0, 'var(--yellow)', 'Oferty czekające na sprawdzenie i wysyłkę', [
+        ('Oferty', url_for('crm_offers'), ep in ['crm_offers', 'crm_offer_review'], offer_drafts_count or 0),
+        ('Kalkulator', url_for('crm_calculator'), ep == 'crm_calculator', 0),
+        ('Audyt ofert', url_for('crm_offer_audit'), ep == 'crm_offer_audit', 0),
+      ], ep in ['crm_offers', 'crm_offer_review', 'crm_calculator', 'crm_offer_audit']),
+    ('journey', 'Customer Journey', 'signpost-2', url_for('crm_journey'), journey_badge or 0, 'var(--red)',
+      'Klienci, przy których trzeba teraz coś zrobić: umowa, przypomnienie, nowy dokument', [], ep.startswith('crm_journey')),
+    ('kalendarz', 'Kalendarz', 'calendar3', url_for('crm_calendar'), 0, '', '', [], ep == 'crm_calendar'),
+    ('logistyka', 'Logistyka', 'truck', url_for('crm_logistics'), 0, '', '', [], ep in ['crm_logistics', 'crm_operator_jobs', 'crm_job']),
+    ('kampanie', 'Kampanie', 'megaphone', url_for('crm_campaigns'), campaigns_running or 0, 'var(--green)', 'Trwające kampanie', [],
+      ep in ['crm_campaigns', 'crm_campaign', 'crm_campaign_new']),
+    ('zespol', 'Zespół', 'people', url_for('crm_team'), tb.todo + (tb.unread if tb.on else 0), 'var(--accent)',
+      'Raporty dnia do uzupełnienia, zlecone Ci zadania i nieprzeczytane raporty', ([
+        ('Raport dnia', url_for('crm_day_report'), ep in ['crm_day_report', 'crm_day_report_day', 'crm_day_report_view'], tb.todo),
+      ] if tb.on else []) + [
+        ('Zespół', url_for('crm_team'), ep == 'crm_team', tb.unread if tb.on else tb.todo),
+      ], ep in ['crm_team', 'crm_day_report', 'crm_day_report_day', 'crm_day_report_view']),
+    ('raporty', 'Raporty', 'graph-up', url_for('crm_stats'), 0, '', '', [
+        ('Statystyki', url_for('crm_stats'), ep == 'crm_stats', 0),
+        ('Skuteczność', url_for('crm_sales_panel'), ep == 'crm_sales_panel', 0),
+      ], ep in ['crm_stats', 'crm_sales_panel']),
+    ('system', 'System', 'sliders', url_for('crm_health'), health_alarm_list()|length, 'var(--red)',
+      'Strażnik CRM: alarmy (coś nie działa albo podejrzana cisza)', [
+        ('Stan CRM', url_for('crm_health'), ep == 'crm_health', health_alarm_list()|length),
+        ('Skrzynka kontakt@', url_for('crm_inbox'), ep == 'crm_inbox', 0),
+        ('Porządki w danych', url_for('crm_data_cleanup'), ep == 'crm_data_cleanup', 0),
+        ('Dostarczalność', url_for('crm_deliverability'), ep == 'crm_deliverability', 0),
+        ('Mój profil', url_for('crm_profile'), ep == 'crm_profile', 0),
+      ], ep in ['crm_health', 'crm_inbox', 'crm_data_cleanup', 'crm_deliverability', 'crm_profile']),
   ] %}
+  {% set data_sections = sections if tb.data else sections|selectattr(0, 'equalto', 'zespol')|list %}
+  {% set current = (data_sections|selectattr(8)|list or [None])[0] %}
   <div class="quick-new">
     <button type="button" class="btn btn-primary btn-sm" onclick="openQuick()" title="Nowy lead (klawisz N)"><i class="bi bi-plus-lg"></i> Nowy lead</button>
     <button type="button" class="btn btn-secondary btn-sm btn-icon" onclick="openTask()" title="Nowe zadanie — dla siebie albo dla kogoś z zespołu"><i class="bi bi-check2-square"></i></button>
   </div>
   <nav>
-    {% if tb.data %}
-    <a href="{{ url_for('crm_dashboard') }}" class="nav-dash {% if ep == 'crm_dashboard' %}active{% endif %}">
-      <i class="bi bi-house-door"></i> Mój dzień
+    {% for sid, label, icon, href, count, color, hint, tabs, active in data_sections %}
+    {% if sid in ('kampanie', 'zespol') and loop.index0 and data_sections[loop.index0 - 1][0] not in ('kampanie', 'zespol') %}<div class="nav-sep"></div>{% endif %}
+    <a href="{{ href }}" class="nav-link {{ 'active' if active }}" {{ 'aria-current=page' if active }}>
+      <i class="bi bi-{{ icon }}"></i> <span class="nav-label">{{ label }}</span>
+      {% if count %}<span class="nav-count" style="--c:{{ color }}" title="{{ hint }}">{{ count }}</span>{% endif %}
     </a>
-    {% endif %}
-    {% for gid, gname, items in nav_groups if tb.data or gid == 'zespol' %}
-    {% set group_active = items|selectattr(1)|list|length > 0 %}
-    {% set group_count = items|sum(attribute=4) %}
-    <details class="nav-group" data-group="{{ gid }}" open {{ 'data-active' if group_active }}>
-      <summary>{{ gname }}
-        {% if group_count %}<span class="k-count nav-group-count" title="Coś czeka w tej grupie">{{ group_count }}</span>{% endif %}
-        <i class="bi bi-chevron-right nav-chev"></i>
-      </summary>
-      {% for href, active, icon, label, count, color, hint in items %}
-      <a href="{{ href }}" class="nav-link {{ 'active' if active }}">
-        <i class="bi bi-{{ icon }}"></i> {{ label }}
-        {% if count %}<span class="nav-count" style="--c:{{ color }}" title="{{ hint }}">{{ count }}</span>{% endif %}
-      </a>
-      {% endfor %}
-    </details>
     {% endfor %}
   </nav>
-  <script>
-  // zwinięte/rozwinięte grupy menu zapamiętane w tej przeglądarce; grupa otwartej strony zawsze rozwinięta
-  (function () {
-    document.querySelectorAll('details.nav-group').forEach(function (d) {
-      var key = 'crm-nav-' + d.dataset.group;
-      try {
-        var saved = localStorage.getItem(key);
-        if (!d.hasAttribute('data-active') && saved !== null) d.open = saved === '1';
-      } catch (e) {}
-      d.addEventListener('toggle', function () {
-        try { localStorage.setItem(key, d.open ? '1' : '0'); } catch (e) {}
-      });
-    });
-  })();
-  </script>
   <div class="me">
     {% if not crm_locked %}
     <div class="me-warn" title="Każdy, kto zna adres, może wejść do CRM — ustaw zmienną CRM_PASSWORD w Railway (web → Variables)">🔓 CRM bez hasła — ustaw CRM_PASSWORD</div>
@@ -573,14 +691,45 @@ tbody tr:hover td { background: var(--panel2); }
 <div class="main">
 {% include "crm/_alerts.html" %}
 {% include "crm/_callback.html" %}
-{% include "crm/_health.html" %}
 {% include "crm/_raport_gate.html" %}
   <div class="topbar">
     <button type="button" class="btn btn-secondary btn-sm btn-icon mnav-btn" aria-label="Menu" title="Menu"
             onclick="document.body.classList.toggle('nav-open')"><i class="bi bi-list"></i></button>
     <div class="topbar-title">{% block page_title %}{% endblock %}</div>
     {% block topbar_actions %}{% endblock %}
+    <div class="topbar-tools">
+      {# powiadomienia: przypomnienia, które nie muszą blokować pracy — jedno miejsce zamiast pasków nad każdą stroną #}
+      {% set notes = [] %}
+      {% set tg = team_gate() %}
+      {% if tg and tg.remind and not tg.block %}{% set _ = notes.append(('📝', 'Raport dnia: dzisiejszy jeszcze nie złożony — zrób to przed końcem pracy', url_for('crm_day_report'), 'warn')) %}{% endif %}
+      {% if request.endpoint != 'crm_health' %}{% for h in health_alarm_list() %}{% set _ = notes.append(('🛡️', 'Strażnik CRM: ' ~ h.title, url_for('crm_health'), 'danger' if h.level == 'red' else 'warn')) %}{% endfor %}{% endif %}
+      {% if callback_ask %}{% set _ = notes.append(('📲', 'Czy ktoś dziś do Ciebie oddzwaniał? Zapisz numer przy leadzie', 'javascript:cbShow()', 'info')) %}{% endif %}
+      {% if alerts and alerts.team_waiting %}{% set _ = notes.append(('👥', alerts.team_waiting ~ (' nowy lead czeka' if alerts.team_waiting == 1 else ' nowe leady czekają') ~ ' na obsługę u innych osób', url_for('crm_leads') ~ '?view=list', 'info')) %}{% endif %}
+      <div class="bell-wrap">
+        <button type="button" class="tool-btn bell-btn" onclick="document.getElementById('bellMenu').classList.toggle('open')" title="Powiadomienia" aria-label="Powiadomienia">
+          <i class="bi bi-bell"></i>{% if notes %}<span class="bell-count">{{ notes|length }}</span>{% endif %}</button>
+        <div class="bell-menu" id="bellMenu">
+          <div class="bell-head">Powiadomienia</div>
+          {% for ico, text, href, kind in notes %}
+          <a class="bell-item {{ kind }}" href="{{ href }}"><span class="bell-ico">{{ ico }}</span><span>{{ text }}</span></a>
+          {% else %}
+          <div class="bell-empty">Wszystko ogarnięte ✨</div>
+          {% endfor %}
+        </div>
+      </div>
+      <button type="button" class="tool-btn search-btn" onclick="crmPalette()" title="Szukaj leada albo strony (Ctrl + K)">
+        <i class="bi bi-search"></i><span class="search-hint">Szukaj…</span><span class="kbd">Ctrl K</span></button>
+      <button type="button" class="tool-btn" onclick="crmToggleTheme()" title="Jasny / ciemny motyw" aria-label="Przełącz motyw">
+        <i class="bi bi-sun theme-ico-dark"></i><i class="bi bi-moon-stars theme-ico-light"></i></button>
+    </div>
   </div>
+  {% if current and current[7] %}
+  <div class="subnav" role="tablist">
+    {% for tlabel, thref, tactive, tcount in current[7] %}
+    <a href="{{ thref }}" class="subnav-tab {{ 'on' if tactive }}" role="tab" {{ 'aria-selected=true' if tactive }}>{{ tlabel }}{% if tcount %} <span class="subnav-count">{{ tcount }}</span>{% endif %}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
   <div class="content">
     {% block content %}{% endblock %}
   </div>
@@ -887,7 +1036,10 @@ async function crmStage(leadId, stage, extra) {
     const r = await fetch(`/crm/api/leads/${leadId}/stage`, {method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(Object.assign({stage}, extra))});
     let d = {}; try { d = await r.json(); } catch (e) { alert('Nie udało się zmienić etapu.'); return false; }
-    if (d.ok) return true;
+    if (d.ok) {
+      if (stage === 'Wygrany' && d.changed && typeof crmCelebrate === 'function') await crmCelebrate(d.lead);
+      return true;
+    }
     const fields = await sgOpen(d, stage);
     if (!fields) return false;
     Object.assign(extra, fields);
@@ -1445,6 +1597,140 @@ document.querySelectorAll('.evt-chips[data-prefix]').forEach(el => {
 #leadNavBar button:hover:not(:disabled), #leadNavBar a:hover { background: var(--panel2); }
 #leadNavBar button:disabled { opacity: .35; cursor: default; }
 </style>
+<!-- SZUKAJKA (Ctrl+K) -->
+<div class="pal-bg" id="palBg" onclick="if (event.target === this) crmPaletteClose()">
+  <div class="pal" role="dialog" aria-label="Szukaj">
+    <div class="pal-in"><i class="bi bi-search"></i><input id="palInput" placeholder="Szukaj leada (firma, osoba, telefon, mail) albo strony…" autocomplete="off"></div>
+    <div class="pal-list" id="palList"></div>
+    <div class="pal-foot"><span><span class="kbd">↑</span> <span class="kbd">↓</span> wybór</span><span><span class="kbd">Enter</span> otwórz</span><span><span class="kbd">Esc</span> zamknij</span></div>
+  </div>
+</div>
+<script>
+/* ===== szukajka Ctrl+K: leady (z serwera) + strony z menu + szybkie akcje ===== */
+(function () {
+  const bg = document.getElementById('palBg'), inp = document.getElementById('palInput'), list = document.getElementById('palList');
+  let items = [], sel = 0, timer = null, seq = 0;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  function pages() {
+    const seen = new Set(), out = [];
+    document.querySelectorAll('nav a.nav-link, .subnav a.subnav-tab').forEach(a => {
+      const label = (a.querySelector('.nav-label') || a).textContent.replace(/\d+\s*$/, '').trim();
+      const href = a.getAttribute('href');
+      if (!label || seen.has(href)) return; seen.add(href);
+      const ico = a.querySelector('i'); out.push({kind: 'page', label, href, icon: ico ? ico.className : 'bi bi-arrow-right'});
+    });
+    return out;
+  }
+  const actions = [
+    {kind: 'act', label: 'Nowy lead', icon: 'bi bi-plus-lg', run: () => openQuick()},
+    {kind: 'act', label: 'Nowe zadanie', icon: 'bi bi-check2-square', run: () => openTask()},
+    {kind: 'act', label: 'Przełącz jasny / ciemny motyw', icon: 'bi bi-circle-half', run: () => crmToggleTheme()},
+    {kind: 'act', label: 'Asystent AI', icon: 'bi bi-stars', run: () => openAiChat()},
+  ];
+  function render(leads) {
+    const q = inp.value.trim().toLowerCase();
+    const match = x => !q || x.label.toLowerCase().includes(q);
+    const pg = pages().filter(match).slice(0, 6), ac = actions.filter(match);
+    items = [...(leads || []).map(l => Object.assign({kind: 'lead'}, l)), ...ac, ...pg];
+    sel = Math.min(sel, Math.max(0, items.length - 1));
+    let h = '', i = 0;
+    const group = (title, arr, fn) => { if (!arr.length) return; h += `<div class="pal-group">${title}</div>`; arr.forEach(x => { h += fn(x, i++); }); };
+    group('Leady', items.filter(x => x.kind === 'lead'), (l, k) => `<div class="pal-item ${k === sel ? 'sel' : ''}" data-i="${k}">
+      <span class="pal-ico" style="color:${esc(l.color)}"><i class="bi bi-person-vcard"></i></span>
+      <span><b>${esc(l.company)}</b><span style="color:var(--muted)">${l.contact ? ' · ' + esc(l.contact) : ''}</span></span>
+      <span class="pal-sub"><span class="stage-badge" style="background:${esc(l.color)}22;color:${esc(l.color)}">${esc(l.stage)}</span> ${esc(l.value)} ${l.owner ? '· ' + esc(l.owner) : ''}</span></div>`);
+    group('Akcje', items.filter(x => x.kind === 'act'), (a, k) => `<div class="pal-item ${k === sel ? 'sel' : ''}" data-i="${k}"><span class="pal-ico"><i class="${a.icon}"></i></span>${esc(a.label)}</div>`);
+    group('Strony', items.filter(x => x.kind === 'page'), (p, k) => `<div class="pal-item ${k === sel ? 'sel' : ''}" data-i="${k}"><span class="pal-ico"><i class="${esc(p.icon)}"></i></span>${esc(p.label)}</div>`);
+    list.innerHTML = h || '<div class="pal-empty">Nic nie znaleziono</div>';
+  }
+  function go(x) {
+    if (!x) return;
+    crmPaletteClose();
+    if (x.kind === 'lead') location.href = '/crm/leads/' + x.id;
+    else if (x.kind === 'page') location.href = x.href;
+    else x.run();
+  }
+  function search() {
+    const q = inp.value.trim(), my = ++seq;
+    if (q.length < 2) { render([]); return; }
+    fetch('/crm/api/szukaj?q=' + encodeURIComponent(q), {headers: {'X-Requested-With': 'fetch'}})
+      .then(r => r.json()).then(d => { if (my === seq) render(d.leads || []); }).catch(() => render([]));
+  }
+  window.crmPalette = function () { bg.classList.add('open'); inp.value = ''; sel = 0; render([]); inp.focus(); };
+  window.crmPaletteClose = function () { bg.classList.remove('open'); };
+  inp.addEventListener('input', () => { sel = 0; render(items.filter(x => x.kind === 'lead')); clearTimeout(timer); timer = setTimeout(search, 160); });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); render(items.filter(x => x.kind === 'lead')); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); render(items.filter(x => x.kind === 'lead')); }
+    else if (e.key === 'Enter') { e.preventDefault(); go(items[sel]); }
+    else if (e.key === 'Escape') crmPaletteClose();
+  });
+  list.addEventListener('click', e => { const it = e.target.closest('.pal-item'); if (it) go(items[+it.dataset.i]); });
+  document.addEventListener('keydown', e => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '') || (e.target || {}).isContentEditable;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); bg.classList.contains('open') ? crmPaletteClose() : crmPalette(); }
+    else if (e.key === '/' && !typing && !document.querySelector('.modal-bg.open')) { e.preventDefault(); crmPalette(); }
+  });
+})();
+
+/* ===== WYGRANA: konfetti, deszcz monet i karta z kwotą ===== */
+function crmCelebrate(lead) {
+  lead = lead || {};
+  const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const fmt = v => Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const flash = document.createElement('div'); flash.className = 'win-flash'; document.body.appendChild(flash);
+  setTimeout(() => flash.remove(), 1000);
+  const card = document.createElement('div'); card.className = 'win-card';
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  card.innerHTML = `<span class="win-emoji">🏆</span><div class="win-title">WYGRANA!</div><div class="win-company">${esc(lead.company || '')}</div>`
+    + (lead.value ? `<div class="win-money">+<span class="win-num">0</span> ${esc(lead.currency || '')}</div>` : '');
+  document.body.appendChild(card);
+  const close = () => { card.classList.add('out'); setTimeout(() => card.remove(), 420); };
+  card.addEventListener('click', close);
+  const num = card.querySelector('.win-num');
+  if (num) { const t0 = performance.now(), dur = 1100;
+    (function tick(t) { const k = Math.min(1, (t - t0) / dur); num.textContent = fmt(lead.value * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(tick); })(t0); }
+  setTimeout(close, 3800);
+  if (reduce) return new Promise(r => setTimeout(r, 1600));
+  const cv = document.createElement('canvas'); cv.className = 'win-layer'; document.body.appendChild(cv);
+  const dpr = Math.min(2, window.devicePixelRatio || 1), W = innerWidth, H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
+  const colors = ['#2f6fe0', '#7fa8f5', '#ffe58a', '#7dffb0', '#ff8fb1', '#ffffff', '#ffd166'];
+  const emojis = ['💰', '💸', '🪙', '🤑', '💵', '🎉', '🤖'];
+  const parts = [];
+  for (let i = 0; i < 170; i++) {  // konfetti z dwóch armatek
+    const left = i % 2 === 0, a = (left ? -60 : -120) * Math.PI / 180 + (Math.random() - .5) * .9, v = 9 + Math.random() * 9;
+    parts.push({x: left ? 0 : W, y: H * .75, vx: Math.cos(a) * v, vy: Math.sin(a) * v, w: 6 + Math.random() * 6, h: 8 + Math.random() * 8,
+                r: Math.random() * 6, vr: (Math.random() - .5) * .4, c: colors[i % colors.length], life: 0});
+  }
+  for (let i = 0; i < 46; i++)  // deszcz pieniędzy
+    parts.push({emoji: emojis[i % emojis.length], x: Math.random() * W, y: -40 - Math.random() * H * .8, vx: (Math.random() - .5) * 1.2,
+                vy: 2.5 + Math.random() * 3.5, r: Math.random() * 6, vr: (Math.random() - .5) * .08, s: 22 + Math.random() * 18, life: 0});
+  const t0 = performance.now();
+  (function frame(t) {
+    const el = t - t0;
+    ctx.clearRect(0, 0, W, H);
+    for (const p of parts) {
+      p.life++; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+      if (p.emoji) { p.vy += .03; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.font = p.s + 'px serif'; ctx.fillText(p.emoji, -p.s / 2, p.s / 2); ctx.restore(); }
+      else { p.vy += .28; p.vx *= .99; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c;
+        ctx.globalAlpha = Math.max(0, 1 - el / 3600); ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h * Math.abs(Math.cos(p.r))); ctx.restore(); }
+    }
+    if (el < 3800) requestAnimationFrame(frame); else cv.remove();
+  })(t0);
+  return new Promise(r => setTimeout(r, 2300));  // strona odświeża się dopiero po głównej części pokazu
+}
+// wygrana zapisana przed przeładowaniem strony (np. zapis z formularza edycji) — pokaż po wczytaniu
+document.addEventListener('DOMContentLoaded', () => {
+  let w = null; try { w = JSON.parse(sessionStorage.getItem('crm-win') || 'null'); sessionStorage.removeItem('crm-win'); } catch (e) {}
+  if (w) crmCelebrate(w);
+});
+function crmToast(text) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = text; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+</script>
 <script>
 /* motyw i menu konta */
 function crmToggleTheme() {
@@ -1461,6 +1747,8 @@ crmThemeLabel();
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') document.body.classList.remove('nav-open'); });
 document.querySelectorAll('.quick-new .btn').forEach(b => b.addEventListener('click', () => document.body.classList.remove('nav-open')));
 document.addEventListener('click', (ev) => {
+  const bell = document.getElementById('bellMenu');
+  if (bell && bell.classList.contains('open') && !ev.target.closest('.bell-wrap')) bell.classList.remove('open');
   const menu = document.getElementById('meMenu');
   if (menu && menu.classList.contains('open') && !ev.target.closest('.me')) menu.classList.remove('open');
 });

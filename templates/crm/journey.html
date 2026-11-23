@@ -16,6 +16,22 @@
 {{ jr.styles() }}
 <style>
 .jr-alert { font-size: 12.5px; margin-bottom: 12px; }
+.jr-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 2px; }
+.jr-chip { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--panel3); color: var(--text2); white-space: nowrap; }
+.jr-chip.ok { background: var(--green-soft); color: var(--green); }
+.jr-chip.wait { background: var(--yellow-soft); color: var(--yellow); }
+.jr-chip.bad { background: var(--red-soft); color: var(--red); }
+.jr-acts { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.jr-card .btn { white-space: normal; text-align: left; line-height: 1.25; max-width: 100%; }
+.jr-more { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.jr-more > summary { cursor: pointer; font-size: 12px; color: var(--muted); list-style: none; }
+.jr-more > summary::before { content: "▸ "; }
+.jr-more[open] > summary::before { content: "▾ "; }
+.jr-more[open] > summary { margin-bottom: 6px; }
+.jr-card { cursor: grab; transition: transform .15s, box-shadow .15s; }
+.jr-card:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(0, 0, 0, .15); }
+.jr-col { max-height: calc(100vh - 210px); overflow-y: auto; }
+
 .jr-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
 @media (max-width: 1100px) { .jr-board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .jr-board { grid-template-columns: 1fr; } }
@@ -63,19 +79,40 @@
     <div class="jr-card u-{{ v.urgency or 'none' }}" id="j{{ lead.id }}" draggable="true" data-lead="{{ lead.id }}">
       <div class="jr-top">
         <a class="jr-name" href="{{ url_for('crm_lead_detail', lead_id=lead.id) }}#journey">{{ lead.company }}</a>
-        {% if lead.value_pln %}<span class="jr-val">{{ lead.value_pln|pln }} {{ lead.currency or 'EUR' }}</span>{% endif %}
+        {% if lead.value_pln %}<span class="jr-val">{{ lead.value_pln|pln }} {{ lead.currency or mkt.currency }}</span>{% endif %}
       </div>
       <div class="jr-sub">{{ jr.when(v) }}{% if USERS_BY_ID.get(lead.assigned_to) %} · {{ USERS_BY_ID[lead.assigned_to].name }}{% endif %}</div>
+      {% set j = v.j %}
       {% set files = files_by_lead.get(lead.id, {}) %}
+      {% set sugg = pending_by_lead.get(lead.id, []) %}
+      {% set shown = files.values()|map(attribute='id')|list %}
+      {% set unseen = unseen_by_lead.get(lead.id, [])|rejectattr('id', 'in', shown)|list %}
+      <div class="jr-chips">
+        <span class="jr-chip {{ {'podpisana': 'ok', 'wyslana': 'wait'}.get(j.contract_status, 'bad') }}" title="Umowa">📝 {{ {'podpisana': 'podpisana', 'wyslana': 'wysłana'}.get(j.contract_status, 'umowa: nie wysłana') }}</span>
+        <span class="jr-chip {{ {'otrzymana': 'ok', 'wyslana': 'wait'}.get(j.kb_status, 'bad') }}" title="Baza wiedzy robota">🧠 {{ {'otrzymana': 'baza jest', 'wyslana': 'baza: prośba wysłana'}.get(j.kb_status, 'baza: brak') }}</span>
+        {% if sugg %}<span class="jr-chip wait" title="Maile z poczty do zatwierdzenia">✉️ {{ sugg|length }} do decyzji</span>{% endif %}
+        {% if unseen %}<span class="jr-chip wait">📎 nowy dokument</span>{% endif %}
+      </div>
+      {% set acts = v.actions|selectattr(2)|list %}
+      {% if not v.st.needs_review and (acts or v.actions|selectattr(0, 'equalto', 'faktura')|list) %}
+      <div class="jr-acts">
+        {% for key, label, kind, urgent in acts[:2] %}
+        <button type="button" class="btn {{ 'btn-primary' if urgent or loop.first else 'btn-secondary' }} btn-sm" onclick="event.stopPropagation(); openJourneyMail({{ lead.id }}, '{{ kind }}')" title="CRM przygotował maila — sprawdzisz go przed wysłaniem">{{ label }}</button>
+        {% endfor %}
+        {% if v.actions|selectattr(0, 'equalto', 'faktura')|list %}<button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); openInvoice({{ lead.id }})" title="inFakt → PDF mailem do klienta">🧾 Faktura</button>{% endif %}
+      </div>
+      {% endif %}
+      <details class="jr-more" {{ 'open' if v.st.needs_review or sugg or unseen }} onclick="event.stopPropagation()">
+        <summary>Szczegóły i statusy</summary>
       {{ jr.state_box(v, url_for('crm_journey') ~ '#j' ~ lead.id, files) }}
       {{ jr.suggestions(pending_by_lead.get(lead.id, []), url_for('crm_journey') ~ '#j' ~ lead.id) }}
-      {% set shown = files.values()|map(attribute='id')|list %}
       {% for d in unseen_by_lead.get(lead.id, []) if d.id not in shown %}
       <div class="jr-line" onclick="event.stopPropagation()">Nowy dokument:
         <a class="jr-doclink" href="{{ url_for('crm_journey_doc_pdf', doc_id=d.id) if d.pdf else url_for('crm_journey_doc_file', doc_id=d.id) }}" target="_blank" onclick="setTimeout(() => location.reload(), 800)">{{ d.filename|truncate(40) }}</a>
       </div>
       {% endfor %}
-      {% if not v.st.needs_review %}{{ jr.action_buttons(v) }}{% endif %}
+        {% if not v.st.needs_review %}{{ jr.action_buttons(v) }}{% endif %}
+      </details>
     </div>
     {% else %}
     <div class="jr-empty">{{ 'Nic do zrobienia.' if only else 'Pusto.' }}</div>
