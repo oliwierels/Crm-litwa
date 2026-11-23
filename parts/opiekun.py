@@ -60,18 +60,37 @@ def _owner_worked(lead_id, uid):
                                                     StageHistory.from_stage.isnot(None)).first() is not None
 
 
-def owner_cleanup_once():
-    """Jednorazowe porządki przypisań (opis na górze pliku). Zwraca raport albo None, gdy już zrobione."""
-    if get_setting(OWNER_CLEANUP_KEY) or not _claim_once(OWNER_CLEANUP_KEY + "_lock"):
-        return None
-    report = {"at": datetime.utcnow().isoformat(timespec="seconds"), "moved": [], "lost_tasks": 0, "auto_tasks": 0}
+def _owner_acted(lead, uid):
+    """Ślady pracy, które osoba `uid` zostawiła przy leadzie SAMA (nie automat w jej imieniu): obsłużenie w panelu
+    nowych leadów, wysłany mail z CRM, telefon z zapisanym wynikiem, jej komentarz albo zadanie, komentarz do zadania,
+    wysłana oferta, zmiana etapu. Zadanie automatu zamknięte w jej imieniu (np. nieaktualny szkic) się nie liczy."""
+    if lead.handled_by == uid:
+        return True
+    acts = db.session.query(Activity.id).filter(Activity.lead_id == lead.id)
+    if acts.filter(db.or_(Activity.created_by == uid,
+                          db.and_(Activity.assigned_to == uid, Activity.done.is_(True),
+                                  db.or_(Activity.outcome.isnot(None), Activity.notes.like("✉️ Mail z CRM%"))))).first():
+        return True
+    if db.session.query(SentOffer.id).filter(SentOffer.lead_id == lead.id, SentOffer.sender_id == uid,
+                                             SentOffer.sent_at.isnot(None)).first():
+        return True
+    if db.session.query(ActivityComment.id).filter(ActivityComment.author_id == uid,
+                                                   ActivityComment.activity_id.in_(acts)).first():
+        return True
+    return db.session.query(StageHistory.id).filter(StageHistory.lead_id == lead.id, StageHistory.changed_by == uid,
+                                                    StageHistory.from_stage.isnot(None)).first() is not None
+
+
+def _move_legacy_leads(report, worked):
+    """Leady rynku przypisane na sztywno przy imporcie użytkownikowi nr 1, przy których `worked(lead)` mówi „nic nie
+    robił” → domyślny opiekun rynku (z otwartymi zadaniami i komentarzem, skąd zmiana)."""
     for code in markets.MARKETS:
         owner = default_owner(code)
         if owner == _LEGACY_IMPORT_OWNER:
             continue
         for lead in all_markets(Lead.query.filter(Lead.market == code, Lead.assigned_to == _LEGACY_IMPORT_OWNER,
                                                   Lead.stage.in_(ACTIVE_STAGES), own_leads())).all():
-            if _owner_worked(lead.id, _LEGACY_IMPORT_OWNER):
+            if worked(lead):
                 continue  # Oliwier prowadzi tego leada — zostaje u niego
             lead.assigned_to = owner  # otwarte zadania przechodzą razem z leadem (_owner_tasks_follow)
             db.session.add(Activity(
@@ -80,6 +99,30 @@ def owner_cleanup_once():
                       f"automatycznie przy imporcie do {USERS_BY_ID[_LEGACY_IMPORT_OWNER]['name']}."))
             report["moved"].append(lead.id)
     db.session.flush()
+
+
+OWNER_CLEANUP_V2_KEY = "owner_cleanup_v2"
+
+
+def owner_cleanup_v2_once():
+    """Druga, dokładniejsza tura porządków: pierwsza liczyła jako pracę Oliwiera także zadania automatu zamknięte
+    w jego imieniu, więc część nieruszanych leadów została u niego. Teraz liczą się tylko jego własne działania
+    (_owner_acted). Raz; raport z listą przeniesionych leadów zostaje w ustawieniu."""
+    if get_setting(OWNER_CLEANUP_V2_KEY) or not _claim_once(OWNER_CLEANUP_V2_KEY + "_lock"):
+        return None
+    report = {"at": datetime.utcnow().isoformat(timespec="seconds"), "moved": []}
+    _move_legacy_leads(report, lambda lead: _owner_acted(lead, _LEGACY_IMPORT_OWNER))
+    set_setting(OWNER_CLEANUP_V2_KEY, json.dumps(report))
+    db.session.commit()
+    return report
+
+
+def owner_cleanup_once():
+    """Jednorazowe porządki przypisań (opis na górze pliku). Zwraca raport albo None, gdy już zrobione."""
+    if get_setting(OWNER_CLEANUP_KEY) or not _claim_once(OWNER_CLEANUP_KEY + "_lock"):
+        return None
+    report = {"at": datetime.utcnow().isoformat(timespec="seconds"), "moved": [], "lost_tasks": 0, "auto_tasks": 0}
+    _move_legacy_leads(report, lambda lead: _owner_worked(lead.id, _LEGACY_IMPORT_OWNER))
     for lead in all_markets(Lead.query.filter(Lead.stage == "Stracony")).all():
         report["lost_tasks"] += clear_open_tasks(lead)
     for act in all_markets(Activity.query.join(Lead, Activity.lead_id == Lead.id).filter(
@@ -90,6 +133,20 @@ def owner_cleanup_once():
     set_setting(OWNER_CLEANUP_KEY, json.dumps(report))
     db.session.commit()
     return report
+
+
+_DRAFT_CLOSING = "\nPozdrawiam serdecznie\n"
+
+
+def draft_signed_by(body, user, lead=None):
+    """Szkic pierwszej odpowiedzi (sales_rules.private_draft) podpisany osobą, która go otwiera i wysyła — szkic mógł
+    powstać, gdy lead miał jeszcze innego opiekuna (np. przed przeniesieniem do Jerzego)."""
+    if _DRAFT_CLOSING not in (body or ""):
+        return body
+    code = lead_market(lead) if lead is not None else DEFAULT_MARKET
+    phone = mail_phone(user.get("phone", ""), code)
+    return (body.rsplit(_DRAFT_CLOSING, 1)[0] + _DRAFT_CLOSING + (user.get("full_name") or user["name"])
+            + (f"\n{phone}" if phone else ""))
 
 
 @app.route("/crm/leads/<int:lead_id>/opiekun", methods=["POST"])

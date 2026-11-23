@@ -651,6 +651,7 @@ def _realize_scheduler():
                 cleanup_offer_audit_steps()
                 cleanup_won_tasks_once()  # raz: wygrane leady bez otwartych zadań (dalej Customer Journey)
                 owner_cleanup_once()  # raz: leady z importu do domyślnego opiekuna rynku, zadania za opiekunem
+                owner_cleanup_v2_once()  # raz: to samo, liczą się tylko własne działania Oliwiera
                 clear_form_day_event_dates()
                 db.session.remove()
             health_beat("automaty")
@@ -7916,6 +7917,7 @@ def crm_mail_compose():
     draft_body = ""
     if draft and (draft.notes or "").startswith(sales_rules.PRIVATE_DRAFT_PREFIX) and "\n---\n" in draft.notes:
         head, draft_body = draft.notes.split("\n---\n", 1)
+        draft_body = draft_signed_by(draft_body, user, draft.lead)
         m = re.search(r"^Temat: (.+)$", head, re.M)
         subject = subject or (m.group(1).strip() if m else "")
         lead = lead or draft.lead

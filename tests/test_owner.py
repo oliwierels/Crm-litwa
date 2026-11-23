@@ -147,3 +147,37 @@ def test_new_lead_alert_shows_only_to_its_owner(app):
     assert lead.id not in ids(BARTEK), "inna osoba nie jest blokowana cudzym leadem"
     assert crm.alerts_state(CODE, user_id=BARTEK)["team_waiting"] >= 1
     assert lead.id in [r["id"] for r in crm.alerts_state(CODE)["leads"]], "bez osoby (MCP, raporty) — wszystkie"
+
+
+def test_second_cleanup_ignores_auto_tasks_closed_in_oliwiers_name(app):
+    for key in (crm.OWNER_CLEANUP_V2_KEY, crm.OWNER_CLEANUP_V2_KEY + "_lock"):
+        row = crm.db.session.get(crm.AppSetting, key)
+        if row is not None:
+            crm.db.session.delete(row)
+    crm.db.session.commit()
+    auto_closed = mk("Szkic Zamknięty Przez Automat", OLIWIER)
+    task(auto_closed, OLIWIER, done=True, kind="email", notes="✉️ Pierwsza odpowiedź (osoba prywatna) — szkic")
+    left = task(auto_closed, OLIWIER, notes="📞 Zadzwoń do osoby prywatnej")
+    called = mk("Oliwier Zadzwonił", OLIWIER)
+    a = task(called, OLIWIER, done=True, notes="Rozmowa")
+    a.outcome = "odebral"
+    mailed = mk("Oliwier Napisał", OLIWIER)
+    task(mailed, OLIWIER, done=True, kind="email", notes="✉️ Mail z CRM do klient@example.com")
+    crm.db.session.commit()
+    report = crm.owner_cleanup_v2_once()
+    assert report is not None and crm.owner_cleanup_v2_once() is None, "tylko raz"
+    for obj in (auto_closed, left, called, mailed):
+        crm.db.session.refresh(obj)
+    if crm.default_owner(CODE) != OLIWIER:  # CRM PL
+        assert auto_closed.assigned_to == JERZY and left.assigned_to == JERZY and auto_closed.id in report["moved"]
+    assert called.assigned_to == OLIWIER and mailed.assigned_to == OLIWIER, "własne działania Oliwiera — lead zostaje"
+
+
+def test_private_draft_is_signed_by_the_person_sending_it(app):
+    body = crm.sales_rules.private_draft("Jan Kowalski", "Jan Kowalski", "2 h za 2 800 zł netto",
+                                         sender_name="Oliwier Latek", sender_phone="+48 531 408 004")[1]
+    jerzy = crm.USERS_BY_ID[JERZY]
+    out = crm.draft_signed_by(body, jerzy)
+    assert out.rstrip().endswith(jerzy["full_name"] + ((f"\n{jerzy['phone']}") if jerzy.get("phone") else ""))
+    assert "Oliwier Latek" not in out and out.startswith("Dzień dobry Jan,")
+    assert crm.draft_signed_by("Inny tekst bez zakończenia", jerzy) == "Inny tekst bez zakończenia"
