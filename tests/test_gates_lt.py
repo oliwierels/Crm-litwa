@@ -1,10 +1,12 @@
 """Bramki etapów, typ klienta przy ofercie i telefon potwierdzający — UI, API i MCP (CRM LT/DE)."""
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
 import crm
+
+FAR_DAY = (date.today() + timedelta(days=400)).isoformat()  # zawsze daleko w przyszłości
 
 
 @pytest.fixture(autouse=True)
@@ -145,7 +147,7 @@ def test_mcp_create_won_lead_needs_data():
     assert "error" in out and "NIE został utworzony" in out["error"]
     assert not crm.Lead.query.filter_by(company="Po Fakcie").first()
     out = json.loads(crm._assistant_execute("create_lead", {
-        "company": "Po Fakcie", "stage": "Wygrany", "value": 5000, "event_dates": ["2026-12-01"],
+        "company": "Po Fakcie", "stage": "Wygrany", "value": 5000, "event_dates": [FAR_DAY],
         "win_confirmation": "mail", "client_type": "firma"}, crm.USERS[0])[0])
     assert out.get("ok")
     assert crm.db.session.get(crm.Lead, out["lead_id"]).stage == "Wygrany"
@@ -189,7 +191,7 @@ def test_edit_form_stage_gate(client):
 def test_stage_check_uses_form_values(client):
     lead = mk("Check", client_type="firma")
     r = client.post(f"/crm/api/leads/{lead.id}/stage-check", json={"stage": "Wygrany", "win_confirmation": "mail",
-                                                                   "value_pln": "5000", "event_dates": "2026-12-01"})
+                                                                   "value_pln": "5000", "event_dates": FAR_DAY})
     assert r.json["ok"], r.json
     assert crm.db.session.get(crm.Lead, lead.id).value_pln is None  # sprawdzenie niczego nie zapisuje
 

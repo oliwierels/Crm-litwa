@@ -36,11 +36,16 @@ def merge_leads(keeper, dup, actor_id=None):
         Journey.query.filter_by(lead_id=dup.id).update({"lead_id": keeper.id}, synchronize_session=False)
     for model in moved:
         model.query.filter_by(lead_id=dup.id).update({"lead_id": keeper.id}, synchronize_session=False)
+    # główny lead ma już swoje dni — inne daty z duplikatu (np. nowy termin podany w ClickUp) nie mogą przepaść
+    own_days = {d.event_date for d in keeper.event_days}
+    extra_days = sorted({d.event_date for d in dup.event_days} - own_days) if keeper.event_days else []
     added = to_local(dup.created_at)
     db.session.add(Activity(
         lead_id=keeper.id, kind="note", done=True, done_at=datetime.utcnow(), assigned_to=actor_id or keeper.assigned_to or 1,
         notes=f"🔗 Scalono duplikat #{dup.id} „{dup.company}” (źródło: {dup.source or '—'}, etap: {dup.stage}"
-              f"{f', dodany {added:%d.%m %H:%M}' if added else ''}) — jego komentarze i zadania są teraz tutaj.",
+              f"{f', dodany {added:%d.%m %H:%M}' if added else ''}) — jego komentarze i zadania są teraz tutaj."
+              + (f"\n📅 Duplikat miał też inne daty: {', '.join(f'{d:%d.%m.%Y}' for d in extra_days)} — sprawdź termin."
+                 if extra_days else ""),
     ))
     db.session.flush()
     db.session.expire(keeper)

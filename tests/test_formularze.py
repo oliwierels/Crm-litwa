@@ -149,3 +149,22 @@ def test_inbox_form_never_stores_machine_address(app, monkeypatch):
     assert lead is not None, rec.reason
     MADE.append(lead.id)
     assert (lead.contact_email or "").lower() == "aneta.form@wp-test.pl", "e-mail klienta z treści, nie Formspree"
+
+
+def test_merge_keeps_duplicate_dates_as_note(app):
+    """Scalenie kopii z importu: gdy główny lead ma już dni, inne daty z kopii nie przepadają (komentarz przy leadzie)."""
+    from datetime import date, timedelta
+    keeper = crm.Lead(company="Scalanie Główny", stage="Oferta", assigned_to=3, market=CODE, contact_phone="600111222")
+    dup = crm.Lead(company="Scalanie Kopia", stage="Nowy", assigned_to=3, market=CODE, contact_phone="600111222",
+                   source="ClickUp", clickup_task_id="cu-scal-1")
+    crm.db.session.add_all([keeper, dup])
+    crm.db.session.commit()
+    MADE.append(keeper.id)
+    d1, d2 = date.today() + timedelta(days=30), date.today() + timedelta(days=60)
+    crm.set_lead_event_days(keeper, [d1], {})
+    crm.set_lead_event_days(dup, [d2], {})
+    crm.db.session.commit()
+    crm.merge_leads(keeper, dup)
+    crm.db.session.commit()
+    notes = " ".join(a.notes for a in crm.Activity.query.filter_by(lead_id=keeper.id, kind="note").all())
+    assert "Scalono duplikat" in notes and f"{d2:%d.%m.%Y}" in notes, "nowy termin z kopii widoczny przy leadzie"
