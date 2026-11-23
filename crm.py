@@ -652,6 +652,7 @@ def _realize_scheduler():
                 cleanup_won_tasks_once()  # raz: wygrane leady bez otwartych zadań (dalej Customer Journey)
                 owner_cleanup_once()  # raz: leady z importu do domyślnego opiekuna rynku, zadania za opiekunem
                 owner_cleanup_v2_once()  # raz: to samo, liczą się tylko własne działania Oliwiera
+                clickup_release_waiting_once()  # raz: litewskie leady z „Z ClickUp” na tablicę (bez automatycznych maili)
                 clear_form_day_event_dates()
                 db.session.remove()
             health_beat("automaty")
@@ -1152,9 +1153,13 @@ def _sync_clickup_main(list_id):
             ))
             linked += 1
             continue
+        # jak w CRM PL: nowe zgłoszenia od razu na tablicę (bez akceptacji); stare taski (np. usunięte kiedyś z CRM,
+        # które ClickUp wciąż ma na liście) trafiają do „Z ClickUp”, żeby nie wróciły same na tablicę
+        created = fields.get("created_at")
+        fresh = created is None or created >= datetime.utcnow() - timedelta(days=CLICKUP_AUTO_ACCEPT_DAYS)
         lead = Lead(
             company=fields["company"], clickup_task_id=task_id, stage="Nowy",
-            clickup_pending=True,  # ląduje w zakładce "Z ClickUp", nie od razu w CRM
+            clickup_pending=not fresh,
             assigned_to=fields.get("assigned_to") or default_owner(DEFAULT_MARKET), source=fields.get("source", "ClickUp"),
             notes=fields.get("notes", ""), currency=fields.get("currency", "EUR"),
             market=markets.detect(fields.get("contact_phone"), [fields.get("contact_email")]) or DEFAULT_MARKET,
@@ -1163,10 +1168,95 @@ def _sync_clickup_main(list_id):
             if f in fields:
                 setattr(lead, f, fields[f])
         db.session.add(lead)
+        if fresh:
+            db.session.flush()
+            db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage=lead.stage, changed_by=None))
         imported += 1
     db.session.commit()
+    # świeże leady, które jeszcze czekają w „Z ClickUp” (np. z czasu przed tą zmianą) — też od razu do CRM
+    if Lead.query.filter(Lead.clickup_pending.is_(True), Lead.created_at >= datetime.utcnow()
+                         - timedelta(days=CLICKUP_AUTO_ACCEPT_DAYS)).first():
+        clickup_bulk_accept(days=CLICKUP_AUTO_ACCEPT_DAYS)
     return True, imported, (f"Zaimportowano {imported} nowych, odświeżono {refreshed} oczekujących leadów z ClickUp"
                             + (f", {linked} połączono z istniejącymi (bez duplikatów)" if linked else ""))
+
+
+def clickup_bulk_accept(days=30, actor_id=None):
+    """Akceptuje leady czekające w „Z ClickUp”, które wpadły w ostatnich `days` dniach (jak w CRM PL). Lead, który
+    już jest w CRM (ten sam telefon albo e-mail), nie jest dublowany: task ClickUp zostaje przypięty do istniejącego
+    leada, a kopia z poczekalni znika. Zwraca dict z podsumowaniem."""
+    since = datetime.utcnow() - timedelta(days=days)
+    pending = (Lead.query.filter(Lead.clickup_pending.is_(True), Lead.created_at >= since)
+               .order_by(Lead.created_at).all())
+    by_phone, by_email = {}, {}
+    for l in Lead.query.filter(Lead.clickup_pending.isnot(True)).order_by(Lead.created_at).all():
+        pk = _phone_key(l.contact_phone)
+        if pk:
+            by_phone.setdefault(pk, l)
+        for e in (l.contact_email, l.contact_email2):
+            ek = _email_key(e)
+            if ek:
+                by_email.setdefault(ek, l)
+    accepted, merged = [], []
+    for lead in pending:
+        pk = _phone_key(lead.contact_phone)
+        eks = [k for k in (_email_key(lead.contact_email), _email_key(lead.contact_email2)) if k]
+        same = (by_phone.get(pk) if pk else None) or next((by_email[k] for k in eks if k in by_email), None)
+        if same is not None:
+            task_id = lead.clickup_task_id
+            for f in ("contact_name", "contact_email", "contact_phone", "location"):
+                if not getattr(same, f) and getattr(lead, f):
+                    setattr(same, f, getattr(lead, f))
+            db.session.add(Activity(
+                lead_id=same.id, kind="note", done=True, done_at=datetime.utcnow(),
+                assigned_to=same.assigned_to or USERS[0]["id"],
+                notes=f"🔗 Ten sam klient był też w ClickUp („{lead.company}”) — nie dodano duplikatu."
+                      + (f"\n{lead.notes}" if lead.notes else "")))
+            for model in (InboxMessage, CampaignRecipient, SentOffer, ContractRequest):
+                model.query.filter_by(lead_id=lead.id).update({"lead_id": None}, synchronize_session=False)
+            db.session.delete(lead)
+            db.session.flush()
+            if task_id:
+                if not same.clickup_task_id:
+                    same.clickup_task_id = task_id
+                else:
+                    set_setting(f"clickup_dup:{task_id}"[:64], str(same.id))
+            merged.append(f"{lead.company} → #{same.id} {same.company}")
+            continue
+        lead.clickup_pending = False
+        db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage=lead.stage, changed_by=actor_id))
+        accepted.append(lead.id)
+        if pk:
+            by_phone.setdefault(pk, lead)
+        for k in eks:
+            by_email.setdefault(k, lead)
+    db.session.commit()
+    return {"accepted": len(accepted), "accepted_ids": accepted, "merged": len(merged), "merged_list": merged[:50],
+            "left_pending_older": Lead.query.filter(Lead.clickup_pending.is_(True)).count(),
+            "at": datetime.utcnow().isoformat(timespec="seconds"), "days": days}
+
+
+CLICKUP_RELEASE_KEY = "clickup_lt_release_v1"
+
+
+def clickup_release_waiting_once():
+    """Raz po wdrożeniu: CRM LT/DE dotąd zostawiał KAŻDY lead z litewskiego ClickUp w „Z ClickUp” (bez akceptacji
+    nie było go na tablicy ani na liście), więc litewskie leady „nie wpadały”. Teraz wszystkie czekające trafiają
+    na tablicę (z łączeniem duplikatów). Do klientów nic nie wychodzi: automatyczny pierwszy mail bierze tylko leady
+    z ostatnich LT_AUTO_MAIL_MAX_AGE_H godzin. Raport zostaje w ustawieniu."""
+    if get_setting(CLICKUP_RELEASE_KEY) or not _claim_once(CLICKUP_RELEASE_KEY + "_lock"):
+        return None
+    res = clickup_bulk_accept(days=3650)
+    for lead_id in res["accepted_ids"]:
+        db.session.add(Activity(lead_id=lead_id, kind="note", done=True, done_at=datetime.utcnow(),
+                                assigned_to=(db.session.get(Lead, lead_id).assigned_to or USERS[0]["id"]),
+                                notes="📥 Lead z ClickUp czekał w zakładce „Z ClickUp” (CRM nie przenosił ich sam na "
+                                      "tablicę) — teraz jest na tablicy. Automatyczny mail do klienta nie wyszedł: "
+                                      "skontaktuj się ręcznie."))
+    set_setting(CLICKUP_RELEASE_KEY, json.dumps({k: v for k, v in res.items() if k != "accepted_ids"}
+                                                | {"accepted_ids": res["accepted_ids"][:200]}, ensure_ascii=False))
+    db.session.commit()
+    return res
 
 
 def _clickup_scheduler():
@@ -5396,6 +5486,7 @@ LT_CITIES = ("vilnius", "kaunas", "klaipėda", "klaipeda", "šiauliai", "siaulia
              "mazeikiai", "lietuva", "lithuania", "litwa", "litauen", "wilno", "kowno", "kłajpeda")
 LT_SINCE_KEY = "lt_mail_since"
 LT_POLL_SECONDS = 60  # nowy litewski lead dostaje maila najpóźniej minutę po wpadnięciu do CRM
+LT_AUTO_MAIL_MAX_AGE_H = int(os.environ.get("LT_AUTO_MAIL_MAX_AGE_H", "48") or 48)  # starszym — nic samo
 
 
 def lt_sender(code=None):
@@ -5892,7 +5983,8 @@ def lt_auto_mail():
         set_setting(LT_SINCE_KEY, datetime.utcnow().isoformat(timespec="seconds"))
         db.session.commit()
         return 0
-    since_dt = datetime.fromisoformat(since)
+    # tylko świeże leady: stary lead (np. zaległy z ClickUp, przeniesiony z poczekalni) nie dostaje automatu
+    since_dt = max(datetime.fromisoformat(since), datetime.utcnow() - timedelta(hours=LT_AUTO_MAIL_MAX_AGE_H))
     sent = 0
     for lead in Lead.query.filter(Lead.created_at >= since_dt, Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
                                   Lead.clickup_pending.isnot(True)  # czeka w „Z ClickUp” — nic do klienta przed akceptacją
@@ -8130,6 +8222,9 @@ def _server_error(e):
 from sqlalchemy.exc import IntegrityError as _IntegrityError  # noqa: E402
 
 LEAD_ALERT_DAYS = int(os.environ.get("LEAD_ALERT_DAYS", "2") or 2)  # przy pierwszym uruchomieniu: leady z tylu dni
+# okno „obsłuż dziś” pokazuje leady najwyżej z tylu dni — starsze (np. zaległe z poczekalni ClickUp) są na tablicy,
+# ale nie zasłaniają CRM
+LEAD_ALERT_MAX_DAYS = int(os.environ.get("LEAD_ALERT_MAX_DAYS", "7") or 7)
 LEAD_ALERT_SINCE_KEY = "lead_alert_since"
 MAIL_REVIEW_HOURS = [int(h) for h in (os.environ.get("MAIL_REVIEW_HOURS", "12,15") or "12,15").split(",")
                      if h.strip().isdigit() and 0 <= int(h) <= 23]
@@ -8218,7 +8313,8 @@ def unhandled_leads(code=None):
     """Nowe leady rynku `code` (domyślnie oglądanego), z którymi nikt się jeszcze nie skontaktował (do obsłużenia
     dziś). Nieodebrany telefon (📵) to jeszcze nie kontakt."""
     code = code or current_market()
-    q = all_markets(Lead.query.filter(Lead.market == code, Lead.created_at >= lead_alert_since(),
+    q = all_markets(Lead.query.filter(Lead.market == code, Lead.created_at >= max(
+        lead_alert_since(), datetime.utcnow() - timedelta(days=LEAD_ALERT_MAX_DAYS)),
                                       Lead.handled_at.is_(None), Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
                                       Lead.clickup_pending.isnot(True), Lead.id.notin_(_contact_done_ids())))
     # w CRM PL litewskie i niemieckie leady obsługuje CRM LT / DE (zabiera je w ciągu kilku minut) — tu ich nie
