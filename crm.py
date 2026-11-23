@@ -64,6 +64,11 @@ STAGES = ["Nowy", "Oferta", "Wygrany", "Zrealizowany", "Stracony"]
 REMOVED_STAGES = {"Kontakt": "Nowy", "Negocjacje": "Oferta"}
 # wygrane: Wygrany = czeka na realizację, Zrealizowany = dzień realizacji minął (CRM przenosi sam)
 WON_STAGES = ("Wygrany", "Zrealizowany")
+# Wygrane leady z CRM LT / CRM DE wracają tutaj — z flagą 🇱🇹/🇩🇪 przed nazwą — do logistyki (ekipa, robot, trasa)
+# i do zestawień WYGRANYCH (dashboard, statystyki, panel skuteczności, MCP): to jedyna wspólna agregacja danych
+# obu CRM. Klienta prowadzi CRM LT/DE (maile, umowa, faktura) i on nadpisuje te leady; polski CRM nic do nich
+# nie wysyła (Customer Journey, kampanie), nie liczy ich jako nowych / straconych i nie robi z nimi automatyzacji.
+MARKET_COPY_SOURCES = ("CRM LT", "CRM DE")
 STAGE_COLORS = {  # Kontakt/Negocjacje zostają tylko dla starych wpisów w historii etapów
     "Nowy": "#6366f1",
     "Kontakt": "#3b82f6",
@@ -561,7 +566,9 @@ def lead_country(lead):
     """Kraj leada: wpisany ręcznie albo podpowiedź (faktura, język klienta, domena, waluta, miejsce)."""
     if lead.country:
         return lead.country
-    if getattr(lead, "market", None) in markets.MARKETS:  # CRM LT/DE: kraj = rynek leada
+    if is_market_copy(lead):
+        return "LT" if lead.source == "CRM LT" else "DE"
+    if len(markets.MARKETS) > 1 and getattr(lead, "market", None) in markets.MARKETS:  # kilka rynków: kraj = rynek
         return lead.market.upper()
     places = " ".join([lead.location or ""] + [d.location or "" for d in lead.event_days])
     return sales_rules.suggest_country(places, lead.currency, lead.emails, lead.contact_phone, lead.billing_country,
@@ -690,7 +697,7 @@ def sum_by_currency(leads):
     totals = {}
     for lead in leads:
         if lead.value_pln:
-            cur = lead.currency or "EUR"
+            cur = lead.currency or M(lead_market(lead))["currency"]
             totals[cur] = totals.get(cur, 0) + lead.value_pln
     return totals
 
@@ -699,7 +706,7 @@ def sum_by_currency(leads):
 def fmt_money(totals):
     """{'PLN': 12000, 'EUR': 3000} -> '12 000 PLN + 3 000 EUR'."""
     if not totals:
-        return "0 EUR"
+        return f"0 {M()['currency']}"
     parts = [f"{fmt_pln(totals[c])} {c}" for c in CURRENCIES if c in totals]
     parts += [f"{fmt_pln(v)} {c}" for c, v in totals.items() if c not in CURRENCIES]
     return " + ".join(parts)
@@ -729,7 +736,7 @@ def build_daily_summary():
         kind_label = ACTIVITY_KIND_LABELS.get(a.kind, a.kind).lower()
         return f"  - {lead}: {kind_label} ({due}, {who})"
 
-    lines = [f"33bots LT CRM - raport {date.today().strftime('%d.%m.%Y')}", ""]
+    lines = [f"{M()['brand']} - raport {date.today().strftime('%d.%m.%Y')}", ""]
     lines.append(f"PRZETERMINOWANE ({len(overdue)}):")
     lines += [fmt_act(a) for a in overdue] or ["  brak"]
     lines.append("")
@@ -756,7 +763,7 @@ _include("clickup_mapowanie")
 
 def _clickup_get(path, params=None, token=None):
     token = (token or os.environ.get("CLICKUP_API_TOKEN", "")).strip()
-    headers = {"Authorization": token, "User-Agent": "33bots-LT-CRM/1.0"}
+    headers = {"Authorization": token, "User-Agent": "33bots-CRM/1.0"}
     last_err = None
     for attempt in range(3):  # chwilowe zerwanie połączenia nie powinno wywalać synchronizacji
         try:
@@ -1315,12 +1322,12 @@ def _closing_entry(lead, history=None):
 
 
 def own_leads():
-    """W CRM LT/DE wszystkie leady są własne (kopie z innych CRM są tylko w CRM PL)."""
-    return db.true()
+    """Filtr: leady polskiego CRM, bez kopii wygranych z CRM LT/DE (do automatyzacji i wszystkiego poza wygranymi)."""
+    return db.or_(Lead.source.is_(None), Lead.source.notin_(MARKET_COPY_SOURCES))
 
 
 def is_market_copy(lead):
-    return False
+    return (lead.source or "") in MARKET_COPY_SOURCES
 
 
 def foreign_market(lead):
@@ -1529,7 +1536,7 @@ def api_activities():
                     "lead_contact": lead.contact_name or "",
                     "robot_model": lead.robot_model or "",
                     "value_pln": lead.value_pln,
-                    "currency": lead.currency or "EUR",
+                    "currency": lead.currency or M(lead_market(lead))["currency"],
                     "location": run_location,
                     "rental_days": days,
                     "stage": lead.stage,
@@ -1904,7 +1911,7 @@ def crm_export_leads():
             lead.id, lead.company, lead.contact_name or "", lead.contact_email or "", lead.contact_email2 or "",
             lead.contact_phone or "", lead.stage, lead.quality or "Średni", lead.robot_model or "",
             lead.rental_days or "", int(lead.value_pln) if lead.value_pln else "",
-            lead.currency or "EUR", lead.location or "",
+            lead.currency or M(lead_market(lead))["currency"], lead.location or "",
             lead.source or "", USERS_BY_ID.get(lead.assigned_to, {}).get("name", ""),
             lead.event_date.strftime("%Y-%m-%d") if lead.event_date else "",
             lead.event_end_date.strftime("%Y-%m-%d") if lead.event_end_date else "",
@@ -2127,6 +2134,8 @@ def crm_delete_lead(lead_id):
             model.query.filter_by(lead_id=lead.id).update({"lead_id": None}, synchronize_session=False)
         JourneyMail.query.filter_by(lead_id=lead.id).update({"lead_id": None, "pending": False}, synchronize_session=False)
         _journey_badge_reset()
+        if lead.clickup_task_id:  # usunięty / odrzucony — synchronizacja z ClickUp nie doda go ponownie
+            set_setting(f"clickup_dup:{lead.clickup_task_id}"[:64], "usunięty")
         db.session.delete(lead)
         db.session.commit()
     return redirect(url_for("crm_leads"))
@@ -2174,7 +2183,7 @@ def _nominatim_lookup(q):
             r = requests.get(_NOMINATIM_URL, params={
                 "q": q, "format": "jsonv2", "limit": 1,
                 "countrycodes": _NOMINATIM_COUNTRIES, "accept-language": "pl",
-            }, headers={"User-Agent": "33bots-LT-CRM/1.0 (33bots.pl)"}, timeout=4)
+            }, headers={"User-Agent": "33bots-CRM/1.0 (33bots.pl)"}, timeout=4)
         if r.status_code != 200:
             return "error", None
         data = r.json()
@@ -2577,7 +2586,7 @@ def ensure_journeys():
     „do potwierdzenia” (nie wiadomo, co już do nich poszło) i przenosimy dokumenty z dawnego formularza umowy."""
     launched = get_setting("jr_launched")
     missing = Lead.query.filter(Lead.stage.in_(JOURNEY_STAGES), Lead.clickup_pending.isnot(True),
-                                ~Lead.journey.has()).all()
+                                ~Lead.journey.has(), own_leads()).all()
     for lead in missing:
         # zrealizowane od razu do archiwum — bez pytania „co już poszło?”
         ensure_journey(lead, needs_review=not launched and lead.stage == "Wygrany")
@@ -3012,7 +3021,8 @@ def _lead_billing_from(lead, f):
     lead.billing_street = (f.get("street") or "").strip()[:200] or None
     lead.billing_postcode = (f.get("postcode") or "").strip()[:20] or None
     lead.billing_city = (f.get("city") or "").strip()[:120] or None
-    lead.billing_country = ((f.get("country") or "LT").strip().upper()[:2]) or "LT"
+    country = M(lead_market(lead))["country"]
+    lead.billing_country = ((f.get("country") or country).strip().upper()[:2]) or country
     lead.billing_email = ", ".join(email_list(f.get("email")))[:200] or None
 
 
@@ -3076,7 +3086,7 @@ def journey_invoice_draft(j, lead):
 def _invoice_form_errors(f):
     if not (f.get("name") or "").strip():
         return "Podaj nazwę nabywcy."
-    country = (f.get("country") or "LT").strip().upper()
+    country = (f.get("country") or M()["country"]).strip().upper()
     if country == "PL" and f.get("nip") and not journey.nip_valid(f.get("nip")):
         return "NIP jest niepoprawny."
     if journey.to_grosze(f.get("net")) is None:
@@ -3586,31 +3596,6 @@ ASSISTANT_TOOLS = [
 _include("poczta_wyslane")
 
 
-def mail_phone(phone, code):
-    """Telefon do podpisu maila na rynku `code`. Niemcy: bez polskiego numeru (telefon jest tylko w PDF oferty);
-    niemiecki numer można ustawić w Railway: MAIL_PHONE_DE."""
-    code = code if code in markets.MARKETS else "lt"
-    if markets.get(code).get("mail_phone", True):
-        return phone or ""
-    return os.environ.get(f"MAIL_PHONE_{code.upper()}", "").strip()
-
-
-_PL_PHONE_LINE = re.compile(r"^[ \t]*(?:(?:tel|telefon|phone|mobil|handy|mob)\.?[ \t]*:?[ \t]*)?(?:\+|00)48[\d \t-]{9,14}[ \t]*$",
-                            re.I | re.M)
-
-
-def strip_pl_phone(body, sender):
-    """Zabezpieczenie: z maili wysyłanych ze skrzynek rynku bez telefonu (33bots.de) znikają linie z samym polskim
-    numerem (+48 …) — np. z podpisu dopisanego przez Claude albo z szablonu."""
-    email = ((sender or {}).get("email") or (sender or {}).get("login") or "").lower()
-    code = next((c for c in markets.MARKETS if email.endswith("@" + markets.get(c)["domain"])), None)
-    if not code or markets.get(code).get("mail_phone", True) or not body:
-        return body
-    out = _PL_PHONE_LINE.sub("", body)
-    own = re.sub(r"\D", "", (sender or {}).get("phone") or "")
-    if len(own) >= 9:
-        out = "\n".join(l for l in out.split("\n") if re.sub(r"\D", "", l) != own or not l.strip())
-    return re.sub(r"\n{3,}", "\n\n", out)
 
 
 # Teksty do klientów (maile, szkice, oferty, wiadomości na komunikatory) bez „AI-owej” typografii: długie myślniki
@@ -3625,13 +3610,14 @@ HUMAN_TYPO_RULE = ("Pisz jak człowiek w zwykłym mailu, w każdym języku (tak�
 
 
 def human_text(text):
-    """Tekst do klienta bez typowych dla AI znaków — patrz _AI_TYPO."""
+    """Tekst do klienta (mail, szkic, oferta) bez typowych dla AI znaków — patrz _AI_TYPO."""
     if not isinstance(text, str) or not text:
         return text
     return text.translate(_AI_TYPO)
 
 
 def human_deep(value):
+    """human_text na wszystkich tekstach w dict / liście (np. pola oferty PDF)."""
     if isinstance(value, str):
         return human_text(value)
     if isinstance(value, dict):
@@ -4457,7 +4443,7 @@ _NO_FORCED_TOOL_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-
 def _ai_forced_tool(model, system, user_text, tool, max_tokens=4096):
     """Wywołanie Claude'a, które ma skończyć się użyciem jednego narzędzia — zwraca jego argumenty.
     Najpierw wymusza narzędzie (tool_choice=tool); modele, które tego nie obsługują (np. Sonnet 5.5),
-    dostają tool_choice=auto z wyraźnym poleceniem w treści i jedną ponowną próbą."""
+    dostają od razu tool_choice=auto z wyraźnym poleceniem w treści i jedną ponowną próbą."""
     import anthropic
     client = _ai_client()
     if client is None:
@@ -5145,7 +5131,7 @@ def _campaign_ai_draft(instruction, sender):
 
 
 def _campaign_form_leads():
-    return Lead.query.filter(Lead.clickup_pending.isnot(True)).order_by(Lead.stage, Lead.company).all()
+    return Lead.query.filter(Lead.clickup_pending.isnot(True), own_leads()).order_by(Lead.stage, Lead.company).all()
 
 
 CAMPAIGN_PICK_MODEL = os.environ.get("CAMPAIGN_PICK_MODEL", OFFER_AI_MODEL)
@@ -5171,7 +5157,7 @@ def _campaign_lead_line(lead):
     parts = [
         f"#{lead.id}", lead.company or "", lead.contact_name or "", "@" + domain, lead.stage,
         f"źródło: {lead.source}" if lead.source else "", lead.location or "",
-        f"{lead.value_pln:g} {lead.currency or 'EUR'}" if lead.value_pln else "",
+        f"{lead.value_pln:g} {lead.currency or M(lead_market(lead))['currency']}" if lead.value_pln else "",
         "wynajem " + ", ".join(f"{d:%d.%m.%Y}" for d in days[:3]) if days else "", note,
     ]
     return " | ".join(p for p in parts if p)
@@ -7282,7 +7268,7 @@ def mail_query_for_addrs(addrs):
 
 def mail_lead_for(row):
     """Lead, z którym związany jest mail (adres klienta w Od/Do/DW)."""
-    own = {b["login"] for b in mail_boxes()} | {(u.get("email") or "").lower() for u in USERS}
+    own = _own_addresses()
     for addr in (row.addrs or "").split():
         if addr in own or addr.split("@")[-1] in OWN_DOMAINS:
             continue
@@ -8274,7 +8260,7 @@ MAIL_REVIEW_TOOL = {
 
 
 def _own_addresses():
-    return {b["login"] for b in mail_boxes()} | {u["email"].lower() for u in USERS if u.get("email")}
+    return {b["login"] for b in mail_boxes()} | {(u.get("email") or "").lower() for u in USERS if u.get("email")}
 
 
 def _is_external(addr, own):
@@ -8645,6 +8631,8 @@ def _health_hint(key, alarm):
         return HEALTH_HINTS["quiet:leads"]
     if key.startswith("quiet:mail"):
         return HEALTH_HINTS["quiet:mail"]
+    if key.startswith("robot:"):
+        return HEALTH_HINTS["robot:"]
     hint = HEALTH_HINTS.get(job) or HEALTH_HINTS.get(base) or ""
     if "stoi" in (alarm.get("title") or ""):
         hint += (" Wątek nie zgłasza się — zwykle pomaga restart usługi w Railway (Deployments → Restart); "
@@ -8847,7 +8835,7 @@ def health_report():
             "log": _setting_json(HEALTH_LOG_KEY, [])[:25], "checked_at": checked,
             "checked_text": health.fmt(checked),
             "watch_stale": checked is None or now - checked > timedelta(minutes=health.CHECK_MINUTES * 4),
-            "every_min": health.CHECK_MINUTES, "robot": False}
+            "every_min": health.CHECK_MINUTES, "robot": "robot_agents_plan" in globals()}
 
 
 _include("straznik_widoki")

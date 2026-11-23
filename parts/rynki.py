@@ -45,3 +45,30 @@ def _default_market():
     if has_request_context():
         return getattr(g, "market_force", None) or current_market()
     return DEFAULT_MARKET
+
+
+def mail_phone(phone, code):
+    """Telefon do podpisu maila na rynku `code`. Niemcy: bez polskiego numeru (telefon jest tylko w PDF oferty);
+    niemiecki numer można ustawić w Railway: MAIL_PHONE_DE."""
+    code = code if code in markets.MARKETS else markets.DEFAULT
+    if markets.get(code).get("mail_phone", True):
+        return phone or ""
+    return os.environ.get(f"MAIL_PHONE_{code.upper()}", "").strip()
+
+
+_PL_PHONE_LINE = re.compile(r"^[ \t]*(?:(?:tel|telefon|phone|mobil|handy|mob)\.?[ \t]*:?[ \t]*)?(?:\+|00)48[\d \t-]{9,14}[ \t]*$",
+                            re.I | re.M)
+
+
+def strip_pl_phone(body, sender):
+    """Zabezpieczenie: z maili wysyłanych ze skrzynek rynku bez telefonu (33bots.de) znikają linie z samym polskim
+    numerem (+48 …) — np. z podpisu dopisanego przez Claude albo z szablonu. Na rynkach z telefonem — bez zmian."""
+    email = ((sender or {}).get("email") or (sender or {}).get("login") or "").lower()
+    code = next((c for c in markets.MARKETS if email.endswith("@" + markets.get(c)["domain"])), None)
+    if not code or markets.get(code).get("mail_phone", True) or not body:
+        return body
+    out = _PL_PHONE_LINE.sub("", body)
+    own = re.sub(r"\D", "", (sender or {}).get("phone") or "")
+    if len(own) >= 9:
+        out = "\n".join(l for l in out.split("\n") if re.sub(r"\D", "", l) != own or not l.strip())
+    return re.sub(r"\n{3,}", "\n\n", out)
