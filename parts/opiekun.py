@@ -92,4 +92,24 @@ def owner_cleanup_once():
     return report
 
 
+@app.route("/crm/leads/<int:lead_id>/opiekun", methods=["POST"])
+def crm_lead_owner(lead_id):
+    """Zmiana opiekuna z nagłówka karty leada. Otwarte zadania poprzedniego opiekuna przechodzą na nowego,
+    a w komentarzach zostaje ślad, kto zmienił."""
+    lead = db.session.get(Lead, lead_id) or abort(404)
+    actor = get_current_user(request)
+    try:
+        uid = int(request.form.get("assigned_to", ""))
+    except ValueError:
+        uid = None
+    if uid in USERS_BY_ID and uid != lead.assigned_to:
+        old = USERS_BY_ID.get(lead.assigned_to, {}).get("name", "—")
+        lead.assigned_to = uid
+        db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(),
+                                assigned_to=actor["id"], created_by=actor["id"],
+                                notes=f"🔁 Opiekun: {old} → {USERS_BY_ID[uid]['name']}"))
+        db.session.commit()
+    return redirect(url_for("crm_lead_detail", lead_id=lead.id))
+
+
 app.jinja_env.globals.update(default_owner=default_owner)

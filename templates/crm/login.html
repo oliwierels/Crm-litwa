@@ -4,29 +4,38 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Logowanie – {{ crm_brand }}</title>
+<title>Logowanie – {{ crm_brand if crm_brand is defined else 'RoboRent CRM' }}</title>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111318; color: #dde1f0;
+:root { --bg: #f4f5f7; --card: #fff; --text: #15171c; --muted: #697080; --line: #e2e5ea; --field: #fff; --accent: #4f46e5; --red: #d92d20; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1115; --card: #171a21; --text: #e7e9f0; --muted: #8a92a6; --line: #272c37; --field: #1e222b; --accent: #6d6bff; --red: #f0645a; }
+}
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text);
        min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; font-size: 14px; }
-.card { width: 100%; max-width: 360px; background: #1c1e26; border: 1px solid #2a2d38; border-radius: 12px; padding: 28px 24px; }
-h1 { font-size: 18px; margin-bottom: 4px; }
-.sub { color: #6b7080; font-size: 13px; margin-bottom: 20px; }
-label { display: block; font-size: 12px; color: #8a8fa3; margin: 14px 0 6px; }
-select, input { width: 100%; background: #23262f; border: 1px solid #2a2d38; color: #dde1f0; border-radius: 8px;
+.card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 30px 28px;
+        box-shadow: 0 16px 40px rgba(16, 24, 40, .10); }
+.logo { width: 40px; height: 40px; border-radius: 11px; background: var(--accent); color: #fff; display: flex; align-items: center;
+        justify-content: center; font-size: 20px; margin-bottom: 14px; }
+h1 { font-size: 20px; margin-bottom: 4px; letter-spacing: -.01em; }
+.sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+label { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 14px 0 6px; }
+select, input { width: 100%; background: var(--field); border: 1px solid var(--line); color: var(--text); border-radius: 8px;
                 padding: 10px 12px; font-size: 15px; outline: none; }
-select:focus, input:focus { border-color: #5b5ef4; }
-button { width: 100%; margin-top: 20px; background: #5b5ef4; color: #fff; border: none; border-radius: 8px;
+select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+button { width: 100%; margin-top: 22px; background: var(--accent); color: #fff; border: none; border-radius: 8px;
          padding: 11px; font-size: 15px; font-weight: 600; cursor: pointer; }
-button:hover { opacity: .9; }
-.err { background: #ef444422; border: 1px solid #ef444466; color: #fca5a5; border-radius: 8px; padding: 9px 12px; font-size: 13px; margin-bottom: 4px; }
+button:hover { filter: brightness(.95); }
+.err { background: color-mix(in srgb, var(--red) 10%, transparent); border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+       color: var(--red); border-radius: 8px; padding: 9px 12px; font-size: 13px; margin-bottom: 4px; }
 </style>
 </head>
 <body>
 <form class="card" method="post" action="{{ url_for('crm_login') }}">
-  <h1>🤖 {{ crm_brand }}</h1>
-  <div class="sub">Zaloguj się, żeby wejść do CRM.</div>
+  <div class="logo">🤖</div>
+  <h1>{{ crm_brand if crm_brand is defined else 'RoboRent CRM' }}</h1>
+  <div class="sub">Wybierz siebie i wpisz hasło zespołu.</div>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   <input type="hidden" name="next" value="{{ next }}">
   <label for="user_id">Kim jesteś</label>

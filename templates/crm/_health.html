@@ -2,7 +2,7 @@
 {% set halarms = health_alarm_list() %}
 {% if halarms and request.endpoint != 'crm_health' %}
 {% set h0 = halarms[0] %}
-<a href="{{ url_for('crm_health') }}" style="display:flex;gap:8px;align-items:center;margin:8px 16px 0;padding:7px 12px;border-radius:8px;font-size:13px;text-decoration:none;color:var(--text);border:1px solid {{ 'rgba(220,38,38,.6)' if h0.level == 'red' else 'rgba(234,179,8,.6)' }};background:{{ 'rgba(220,38,38,.12)' if h0.level == 'red' else 'rgba(234,179,8,.10)' }}">
+<a href="{{ url_for('crm_health') }}" class="notice {{ 'notice-danger' if h0.level == 'red' else 'notice-warn' }}">
   <span>🛡️ <b>Strażnik CRM:</b> {{ '🔴' if h0.level == 'red' else '🟡' }} {{ h0.title }}{% if halarms|length > 1 %} <span style="color:var(--muted)">(+{{ halarms|length - 1 }})</span>{% endif %}</span>
   <span style="margin-left:auto;white-space:nowrap">Szczegóły →</span>
 </a>

@@ -7,7 +7,7 @@
 .pf-wrap { max-width: 560px; display: flex; flex-direction: column; gap: 14px; }
 .pf-msg { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; line-height: 1.5; }
 .pf-ok { background: #22c55e1a; border: 1px solid #22c55e55; color: var(--green); }
-.pf-warn { background: #eab3081a; border: 1px solid #eab30855; color: #fde68a; }
+.pf-warn { background: var(--yellow-soft); border: 1px solid color-mix(in srgb, var(--yellow) 35%, transparent); color: var(--yellow); }
 .pf-err { color: var(--red); font-size: 12px; margin-top: 4px; }
 .pf-hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 .pf-wrap code { background: var(--panel2); border-radius: 3px; padding: 0 4px; color: var(--text); }
@@ -58,7 +58,7 @@
           zmienną <code>{{ mailbox_key }}</code> z hasłem do tej skrzynki.</div>
         {% endif %}
       {% else %}
-        <span style="color:#fde68a">⚠️ Brak skrzynki — maile od Ciebie się nie wyślą.</span>
+        <span style="color: var(--yellow)">⚠️ Brak skrzynki — maile od Ciebie się nie wyślą.</span>
         <div class="pf-hint">Dodaj w Railway → web → Variables zmienną <code>{{ mailbox_key }}</code> z hasłem do Twojej
           skrzynki ({{ values.email or 'firmowy e-mail z profilu' }}) albo wspólną skrzynkę <code>SMTP_USER</code> / <code>SMTP_PASS</code>.</div>
       {% endif %}

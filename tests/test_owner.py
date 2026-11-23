@@ -136,3 +136,14 @@ def test_new_task_defaults_to_logged_in_person(app):
     a = crm.lead_open_tasks(lead.id).first()
     with crm.app.test_request_context():
         assert a.assigned_to == me(crm.request)["id"]
+
+
+def test_new_lead_alert_shows_only_to_its_owner(app):
+    lead = mk("Nowy Lead Jerzego", JERZY)
+    lead.source = "Formularz"
+    crm.db.session.commit()
+    ids = lambda uid: [r["id"] for r in crm.alerts_state(CODE, user_id=uid)["leads"]]  # noqa: E731
+    assert lead.id in ids(JERZY), "opiekun widzi swojego nowego leada w oknie alarmów"
+    assert lead.id not in ids(BARTEK), "inna osoba nie jest blokowana cudzym leadem"
+    assert crm.alerts_state(CODE, user_id=BARTEK)["team_waiting"] >= 1
+    assert lead.id in [r["id"] for r in crm.alerts_state(CODE)["leads"]], "bez osoby (MCP, raporty) — wszystkie"

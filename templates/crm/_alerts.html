@@ -4,41 +4,49 @@
 {% set n_leads = alerts.leads|length %}
 {% set n_tasks = alerts.tasks|length %}
 <style>
-.al-bar { position:relative; z-index:60; display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 16px;
-          background:#7f1d1d; color:#fff; font-size:13.5px; border-bottom:2px solid #ef4444; }
-.al-bar.al-hot { animation: al-pulse 1.6s ease-in-out infinite; }
-.al-bar.al-calm { background:#78350f; border-bottom-color:#f59e0b; }
-.al-bar a { color:#fde68a; text-decoration:underline; }
-.al-bar button { margin-left:auto; background:#fff; color:#7f1d1d; border:0; border-radius:7px; padding:6px 14px; font-weight:800; cursor:pointer; }
-@keyframes al-pulse { 0%,100% { background:#7f1d1d; } 50% { background:#dc2626; } }
-.al-overlay { position:fixed; inset:0; z-index:9500; background:rgba(5,6,10,.78); backdrop-filter:blur(3px);
-              display:flex; align-items:flex-start; justify-content:center; padding:4vh 16px; overflow:auto; }
+/* pasek alarmów: spokojny kolor i pulsująca kropka zamiast migającego całego paska */
+.al-bar { position:relative; z-index:60; display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 28px;
+          background:var(--red-soft); color:var(--text); font-size:13px; border-bottom:1px solid color-mix(in srgb, var(--red) 25%, transparent); }
+.al-bar::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--red); flex-shrink:0; }
+.al-bar.al-hot::before { animation: al-dot 1.6s ease-out infinite; }
+.al-bar.al-hot b { color:var(--red); }
+.al-bar.al-calm { background:var(--yellow-soft); border-bottom-color:color-mix(in srgb, var(--yellow) 30%, transparent); }
+.al-bar.al-calm::before { background:var(--yellow); }
+.al-bar a { color:inherit; text-decoration:underline; }
+.al-bar button { margin-left:auto; background:var(--red); color:#fff; border:0; border-radius:7px; padding:5px 12px; font-weight:600; font-size:12.5px; cursor:pointer; }
+.al-bar.al-calm button { background:var(--yellow); }
+@keyframes al-dot { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--red) 55%, transparent); } 100% { box-shadow:0 0 0 9px transparent; } }
+.al-overlay { position:fixed; inset:0; z-index:9500; background:rgba(15,17,21,.55); backdrop-filter:blur(3px);
+              display:flex; align-items:flex-start; justify-content:center; padding:5vh 16px; overflow:auto; }
 .al-overlay[hidden] { display:none; }
-.al-modal { width:100%; max-width:980px; background:var(--panel); border:3px solid #ef4444; border-radius:14px;
-            box-shadow:0 0 0 6px rgba(239,68,68,.18), 0 20px 60px rgba(0,0,0,.6); animation: al-ring 1.6s ease-in-out infinite; }
-@keyframes al-ring { 0%,100% { box-shadow:0 0 0 4px rgba(239,68,68,.15), 0 20px 60px rgba(0,0,0,.6); } 50% { box-shadow:0 0 0 12px rgba(239,68,68,.35), 0 20px 60px rgba(0,0,0,.6); } }
-.al-head { padding:16px 20px; border-bottom:1px solid var(--border); }
-.al-head h2 { margin:0; font-size:20px; color:#fca5a5; }
-.al-head p { margin:4px 0 0; color:var(--muted); font-size:12.5px; }
-.al-sec { padding:6px 20px 14px; }
-.al-sec h3 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:12px 0 8px; }
-.al-row { border:1px solid var(--border); border-left:4px solid #ef4444; border-radius:9px; padding:10px 12px; margin-bottom:8px; background:var(--panel2); }
-.al-row.al-old { border-left-color:#f97316; }
-.al-row.al-task { border-left-color:#f59e0b; }
-.al-row.al-task.al-urgent { border-left-color:#ef4444; }
+.al-modal { width:100%; max-width:960px; background:var(--panel); border:1px solid var(--border); border-top:4px solid var(--red); border-radius:14px;
+            box-shadow:var(--shadow-lg); }
+.al-head { padding:18px 22px 14px; border-bottom:1px solid var(--border); }
+.al-head h2 { margin:0; font-size:19px; color:var(--text); letter-spacing:-.01em; }
+.al-head p { margin:6px 0 0; color:var(--muted); font-size:13px; max-width:760px; }
+.al-sec { padding:6px 22px 14px; }
+.al-sec h3 { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:12px 0 8px; font-weight:600; }
+.al-row { border:1px solid var(--border); border-left:3px solid var(--red); border-radius:10px; padding:12px 14px; margin-bottom:8px; background:var(--panel); box-shadow:var(--shadow-sm); }
+.al-row.al-old { border-left-color:#ea580c; }
+.al-row.al-task { border-left-color:var(--yellow); }
+.al-row.al-task.al-urgent { border-left-color:var(--red); }
 .al-top { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
-.al-top b { font-size:15px; }
-.al-meta { color:var(--muted); font-size:12px; }
-.al-age { margin-left:auto; font-size:12px; font-weight:700; color:#fca5a5; white-space:nowrap; }
-.al-notes { font-size:12.5px; color:var(--text); margin:5px 0 7px; opacity:.85; }
+.al-top b { font-size:14.5px; }
+.al-meta { color:var(--muted); font-size:12.5px; }
+.al-age { margin-left:auto; font-size:12px; font-weight:600; color:var(--red); white-space:nowrap; }
+.al-age.al-late { color:#fff; background:var(--red); border-radius:5px; padding:1px 6px; }
+.al-notes { font-size:12.5px; color:var(--text2); margin:6px 0 8px; }
 .al-acts { display:flex; gap:6px; flex-wrap:wrap; }
-.al-acts a, .al-acts button { font-size:12px; padding:6px 10px; border-radius:7px; border:1px solid var(--border); background:var(--panel);
+.al-acts a, .al-acts button { font-size:12.5px; padding:6px 10px; border-radius:7px; border:1px solid var(--border-strong); background:var(--panel);
                                color:var(--text); text-decoration:none; cursor:pointer; font-weight:600; }
+.al-acts a:hover, .al-acts button:hover { background:var(--panel2); }
 .al-acts .al-main { background:var(--accent); border-color:var(--accent); color:#fff; }
-.al-acts .al-ok { background:#166534; border-color:#22c55e; color:#fff; }
+.al-acts .al-main:hover { background:var(--accent-hover); }
+.al-acts .al-ok { background:var(--green); border-color:var(--green); color:#fff; }
+.al-acts .al-ok:hover { background:var(--green); filter:brightness(.95); }
 .al-acts [disabled] { opacity:.45; cursor:not-allowed; }
-.al-foot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:12px 20px; border-top:1px solid var(--border); font-size:12px; color:var(--muted); }
-.al-foot button { background:none; border:1px solid var(--border); color:var(--muted); border-radius:7px; padding:6px 10px; cursor:pointer; }
+.al-foot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:12px 22px; border-top:1px solid var(--border); font-size:12.5px; color:var(--muted); }
+.al-foot button { background:var(--panel); border:1px solid var(--border-strong); color:var(--text2); border-radius:7px; padding:6px 10px; cursor:pointer; }
 </style>
 <notr id="al-bar" class="al-bar {{ 'al-hot' if n_leads else 'al-calm' }}">
   {% if n_leads %}<span>🚨 <b>{{ n_leads }} {{ 'nowy lead czeka' if n_leads == 1 else 'nowe leady czekają' }} na obsługę</b> — trzeba je obsłużyć jeszcze dziś (telefon, mail albo oferta).</span>{% endif %}
@@ -59,14 +67,14 @@
   <div class="al-sec">
     <h3>Nowe leady</h3>
     {% for l in alerts.leads %}
-    {% set ask = "Napisz maila do nowego klienta: podziękuj za zapytanie o wynajem humanoidalnego robota Unitree G1 i poproś o brakujące informacje potrzebne do wyceny (data, miasto i miejsce, godziny od–do, rodzaj wydarzenia, liczba gości) — pytaj tylko o to, czego nie ma w danych leada." %}
+    {% set ask = "Napisz maila do nowego klienta: podziękuj za zapytanie o wynajem humanoidalnego robota Unitree G1 i poproś o brakujące informacje potrzebne do wyceny (data, miasto i miejsce, godziny od–do, rodzaj wydarzenia, liczba gości) — pytaj tylko o to, czego nie ma w danych leada. " %}
     {% set nocall = "Dzwoniliśmy do klienta w sprawie jego zapytania, ale nie odebrał. " ~ ask %}
     <div class="al-row {{ 'al-old' if l.old }}" data-lead="{{ l.id }}">
       <div class="al-top">
-        <b>{{ l.company }}</b>
+        <b>{{ l.flag ~ ' ' if l.flag }}{{ l.company }}</b>
         <span class="al-meta">{{ l.contact }}{% if l.phone %} · 📞 <a href="tel:{{ l.phone }}" style="color:inherit">{{ l.phone }}</a>{% endif %}{% if l.email %} · ✉️ {{ l.email }}{% endif %}{% if l.source %} · {{ l.source }}{% endif %}</span>
         <span class="al-age">{{ '⚠️ z poprzedniego dnia · ' if l.old }}wpadł {{ l.when }}{% if l.age_h < 24 %} ({{ l.age_h|round|int }} h temu){% endif %}</span>
-        {% if l.resp_min is not none %}<span class="al-age" style="{{ 'color:#fff;background:#dc2626;border-radius:5px;padding:1px 6px' if l.late else '' }}">⏱ {{ response_label(l.resp_min) }} pracy bez odpowiedzi{{ ' — przekroczony cel ' ~ l.target ~ ' min' if l.late }}</span>{% endif %}
+        {% if l.resp_min is not none %}<span class="al-age {{ 'al-late' if l.late }}">⏱ {{ response_label(l.resp_min) }} pracy bez odpowiedzi{{ ' — przekroczony cel ' ~ l.target ~ ' min' if l.late }}</span>{% endif %}
       </div>
       {% if l.notes %}<div class="al-notes">{{ l.notes }}</div>{% endif %}
       <div class="al-acts">
@@ -87,7 +95,7 @@
     <h3>Sprawy z poczty (przegląd Claude'a)</h3>
     {% for t in alerts.tasks %}
     <div class="al-row al-task {{ 'al-urgent' if t.priority == 'pilne' }}" data-task="{{ t.id }}">
-      <div class="al-top"><b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b><span class="al-meta">{{ t.counterpart }} · „{{ t.subject }}”</span><span class="al-age" style="color:#fcd34d">od {{ t.when }}</span></div>
+      <div class="al-top"><b>{{ '🔥 ' if t.priority == 'pilne' }}{{ t.title }}</b><span class="al-meta">{{ t.counterpart }} · „{{ t.subject }}”</span><span class="al-age" style="color:var(--yellow)">od {{ t.when }}</span></div>
       <div class="al-notes">{{ t.reason }}{% if t.action %} <b>→ {{ t.action }}</b>{% endif %}</div>
       {% if t.check_note %}<div class="al-notes" style="opacity:.75">🔎 Sprawdzone w poczcie: {{ t.check_note }}</div>{% endif %}
       <div class="al-acts">
@@ -120,7 +128,7 @@
   document.querySelectorAll('#al-overlay a[href]').forEach(function (el) {
     el.addEventListener('click', function () {
       const until = Date.now() / 1000 + 15 * 60;
-      document.cookie = '{{ "alert_snooze" }}=' + until + '; max-age=900; path=/; samesite=lax';
+      document.cookie = 'alert_snooze=' + until + '; max-age=900; path=/; samesite=lax';
     });
   });
   window.alOpen = function () { const o = document.getElementById('al-overlay'); if (o) { o.hidden = false; o.scrollTop = 0; } };

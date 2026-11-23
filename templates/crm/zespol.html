@@ -21,10 +21,10 @@
 .zs-table td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .zs-table th:first-child, .zs-table td:first-child, .zs-table .l { text-align: left; }
 .zs-table td.wrap { white-space: normal; min-width: 240px; width: 38%; }
-.zs-table tr:hover td { background: rgba(255,255,255,.03); }
+.zs-table tr:hover td { background: var(--panel2); }
 .zs-muted { color: var(--muted); font-size: 12px; }
 .zs-msg { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; background: #22c55e1a; border: 1px solid #22c55e55; }
-.zs-note { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; background: #eab3081a; border: 1px solid #eab30855; }
+.zs-note { border-radius: var(--radius); padding: 9px 12px; font-size: 13px; background: var(--yellow-soft); border: 1px solid color-mix(in srgb, var(--yellow) 35%, transparent); }
 .zs-task { border-top: 1px solid var(--border); padding: 8px 0; font-size: 13px; }
 .zs-task:first-child { border-top: none; }
 .zs-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
@@ -97,7 +97,7 @@
       <div class="zs-task"><b>{{ t.icon }} {{ t.what }}</b>{% if t.lead_id %} · <a href="{{ url_for('crm_lead_detail', lead_id=t.lead_id) }}">{{ t.lead or 'lead' }}</a>{% endif %}
         <span class="zs-muted">· dla: <b>{{ t.to }}</b>{% if t.due %} · termin {{ t.due[8:10] }}.{{ t.due[5:7] }}{% else %} · bez terminu{% endif %}</span>
         {% if t.overdue %}<span style="color:var(--red);font-size:12px"> · {{ t.overdue }} dn. po terminie</span>{% endif %}
-        {% if t.reason %}<div style="font-size:12.5px;margin-top:2px;color:#fca5a5">{{ t.reason }}</div>{% endif %}
+        {% if t.reason %}<div style="font-size:12.5px;margin-top:2px;color: var(--red)">{{ t.reason }}</div>{% endif %}
       </div>
       {% endfor %}
       {% if o_done %}
@@ -174,8 +174,8 @@
             <td>{% if r.ordered_done or r.ordered_open %}<span style="color:var(--green)">{{ r.ordered_done }}✓</span>{% if r.ordered_open %} <span style="color:var(--red)">{{ r.ordered_open }}✗</span>{% endif %}{% else %}<span class="zs-muted">—</span>{% endif %}</td>
             <td class="l wrap">
               {% if r.report and r.report.status == 'off' %}<span class="zs-muted">🌴 {{ r.report.off_reason }}</span>
-              {% elif r.report %}{{ (r.report.summary or '')|truncate(150) }}{% if r.report.blockers %} <span style="color:#fde68a">⚠ {{ r.report.blockers|truncate(80) }}</span>{% endif %}{% endif %}
-              {% for nd in r.not_done %}<div style="color:#fca5a5;font-size:12px">✗ {{ nd.what|truncate(60) }} — {{ nd.reason|truncate(90) }}</div>{% endfor %}
+              {% elif r.report %}{{ (r.report.summary or '')|truncate(150) }}{% if r.report.blockers %} <span style="color: var(--yellow)">⚠ {{ r.report.blockers|truncate(80) }}</span>{% endif %}{% endif %}
+              {% for nd in r.not_done %}<div style="color: var(--red);font-size:12px">✗ {{ nd.what|truncate(60) }} — {{ nd.reason|truncate(90) }}</div>{% endfor %}
             </td>
           </tr>
           {% endfor %}

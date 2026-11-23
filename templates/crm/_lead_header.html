@@ -1,0 +1,87 @@
+{# Nagłówek karty leada (wspólny dla CRM PL i LT/DE): kto, etap, opiekun, kontakt, wartość, termin i następny krok
+   w jednym miejscu — wszystko, czego szuka się najpierw, bez przewijania wąskiej kolumny. #}
+{% set q = lead.quality or 'Średni' %}
+{% set owner = USERS_BY_ID.get(lead.assigned_to) %}
+{% set nxt = (pending_fn(lead) or [None])[0] %}
+{% set main_stages = stages|reject('equalto', 'Stracony')|list %}
+{% set cur_i = main_stages.index(lead.stage) if lead.stage in main_stages else -1 %}
+{% set ic_text = {'green': 'aktywny', 'yellow': 'wymaga uwagi', 'red': 'bez kontaktu — zadzwoń'} %}
+<section class="ld-head panel">
+  <div class="ld-top">
+    <div class="ld-title">
+      <h1 class="ld-name">{{ lead.company }}</h1>
+      <div class="ld-tags">
+        <span class="qual-badge" style="background:{{ quality_colors[q] }}1f;color:{{ quality_colors[q] }}">{{ quality_icons[q] }} {{ q }}</span>
+        {% if lead.client_type %}<span class="chip">{{ client_types.get(lead.client_type, lead.client_type) }}</span>{% endif %}
+        {% if lead.source %}<span class="chip" title="Źródło leada"><i class="bi bi-box-arrow-in-right"></i> {{ lead.source }}</span>{% endif %}
+        <span class="chip" title="Ostatni kontakt {{ inactive_days }} dni temu"><span class="dot dot-{{ inactive_color }}"></span> {{ ic_text[inactive_color] }} · {{ inactive_days }} d</span>
+        {% if lead.created_at %}<span class="ld-muted">dodany {{ lead.created_at.strftime('%d.%m.%Y') }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="ld-actions">
+      {% if lead.contact_phone %}<a class="btn btn-secondary btn-sm" href="tel:{{ lead.contact_phone }}"><i class="bi bi-telephone"></i> Zadzwoń</a>{% endif %}
+      <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail_compose', lead=lead.id) }}"><i class="bi bi-envelope"></i> Napisz</a>
+      <a class="btn btn-secondary btn-sm" href="#oferta-ai" onclick="const t=document.querySelector('#oferta-ai textarea'); if (t) setTimeout(() => t.focus(), 300)"><i class="bi bi-stars"></i> Oferta</a>
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('crm_calculator', lead=lead.id) }}" title="Policz cenę: czas na miejscu + dojazd"><i class="bi bi-calculator"></i> Wyceń</a>
+    </div>
+  </div>
+
+  <div class="ld-pipe" role="group" aria-label="Etap leada">
+    {% for s in main_stages %}
+    {% set state = 'cur' if s == lead.stage else ('done' if cur_i > loop.index0 else '') %}
+    <button type="button" class="ld-step {{ state }}" style="--c:{{ stage_colors[s] }}" {{ 'aria-current=step' if s == lead.stage }}
+            onclick="crmStage({{ lead.id }}, '{{ s }}').then(ok => ok && location.reload())">{{ s }}</button>
+    {% endfor %}
+    <button type="button" class="ld-step ld-lost {{ 'cur' if lead.stage == 'Stracony' }}" style="--c:{{ stage_colors['Stracony'] }}"
+            onclick="crmStage({{ lead.id }}, 'Stracony').then(ok => ok && location.reload())" title="Oznacz jako stracony (zapyta o powód)">Stracony</button>
+  </div>
+
+  <div class="ld-facts">
+    <div class="ld-fact">
+      <div class="ld-label">Opiekun</div>
+      <form method="post" action="{{ url_for('crm_lead_owner', lead_id=lead.id) }}" class="ld-owner">
+        <span class="av-xs" style="{{ av_style(lead.assigned_to) }}">{{ owner.avatar if owner else '?' }}</span>
+        <select name="assigned_to" onchange="this.form.submit()" title="Zmień opiekuna — jego otwarte zadania przejdą na nową osobę">
+          {% if not owner %}<option value="">— brak —</option>{% endif %}
+          {% for u in users %}<option value="{{ u.id }}" {{ 'selected' if u.id == lead.assigned_to }}>{{ u.name }}</option>{% endfor %}
+        </select>
+      </form>
+    </div>
+    <div class="ld-fact">
+      <div class="ld-label">Kontakt</div>
+      <div class="ld-value">{{ lead.contact_name or '—' }}</div>
+      {% if lead.contact_phone %}<div class="ld-line"><a href="tel:{{ lead.contact_phone }}">{{ lead.contact_phone }}</a>
+        <button type="button" class="copy-btn" title="Kopiuj numer" data-copy="{{ lead.contact_phone }}" onclick="copyText(this)"><i class="bi bi-clipboard"></i></button></div>{% endif %}
+      {% for addr in [lead.contact_email, lead.contact_email2] if addr %}<div class="ld-line"><a href="mailto:{{ addr }}" class="ld-mail">{{ addr }}</a>
+        <button type="button" class="copy-btn" title="Kopiuj e-mail" data-copy="{{ addr }}" onclick="copyText(this)"><i class="bi bi-clipboard"></i></button></div>{% endfor %}
+    </div>
+    <div class="ld-fact">
+      <div class="ld-label">Wartość</div>
+      {% if lead.value_pln %}<div class="ld-value ld-money">{{ lead.value_pln|pln }} {{ lead.currency or 'PLN' }}</div>
+      {% else %}<div class="ld-value ld-empty">—</div><a class="ld-link" href="{{ url_for('crm_calculator', lead=lead.id) }}">🧮 wyceń</a>{% endif %}
+    </div>
+    <div class="ld-fact">
+      <div class="ld-label">Wydarzenie</div>
+      {% if lead.event_date %}
+      <div class="ld-value" style="color:var(--purple)">{{ lead.event_date.strftime('%d.%m.%Y') }}{% if lead.event_end_date and lead.event_end_date != lead.event_date %} – {{ lead.event_end_date.strftime('%d.%m') }}{% endif %}</div>
+      {% if lead.rental_days and lead.rental_days > 1 %}<div class="ld-line ld-muted">{{ lead.rental_days }} dni</div>{% endif %}
+      {% else %}<div class="ld-value ld-empty">brak daty</div>{% endif %}
+      {% if lead.location %}<div class="ld-line ld-muted"><i class="bi bi-geo-alt"></i> {{ lead.location }}</div>{% endif %}
+    </div>
+    <div class="ld-fact">
+      <div class="ld-label">Następny krok</div>
+      {% if nxt %}
+      {% set nu = USERS_BY_ID.get(nxt.assigned_to) %}
+      {% set urg = urgency_fn(nxt) %}
+      <div class="ld-value"><span>{{ kind_icons.get(nxt.kind, '•') }}</span> {{ kind_labels.get(nxt.kind, nxt.kind) }}</div>
+      <div class="ld-line"><span class="{{ {'overdue':'u-overdue','today':'u-today','soon':'u-soon'}.get(urg, 'ld-muted') }}">{{ nxt.due_date.strftime('%d.%m') if nxt.due_date else 'bez terminu' }}{{ ' · zaległe' if urg == 'overdue' }}{{ ' · dziś' if urg == 'today' }}</span>
+        {% if nu %}<span class="ld-muted">· {{ nu.name }}</span>{% endif %}</div>
+      {% elif lead.stage in ['Wygrany', 'Zrealizowany', 'Stracony'] %}
+      <div class="ld-value ld-empty">—</div>
+      {% else %}
+      <div class="ld-value" style="color:var(--red)">brak zadania</div>
+      <a class="ld-link" href="#dodaj-zadanie" onclick="setTimeout(() => document.querySelector('#dodaj-zadanie select')?.focus(), 200)">+ zaplanuj</a>
+      {% endif %}
+    </div>
+  </div>
+</section>

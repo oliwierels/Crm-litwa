@@ -22,7 +22,7 @@
       </div>
     {% endif %}
     {% if progress.errors %}
-      <div style="background:#ef44441a;border:1px solid #ef444455;border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12px">
+      <div style="background:var(--red-soft);border:1px solid #ef444455;border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12px">
         <b style="color:var(--red)">Nie udało się przenieść ({{ progress.errors|length }}):</b>
         <ul style="margin:6px 0 0 16px;padding:0">{% for e in progress.errors[:15] %}<li>{{ e }}</li>{% endfor %}</ul>
         <div style="color:var(--muted);margin-top:4px">Skopiuj to i wyślij — poprawię.</div>

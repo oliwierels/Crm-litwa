@@ -1,8 +1,8 @@
 {# Raport dnia: blokada CRM przy brakujących raportach z poprzednich dni + przypomnienie o dzisiejszym (reguły: team.py) #}
 {% set tg = team_gate() %}
 {% if tg and tg.block %}
-<div style="position:fixed;inset:0;z-index:9400;background:rgba(5,8,14,.93);display:flex;align-items:center;justify-content:center;padding:20px">
-  <div style="max-width:520px;width:100%;background:var(--panel);border:1px solid rgba(220,38,38,.6);border-radius:12px;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.6)">
+<div style="position:fixed;inset:0;z-index:9400;background:rgba(15,17,21,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="max-width:520px;width:100%;background:var(--panel);border:1px solid var(--border);border-top:4px solid var(--red);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow-lg)">
     <div style="font-size:18px;font-weight:700;margin-bottom:8px">📝 Najpierw raport dnia</div>
     <div style="font-size:13.5px;line-height:1.55">
       Brakuje {{ 'raportu' if tg.missing|length == 1 else 'raportów' }} za:
@@ -17,7 +17,7 @@
   </div>
 </div>
 {% elif tg and tg.remind %}
-<a href="{{ url_for('crm_day_report') }}" style="display:flex;gap:8px;align-items:center;margin:8px 16px 0;padding:7px 12px;border-radius:8px;font-size:13px;text-decoration:none;color:var(--text);border:1px solid rgba(234,179,8,.6);background:rgba(234,179,8,.10)">
+<a href="{{ url_for('crm_day_report') }}" class="notice notice-warn">
   <span>📝 <b>Raport dnia:</b> dzisiejszy jeszcze nie złożony — zrób to przed końcem pracy.</span>
   <span style="margin-left:auto;white-space:nowrap">Wypełnij →</span>
 </a>

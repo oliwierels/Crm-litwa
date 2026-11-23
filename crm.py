@@ -55,7 +55,7 @@ USERS = [
      "full_name": "Oliwier Latek", "phone": "+48 531 408 004"},
     {"id": 2, "name": "Bartek", "color": "#10b981", "avatar": "B", "email": "b.wysocki@33bots.pl",
      "full_name": "Bartosz Wysocki", "phone": "+48 601 499 947"},
-    {"id": 3, "name": "Jerzy", "color": "#f59e0b", "avatar": "J", "email": "j.chmielewski@33bots.pl",
+    {"id": 3, "name": "Jerzy", "color": "#d97706", "avatar": "J", "email": "j.chmielewski@33bots.pl",
      "full_name": "Jerzy Chmielewski", "phone": ""},
 ]
 USERS_BY_ID = {u["id"]: u for u in USERS}
@@ -88,7 +88,7 @@ def is_market_copy(lead):
 STAGE_COLORS = {  # Kontakt/Negocjacje zostają tylko dla starych wpisów w historii etapów
     "Nowy": "#6366f1",
     "Kontakt": "#3b82f6",
-    "Oferta": "#f59e0b",
+    "Oferta": "#d97706",
     "Negocjacje": "#ef4444",
     "Wygrany": "#10b981",
     "Zrealizowany": "#14b8a6",
@@ -117,7 +117,7 @@ ROBOT_MODEL_ALIASES = {
 CURRENCIES = list(dict.fromkeys([markets.get(markets.DEFAULT)["currency"], "PLN", "EUR", "USD", "GBP"]))  # rynku 1.
 
 QUALITY_LEVELS = ["Dobry", "Średni", "Słaby"]
-QUALITY_COLORS = {"Dobry": "#22c55e", "Średni": "#f59e0b", "Słaby": "#ef4444"}
+QUALITY_COLORS = {"Dobry": "#16a34a", "Średni": "#d97706", "Słaby": "#dc2626"}  # czytelne na jasnym i ciemnym tle
 QUALITY_ICONS = {"Dobry": "🟢", "Średni": "🟡", "Słaby": "🔴"}
 
 
@@ -8278,17 +8278,23 @@ def mail_tasks_visible():
     return to_local(datetime.utcnow()).hour >= MAIL_TASKS_SHOW_FROM
 
 
-def alerts_state(code=None):
-    """Co pokazać w oknie alarmów: nowe leady (zawsze) i sprawy z poczty (od MAIL_TASKS_SHOW_FROM)."""
+def alerts_state(code=None, user_id=None):
+    """Co pokazać w oknie alarmów: nowe leady (zawsze) i sprawy z poczty (od MAIL_TASKS_SHOW_FROM).
+    Z `user_id` nowe leady widzi tylko ich opiekun (lead bez opiekuna — każdy): w CRM PL nowe leady obsługuje Jerzy,
+    więc okno nie blokuje pozostałych osób cudzymi leadami."""
     code = code or current_market()
-    leads = [_lead_alert_row(l) for l in unhandled_leads(code)]
-    others = {mc: len(unhandled_leads(mc)) for mc in markets.MARKETS if mc != code}
+
+    def mine(lead):
+        return user_id is None or lead.assigned_to in (None, user_id)
+    waiting = unhandled_leads(code)
+    leads = [_lead_alert_row(l) for l in waiting if mine(l)]
+    others = {mc: len([l for l in unhandled_leads(mc) if mine(l)]) for mc in markets.MARKETS if mc != code}
     tasks = mail_tasks_open(code)
     show_tasks = mail_tasks_visible()
     # pasek „klienci z błędnym linkiem” wyłączony — sprawa zamknięta (lista zostaje pod /crm/poprawki, bez przypominania)
     return {"leads": leads, "other": {mc: n for mc, n in others.items() if n}, "badlinks": 0,
             "tasks": [_mail_task_row(t) for t in tasks] if show_tasks else [], "tasks_waiting": len(tasks),
-            "show_tasks": show_tasks, "show_from": MAIL_TASKS_SHOW_FROM}
+            "show_tasks": show_tasks, "show_from": MAIL_TASKS_SHOW_FROM, "team_waiting": len(waiting) - len(leads)}
 
 
 def _mail_task_row(t):
@@ -8308,7 +8314,7 @@ def _inject_alerts():
             None, "lead_form", "crm_login"):
         return {}
     try:
-        st = alerts_state()
+        st = alerts_state(user_id=get_current_user(request)["id"])
     except Exception:
         db.session.rollback()
         return {}
@@ -8323,7 +8329,7 @@ def _inject_alerts():
 
 @app.route("/crm/api/alerty")
 def crm_alerts_api():
-    st = alerts_state()
+    st = alerts_state(user_id=get_current_user(request)["id"])
     return jsonify({"leads": [l["id"] for l in st["leads"]], "lead_count": len(st["leads"]),
                     "task_count": len(st["tasks"]), "other": st["other"]})
 
@@ -8974,6 +8980,7 @@ def crm_mail_review_now():
 
 _include("nastepny_krok")
 _include("opiekun")
+_include("wyglad")
 _include("raporty_dnia")
 
 with app.app_context():

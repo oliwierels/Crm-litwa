@@ -57,8 +57,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/locales/{{ ui_lang }}.global.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/fullcalendar/index.global.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/fullcalendar/locales/' ~ ui_lang ~ '.global.min.js') }}"></script>
 <script>
 let curId = null;
 const ep = document.getElementById('ep');
