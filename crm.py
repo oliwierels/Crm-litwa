@@ -236,6 +236,7 @@ class Campaign(db.Model):
     started_at = db.Column(db.DateTime)
     last_sent_at = db.Column(db.DateTime)
     market = db.Column(db.String(2), nullable=False, default=_default_market)  # pl / lt / de — język i nadawca
+    personal = db.Column(db.Boolean, default=False)  # True = każdy odbiorca ma własny follow-up (parts/blitzkrieg_dane.py)
 
     recipients = db.relationship("CampaignRecipient", backref="campaign", cascade="all, delete-orphan",
                                  order_by="CampaignRecipient.id")
@@ -252,6 +253,10 @@ class CampaignRecipient(db.Model):
     status = db.Column(db.String(20), nullable=False, default="czeka")  # czeka | wyslany | blad | pominiety
     error = db.Column(db.String(300))
     sent_at = db.Column(db.DateTime)
+    subject = db.Column(db.String(300))  # follow-up: własny temat i treść tego odbiorcy (kampania personal)
+    body = db.Column(db.Text)
+    in_reply_to = db.Column(db.String(400))  # odpowiedź w wątku naszego ostatniego maila do klienta
+    refs = db.Column(db.Text)
 
     lead = db.relationship("Lead")
 
@@ -384,9 +389,18 @@ def ensure_schema():
             if "market" not in icols:
                 conn.exec_driver_sql(f"ALTER TABLE inbox_messages ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT '{mkt}'")
     if "campaigns" in insp.get_table_names():
-        if "market" not in [col["name"] for col in insp.get_columns("campaigns")]:
-            with db.engine.begin() as conn:
+        ccols = [col["name"] for col in insp.get_columns("campaigns")]
+        with db.engine.begin() as conn:
+            if "market" not in ccols:
                 conn.exec_driver_sql(f"ALTER TABLE campaigns ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT '{mkt}'")
+            if "personal" not in ccols:  # Blitzkrieg: osobny follow-up dla każdego (docs/MIGRACJE.md)
+                conn.exec_driver_sql("ALTER TABLE campaigns ADD COLUMN personal BOOLEAN DEFAULT FALSE")
+    if "campaign_recipients" in insp.get_table_names():
+        rcols = [col["name"] for col in insp.get_columns("campaign_recipients")]
+        with db.engine.begin() as conn:
+            for col, typ in (("subject", "VARCHAR(300)"), ("body", "TEXT"), ("in_reply_to", "VARCHAR(400)"), ("refs", "TEXT")):
+                if col not in rcols:
+                    conn.exec_driver_sql(f"ALTER TABLE campaign_recipients ADD COLUMN {col} {typ}")
     cols = [c["name"] for c in db.inspect(db.engine).get_columns("leads")]
     with db.engine.begin() as conn:
         if "contact_email2" not in cols:
@@ -5197,10 +5211,15 @@ def campaign_stats(c):
 def _campaign_send_one(c, rec):
     mc = c.market or (lead_market(rec.lead) if rec.lead_id else DEFAULT_MARKET)
     sender = market_sender(USERS_BY_ID.get(c.sender_id, USERS[0]), mc)
-    body = render_campaign_text(c.body, rec)
-    unsub = {"lt": "NE", "de": "NEIN"}.get(mc, "NIE")
-    err = _smtp_send(rec.email, render_campaign_text(c.subject, rec), body, sender["name"], sender=sender,
-                     headers={"List-Unsubscribe": "<mailto:{login}?subject=" + unsub + ">"})
+    msg = campaign_message(c, rec)  # parts/blitzkrieg_dane.py
+    if msg is None:
+        rec.status, rec.error = "pominiety", "brak treści follow-upu"
+        return False
+    subject, body, headers = msg
+    if not c.personal:
+        unsub = {"lt": "NE", "de": "NEIN"}.get(mc, "NIE")
+        headers = dict(headers, **{"List-Unsubscribe": "<mailto:{login}?subject=" + unsub + ">"})
+    err = _smtp_send(rec.email, subject, body, sender["name"], sender=sender, headers=headers)
     rec.sent_at = datetime.utcnow()
     c.last_sent_at = rec.sent_at
     if err:
@@ -5210,7 +5229,8 @@ def _campaign_send_one(c, rec):
     if rec.lead_id:
         db.session.add(Activity(lead_id=rec.lead_id, kind="note", done=True, done_at=datetime.utcnow(),
                                 assigned_to=sender["id"],
-                                notes=f"📣 Blitzkrieg „{c.name}” — wysłano do {rec.email}\nTemat: {c.subject}"))
+                                notes=f"📣 Blitzkrieg „{c.name}” — wysłano do {rec.email}\nTemat: {subject}"
+                                      + (f"\n---\n{body[:3000]}" if c.personal else "")))
     return True
 
 
@@ -5303,49 +5323,14 @@ CAMPAIGN_PICK_TOOL = {
 }
 
 
-def _campaign_lead_line(lead):
-    """Jedna linijka o leadzie dla Claude'a: tyle, żeby ocenić typ klienta i etap (z e-maila tylko domena)."""
-    domain = (lead.contact_email or "").strip().rsplit("@", 1)[-1].lower()
-    days = [ed.event_date for ed in lead.event_days if sane_event_date(ed.event_date)]
-    note = re.sub(r"\s+", " ", lead.notes or "").strip()[:220]
-    parts = [
-        f"#{lead.id}", lead.company or "", lead.contact_name or "", "@" + domain, lead.stage,
-        f"źródło: {lead.source}" if lead.source else "", lead.location or "",
-        f"{lead.value_pln:g} {lead.currency or M(lead_market(lead))['currency']}" if lead.value_pln else "",
-        "wynajem " + ", ".join(f"{d:%d.%m.%Y}" for d in days[:3]) if days else "", note,
-    ]
-    return " | ".join(p for p in parts if p)
-
-
 def pick_campaign_leads(audience, code=None):
-    """Claude wybiera z leadów z adresem e-mail tych, którzy pasują do opisu grupy (np. „agencje eventowe
-    ze zrealizowanych”). Zadanie w tle (_start_job) — zwraca lead_ids i krótkie uzasadnienie.
+    """Claude wybiera z leadów z adresem e-mail tych, którzy pasują do opisu grupy — po danych z CRM (wpadł N dni temu,
+    nieobsłużony, oferta bez odpowiedzi, wycena…) i po cechach (np. „agencje eventowe ze zrealizowanych”).
+    Zadanie w tle (_start_job) — zwraca lead_ids i krótkie uzasadnienie.
     Tylko leady rynku kampanii (`code`), bo w tle nie ma filtra rynku."""
     leads = [l for l in _campaign_form_leads() if EMAIL_RE.match((l.contact_email or "").strip())
              and (code is None or lead_market(l) == code)]
-    if not leads:
-        return {"error": "w CRM nie ma leadów z adresem e-mail"}
-    system = (
-        "Wybierasz odbiorców kampanii mailowej firmy 33bots (wynajem robotów humanoidalnych Unitree G1 na eventy) "
-        "z listy leadów CRM. Etapy: Nowy (zapytanie), Oferta (oferta wysłana), Wygrany (wynajem przed nami), "
-        "Zrealizowany (wynajem już się odbył), Stracony. Wybierz WYŁĄCZNIE leady pasujące do opisu użytkownika. "
-        "Typ klienta (agencja eventowa, szkoła/przedszkole, urząd/gmina, firma, osoba prywatna itd.) oceniaj po nazwie "
-        "firmy, domenie e-maila (gmail/wp/onet itp. = zwykle osoba prywatna) i notatce. Warunki o etapie, mieście, "
-        "dacie czy kwocie traktuj ściśle. Gdy nie masz pewności, czy lead pasuje — pomiń go i wspomnij o tym w podsumowaniu."
-    )
-    text = (f"Opis grupy odbiorców: {audience}\n\n"
-            "Leady (id | firma | osoba | domena e-maila | etap | źródło | miejsce | wartość | dni wynajmu | notatka):\n"
-            + "\n".join(_campaign_lead_line(l) for l in leads))
-    res = _ai_forced_tool(CAMPAIGN_PICK_MODEL, system, text, CAMPAIGN_PICK_TOOL, max_tokens=4000)
-    valid, ids = {l.id for l in leads}, []
-    for x in res.get("lead_ids") or []:
-        try:
-            i = int(x)
-        except (TypeError, ValueError):
-            continue
-        if i in valid and i not in ids:
-            ids.append(i)
-    return {"lead_ids": ids, "info": str(res.get("summary") or "").strip()[:600]}
+    return pick_leads_by_data(audience, leads)  # filtr z danych CRM + cechy (parts/blitzkrieg_dane.py)
 
 
 @app.route("/crm/blitzkrieg/wybierz", methods=["POST"])
@@ -5374,7 +5359,8 @@ def crm_campaign_new():
         "hour_from": f.get("hour_from", "8"), "hour_to": f.get("hour_to", "20"),
         "stages": f.getlist("stages"), "lead_ids": {int(x) for x in f.getlist("lead_ids") if x.isdigit()},
         "instruction": f.get("instruction", ""), "footer": f.get("footer", "1" if request.method == "GET" else ""),
-        "audience": f.get("audience", ""),
+        "audience": f.get("audience", ""), "mode": f.get("mode", "one"),
+        "followup_instruction": f.get("followup_instruction", ""),
     }
     error = None
     if request.method == "POST":
@@ -5402,8 +5388,15 @@ def crm_campaign_new():
                     email_addr = (lead.contact_email or "").strip()
                     if EMAIL_RE.match(email_addr) and email_addr.lower() not in chosen:
                         chosen[email_addr.lower()] = lead
+            personal = form["mode"] == "personal"
+            if personal:  # każdy dostanie własny follow-up od Claude'a (szkic do sprawdzenia przed startem)
+                form["subject"] = form["subject"].strip() or "Follow-up"
+                form["body"] = "(osobny follow-up dla każdego odbiorcy — treści na liście odbiorców)"
+                form["footer"] = ""
             if not form["name"].strip() or not form["subject"].strip() or not form["body"].strip():
                 error = "Uzupełnij nazwę kampanii, temat i treść."
+            elif personal and _ai_client() is None:
+                error = "Follow-upy pisze Claude — brak ANTHROPIC_API_KEY w Railway."
             elif not chosen:
                 error = "Nie wybrano żadnego leada z adresem e-mail."
             else:
@@ -5412,19 +5405,21 @@ def crm_campaign_new():
                     body += campaign_footer()
                 c = Campaign(name=form["name"].strip()[:200], subject=form["subject"].strip()[:300], body=body,
                              sender_id=sender["id"], rate_per_hour=rate, hour_from=h_from, hour_to=h_to,
-                             created_by=user["id"])
+                             created_by=user["id"], personal=personal)
                 db.session.add(c)
                 db.session.flush()
                 for email_addr, lead in chosen.items():
                     db.session.add(CampaignRecipient(campaign_id=c.id, lead_id=lead.id, email=lead.contact_email.strip(),
                                                      name=lead.contact_name, company=lead.company))
                 db.session.commit()
+                if personal:
+                    _start_job("Claude pisze follow-upy", draft_campaign_followups, c.id, form["followup_instruction"][:1000])
                 return redirect(url_for("crm_campaign", cid=c.id))
     leads = _campaign_form_leads()
     stage_counts = {s: sum(1 for l in leads if l.stage == s and EMAIL_RE.match((l.contact_email or "").strip()))
                     for s in STAGES}
     return render_template("crm/campaign_new.html", form=form, leads=leads, stage_counts=stage_counts,
-                           error=error, max_rate=CAMPAIGN_MAX_RATE, email_re=EMAIL_RE)
+                           error=error, max_rate=CAMPAIGN_MAX_RATE, email_re=EMAIL_RE, ai_ready=bool(_ai_client()))
 
 
 @app.route("/crm/blitzkrieg/<int:cid>", methods=["GET", "POST"])
@@ -5436,7 +5431,10 @@ def crm_campaign(cid):
     msg = None
     if request.method == "POST":
         action = request.form.get("action")
-        if action == "start" and c.status in ("szkic", "pauza"):
+        if action == "start" and c.status in ("szkic", "pauza") and campaign_missing_drafts(c):
+            msg = ("err", f"Claude jeszcze nie napisał {len(campaign_missing_drafts(c))} follow-upów — poczekaj "
+                          "albo kliknij „Napisz brakujące”.")
+        elif action == "start" and c.status in ("szkic", "pauza"):
             c.status = "trwa"
             c.started_at = c.started_at or datetime.utcnow()
         elif action == "pauza" and c.status == "trwa":
@@ -5457,9 +5455,11 @@ def crm_campaign(cid):
                 first = next((r for r in c.recipients), None)
                 fake = CampaignRecipient(email=me["email"], name=(first.name if first else me["full_name"]),
                                          company=(first.company if first else "33bots"))
+                drafted = next((r for r in c.recipients if (r.body or "").strip()), None) if c.personal else None
+                t_subject, t_body = ((drafted.subject or c.subject, drafted.body) if drafted else
+                                     (render_campaign_text(c.subject, fake), render_campaign_text(c.body, fake)))
                 tsender = market_sender(USERS_BY_ID.get(c.sender_id, me), c.market)
-                err = _smtp_send(me["email"], "[TEST] " + render_campaign_text(c.subject, fake),
-                                 render_campaign_text(c.body, fake), tsender["name"], sender=tsender)
+                err = _smtp_send(me["email"], "[TEST] " + t_subject, t_body, tsender["name"], sender=tsender)
                 msg = ("err", f"Test nie wyszedł: {err}") if err else ("ok", f"Test wysłany na {me['email']}.")
         db.session.commit()
         if msg is None:
@@ -9092,6 +9092,7 @@ _include("nastepny_krok")
 _include("opiekun")
 _include("wyglad")
 _include("silnik_porzadku")
+_include("blitzkrieg_dane")
 _include("raporty_dnia")
 
 with app.app_context():

@@ -18,6 +18,8 @@
 
 MAIL_ENGINE_KEY = "mail_engine_last_id"
 MAIL_ENGINE_MAX_AGE_H = 72  # starszych maili silnik nie analizuje (np. po długiej przerwie w synchronizacji)
+MAIL_ENGINE_FAIL_KEY = "mail_engine_fail"  # „id:próby” maila, którego analiza się nie udała (ponawiamy)
+MAIL_ENGINE_TRIES = 3
 MAIL_ENGINE_AI_MODEL = os.environ.get("MAIL_ENGINE_AI_MODEL", "").strip() or INBOX_AI_MODEL
 CLEAN_PREFIX = "🧹 Nieaktualne"
 # zadania „pogoni” — ich celem było doczekać się reakcji klienta; mail od klienta je unieważnia
@@ -283,6 +285,8 @@ def mail_engine_pass(limit=40):
         set_setting(MAIL_ENGINE_KEY, str(top))
         db.session.commit()
         return 0
+    if _ai_client() is None:  # bez Claude'a nie przesuwamy wskaźnika — maile poczekają, aż klucz wróci
+        return 0
     rows = (MailMessage.query.filter(MailMessage.id > int(last), MailMessage.folder == "in")
             .order_by(MailMessage.id).limit(limit).all())
     own, done = _own_addresses(), 0
@@ -294,8 +298,16 @@ def mail_engine_pass(limit=40):
                 handle_client_mail(m, lead)
                 done += 1
         except Exception:
+            # błąd (np. Claude chwilowo nie odpowiada) — ten mail spróbujemy w następnym obiegu; po 3 próbach dalej
             db.session.rollback()
             app.logger.exception("mail_engine")
+            fail_id, _, tries = (get_setting(MAIL_ENGINE_FAIL_KEY) or "").partition(":")
+            tries = int(tries) + 1 if fail_id == str(m.id) and tries.isdigit() else 1
+            if tries < MAIL_ENGINE_TRIES:
+                set_setting(MAIL_ENGINE_FAIL_KEY, f"{m.id}:{tries}")
+                db.session.commit()
+                break
+            app.logger.warning("mail_engine: mail %s pominięty po %s próbach", m.id, tries)
         set_setting(MAIL_ENGINE_KEY, str(m.id))
         db.session.commit()
     if not rows and top > int(last):  # nowe maile tylko w „wysłanych” — przesuń wskaźnik

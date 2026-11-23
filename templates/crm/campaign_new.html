@@ -24,6 +24,15 @@
 .bk-body { min-height: 300px; line-height: 1.55; font-size: 13.5px; resize: vertical; }
 .bk-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .bk-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.bk-mode { display: grid; gap: 8px; margin-bottom: 14px; }
+.bk-mode label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+                 cursor: pointer; background: var(--panel2); font-size: 13px; line-height: 1.45; }
+.bk-mode label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.bk-mode input { width: auto; margin-top: 3px; }
+.bk-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.bk-examples button { font-size: 11.5px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel2);
+                      color: var(--muted); cursor: pointer; }
+.bk-examples button:hover { color: var(--text); border-color: var(--accent); }
 .bk-err { background: #ef444418; border: 1px solid color-mix(in srgb, var(--red) 35%, transparent); color: var(--red); border-radius: var(--radius); padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
 </style>
 {% endblock %}
@@ -38,11 +47,20 @@
       <div class="bk-field"><label>✨ Wybierz z Claude (opcjonalnie)</label>
         <div style="display:flex;gap:6px">
           <input type="text" id="bk-audience" name="audience" value="{{ form.audience }}" maxlength="500"
-                 placeholder="np. tylko agencje eventowe ze zrealizowanych"
+                 placeholder="np. dostały ofertę ponad tydzień temu i nie odpisały"
                  onkeydown="if (event.key === 'Enter') { event.preventDefault(); bkPick(); }">
           <button type="button" id="bk-pick-btn" class="btn btn-secondary btn-sm" onclick="bkPick()" {{ '' if ai_ready else 'disabled title="Brak ANTHROPIC_API_KEY"' }}>✨ Wybierz</button>
         </div>
-        <div class="bk-hint" id="bk-pick-msg" style="margin-top:4px">Claude przejrzy leady z e-mailem (firma, domena maila, etap, notatki) i zaznaczy pasujące — potem możesz poprawić listę ręcznie.</div>
+        <div class="bk-examples">
+          {% for ex in ['wpadły w ostatnich 4 dniach i są nieobsłużone', 'dostały ofertę ponad 7 dni temu i nie odpisały',
+                        'wyceniane, ale bez odpowiedzi od 2 tygodni', 'fundacje i szkoły ze zrealizowanych',
+                        'kobiety z leadów z formularza, które dostały ofertę'] %}
+          <button type="button" onclick="document.getElementById('bk-audience').value = this.textContent; bkPick()">{{ ex }}</button>
+          {% endfor %}
+        </div>
+        <div class="bk-hint" id="bk-pick-msg" style="margin-top:6px">Claude szuka po <b>danych z CRM</b> (kiedy lead wpadł, czy ktoś go
+          obsłużył, wycena, oferta i czy klient odpisał, od ilu dni cisza, opiekun, poczta / ClickUp, termin) i po <b>cechach</b>
+          (kobiety, duże firmy, fundacje, miasto…). Zaznaczy pasujących — potem możesz poprawić listę ręcznie.</div>
       </div>
       <div class="bk-field"><label>Całe etapy</label>
         <div class="bk-stages">
@@ -75,8 +93,21 @@
   <div class="panel">
     <div class="panel-header"><i class="bi bi-envelope"></i> Wiadomość</div>
     <div class="panel-body">
+      <div class="bk-mode">
+        <label><input type="radio" name="mode" value="personal" {{ 'checked' if form.mode == 'personal' }} onchange="bkMode()">
+          <span><b>✍️ Osobny follow-up dla każdego</b><br><span class="bk-hint">Claude pisze każdemu klientowi własną wiadomość:
+            nawiązuje do jego oferty, ceny, terminu i ostatnich maili, w języku klienta, jako odpowiedź w wątku naszego
+            ostatniego maila. Każdą przeczytasz i poprawisz, zanim cokolwiek wyjdzie.</span></span></label>
+        <label><input type="radio" name="mode" value="one" {{ 'checked' if form.mode != 'personal' }} onchange="bkMode()">
+          <span><b>📣 Jedna wiadomość dla wszystkich</b><br><span class="bk-hint">Ta sama treść z {imie} i {firma}
+            (np. życzenia, nowość, zaproszenie).</span></span></label>
+      </div>
       <div class="bk-field"><label>Nazwa kampanii (tylko dla Was)</label>
-        <input type="text" name="name" value="{{ form.name }}" placeholder="np. Życzenia świąteczne 2026"></div>
+        <input type="text" name="name" value="{{ form.name }}" placeholder="np. Follow-up ofert z listopada"></div>
+      <div class="bk-field bk-personal"><label>✍️ Co ma zawierać follow-up (opcjonalnie)</label>
+        <textarea name="followup_instruction" rows="3" placeholder="np. przypomnij o ofercie, zapytaj, czy termin jest aktualny, zaproponuj krótką rozmowę">{{ form.followup_instruction }}</textarea>
+        <div class="bk-hint">Bez wskazówek Claude przypomni się uprzejmie i zapyta o decyzję — bez wymyślania rabatów i cen.</div></div>
+      <div class="bk-one">
       <div class="bk-field"><label>✨ Napisz z Claude (opcjonalnie)</label>
         <div style="display:flex;gap:6px">
           <input type="text" name="instruction" value="{{ form.instruction }}" placeholder="np. życzenia świąteczne + zaproszenie do rezerwacji terminów na 2027">
@@ -90,6 +121,7 @@
       <label class="bk-hint" style="display:flex;gap:6px;align-items:center;margin-bottom:12px">
         <input type="checkbox" name="footer" value="1" style="width:auto" {{ 'checked' if form.footer }}>
         Dopisz stopkę „Jeśli nie chce Pan/Pani otrzymywać takich wiadomości, wystarczy odpisać NIE”</label>
+      </div>
       <div class="bk-row3">
         <div class="bk-field"><label>Nadawca</label>
           <select name="sender">{% for u in users if u.phone and u.email %}<option value="{{ u.name }}" {{ 'selected' if u.name == form.sender }}>{{ u.full_name }}</option>{% endfor %}</select></div>
@@ -99,7 +131,7 @@
           <div style="display:flex;gap:4px;align-items:center"><input type="number" name="hour_from" min="0" max="23" value="{{ form.hour_from }}">–<input type="number" name="hour_to" min="1" max="24" value="{{ form.hour_to }}"></div></div>
       </div>
       <div class="bk-hint" style="margin-bottom:12px">5/h to mail co 12 minut. Wysyłka idzie tylko w podanych godzinach (czas polski), a potem wznawia się sama następnego dnia.</div>
-      <button class="btn btn-primary" name="action" value="zapisz">Dalej: podgląd i odbiorcy →</button>
+      <button class="btn btn-primary" name="action" value="zapisz" id="bk-submit">Dalej: podgląd i odbiorcy →</button>
       <div class="bk-hint" style="margin-top:6px">Nic jeszcze nie wyjdzie — na następnym ekranie zobaczysz podgląd, wyślesz test do siebie i dopiero wtedy odpalisz Blitzkrieg.</div>
     </div>
   </div>
@@ -171,6 +203,13 @@ function bkApply(ids) {
   list.scrollTop = 0;
   bkCount();
 }
+function bkMode() {
+  const personal = (document.querySelector('input[name=mode]:checked') || {}).value === 'personal';
+  document.querySelectorAll('.bk-one').forEach(el => { el.style.display = personal ? 'none' : ''; });
+  document.querySelectorAll('.bk-personal').forEach(el => { el.style.display = personal ? '' : 'none'; });
+  document.getElementById('bk-submit').textContent = personal ? 'Dalej: Claude pisze follow-upy →' : 'Dalej: podgląd i odbiorcy →';
+}
+bkMode();
 bkCount();
 </script>
 {% endblock %}

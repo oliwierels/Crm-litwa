@@ -215,6 +215,7 @@ def test_mail_engine_pass_reads_only_new_client_mail(app, monkeypatch):
     crm.db.session.commit()
     old = mail(lead)
     seen = []
+    monkeypatch.setattr(crm, "_ai_client", lambda: object())
     monkeypatch.setattr(crm, "_classify_client_mail", lambda m, l: seen.append(m.id) or dict(ACCEPT))
     assert crm.mail_engine_pass() == 0, "pierwszy obieg tylko zapamiętuje miejsce — historii nie przerabia"
     assert seen == [] and crm.db.session.get(crm.Lead, lead.id).stage == "Oferta"
@@ -274,3 +275,28 @@ def test_win_show_numbers_and_script(app, client):
     assert "static/wygrana.js" in html and "window.CRM_ME" in html
     js = open(crm.os.path.join(crm.app.static_folder, "wygrana.js"), encoding="utf-8").read()
     assert "window.crmCelebrate" in js and "/wygrana`" in js and "prefers-reduced-motion" in js
+
+
+def test_mail_engine_retries_when_claude_fails(app, monkeypatch):
+    """Claude chwilowo nie działa → mail nie przepada: wskaźnik stoi, a po 3 nieudanych próbach idzie dalej.
+    Bez klucza Claude'a silnik nic nie przerabia i nie przesuwa wskaźnika."""
+    lead = mk("Ponawianie", email="biuro@ponawianie-test.pl", value_pln=6000, client_type="firma")
+    crm.set_setting(crm.MAIL_ENGINE_KEY, str(crm.db.session.query(crm.db.func.max(crm.MailMessage.id)).scalar() or 0))
+    crm.set_setting(crm.MAIL_ENGINE_FAIL_KEY, "")
+    crm.db.session.commit()
+    m = mail(lead)
+    start = crm.get_setting(crm.MAIL_ENGINE_KEY)
+    assert crm.mail_engine_pass() == 0 and crm.get_setting(crm.MAIL_ENGINE_KEY) == start, "bez klucza — czekamy"
+    monkeypatch.setattr(crm, "_ai_client", lambda: object())
+    calls = []
+
+    def boom(mm, ll):
+        calls.append(mm.id)
+        raise TimeoutError("Claude nie odpowiada")
+    monkeypatch.setattr(crm, "_classify_client_mail", boom)
+    crm.mail_engine_pass()
+    crm.mail_engine_pass()
+    assert calls == [m.id, m.id] and crm.get_setting(crm.MAIL_ENGINE_KEY) == start, "ten sam mail ponawiany"
+    crm.mail_engine_pass()
+    assert crm.get_setting(crm.MAIL_ENGINE_KEY) == str(m.id), "po 3 próbach — dalej, żeby jeden mail nie blokował reszty"
+    assert crm.db.session.get(crm.Lead, lead.id).stage == "Oferta"

@@ -24,6 +24,14 @@
 .bk-msg.ok { background: #22c55e18; border: 1px solid #22c55e66; color: var(--green); }
 .bk-msg.err { background: #ef444418; border: 1px solid color-mix(in srgb, var(--red) 35%, transparent); color: var(--red); }
 .bk-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.bk-fu { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; background: var(--panel); }
+.bk-fu > summary { list-style: none; cursor: pointer; display: flex; gap: 8px; align-items: center; padding: 8px 10px; font-size: 12.5px; }
+.bk-fu > summary::-webkit-details-marker { display: none; }
+.bk-fu[open] > summary { border-bottom: 1px solid var(--border); }
+.bk-fu .bk-fu-body { padding: 10px; }
+.bk-fu textarea { min-height: 220px; font-size: 13px; line-height: 1.5; }
+.bk-fu .bk-pre { margin-top: 6px; }
+.bk-wait { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--yellow); }
 </style>
 {% endblock %}
 
@@ -39,18 +47,28 @@
   {% if st.counts.czeka %}<div class="bk-stat"><b>~{{ st.hours_left }} h</b><span>wysyłki{% if st.days_left > 1 %} (~{{ st.days_left }} dni){% endif %}</span></div>{% endif %}
 </div>
 
+{% set missing = campaign_missing_drafts(c) %}
 <div class="bk-grid">
   <div class="panel">
-    <div class="panel-header"><i class="bi bi-envelope"></i> Podgląd{% if preview_rec %} — tak zobaczy to {{ preview_rec.email }}{% endif %}</div>
+    <div class="panel-header"><i class="bi bi-envelope"></i> {% if c.personal %}✍️ Osobne follow-upy{% else %}Podgląd{% if preview_rec %} — tak zobaczy to {{ preview_rec.email }}{% endif %}{% endif %}</div>
     <div class="panel-body">
       <div class="bk-hint" style="margin-bottom:8px">Od: <b>{{ sender.get('full_name', '') }} &lt;{{ sender.get('email', '') }}&gt;</b></div>
-      {% if preview %}
+      {% if c.personal %}
+      <div class="bk-hint" style="margin-bottom:10px">Każdy klient dostaje własną wiadomość napisaną przez Claude'a (oferta, cena, termin,
+        ostatnie maile) — jako odpowiedź w wątku naszego ostatniego maila. Przeczytaj je na liście obok i popraw, co trzeba.</div>
+      {% if missing %}
+      <div class="bk-wait" id="bk-wait">⏳ Claude pisze follow-upy: gotowe {{ st.total - missing|length }} z {{ st.total }}…</div>
+      <div style="margin-top:8px"><button type="button" class="btn btn-secondary btn-sm" onclick="bkDraft(this)">✍️ Napisz brakujące</button></div>
+      {% else %}
+      <div class="bk-msg ok" style="margin:0">✅ Wszystkie follow-upy gotowe ({{ st.total }}). Sprawdź je i odpal wysyłkę.</div>
+      {% endif %}
+      {% elif preview %}
       <div class="bk-pre" style="margin-bottom:8px"><b>{{ preview[0] }}</b></div>
       <div class="bk-pre">{{ preview[1] }}</div>
       {% endif %}
       <form method="post" class="bk-actions">
         <button class="btn btn-secondary" name="action" value="test">✉️ Wyślij test do mnie</button>
-        {% if c.status in ['szkic', 'pauza'] and st.counts.czeka %}
+        {% if c.status in ['szkic', 'pauza'] and st.counts.czeka and not missing %}
         <button class="btn btn-primary" name="action" value="start"
                 onclick="return confirm('Odpalić Blitzkrieg? {{ st.counts.czeka }} maili, {{ c.rate_per_hour }} na godzinę.')">
           🚀 {{ 'Blitzkrieg!' if c.status == 'szkic' else 'Wznów' }}</button>
@@ -60,14 +78,38 @@
         <button class="btn btn-danger" name="action" value="usun" onclick="return confirm('Usunąć kampanię? Wysłanych maili to nie cofnie.')">🗑 Usuń</button>
         {% endif %}
       </form>
-      <div class="bk-hint">Treści nie da się już zmienić — jeśli chcesz inną, usuń kampanię i utwórz nową.
-        Każdy wysłany mail zapisuje się w komentarzach leada.</div>
+      <div class="bk-hint">{% if c.personal %}Follow-up możesz poprawić na liście odbiorców, dopóki nie wyszedł.{% else %}Treści nie da się
+        już zmienić — jeśli chcesz inną, usuń kampanię i utwórz nową.{% endif %} Każdy wysłany mail zapisuje się w komentarzach leada.</div>
     </div>
   </div>
 
   <div class="panel">
     <div class="panel-header"><i class="bi bi-people"></i> Odbiorcy ({{ st.total }})</div>
-    <div class="panel-body" style="max-height:620px;overflow:auto">
+    <div class="panel-body" style="max-height:{{ '900px' if c.personal else '620px' }};overflow:auto">
+      {% if c.personal %}
+      {% for r in c.recipients %}
+      <details class="bk-fu" id="r{{ r.id }}" {{ 'open' if loop.first and r.body }}>
+        <summary><span class="bk-badge r-{{ r.status }}">{{ {'czeka': 'czeka', 'wyslany': 'wysłany', 'blad': 'błąd', 'pominiety': 'pominięty'}[r.status] }}</span>
+          <b>{{ r.company }}</b><span style="color:var(--muted)">{{ r.email }}</span>
+          <span style="margin-left:auto;color:var(--muted)">{% if r.body %}{{ '↩️ w wątku' if r.in_reply_to else '✉️ nowy wątek' }}{% else %}⏳ pisze…{% endif %}</span></summary>
+        <div class="bk-fu-body">
+          {% if r.status == 'czeka' and c.status != 'trwa' and r.body %}
+          <form method="post" action="{{ url_for('crm_campaign_recipient_edit', cid=c.id, rid=r.id) }}">
+            <input type="text" name="subject" value="{{ r.subject or '' }}" style="margin-bottom:6px">
+            <textarea name="body">{{ r.body }}</textarea>
+            <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+              <button class="btn btn-primary btn-sm">Zapisz poprawki</button>
+              {% if r.lead_id %}<a href="{{ url_for('crm_lead_detail', lead_id=r.lead_id) }}" class="bk-hint">karta leada →</a>{% endif %}
+            </div>
+          </form>
+          {% elif r.body %}
+          <div class="bk-pre"><b>{{ r.subject }}</b></div><div class="bk-pre">{{ r.body }}</div>
+          {% else %}<div class="bk-hint">Claude jeszcze nie napisał tego follow-upu.</div>{% endif %}
+          {% if r.error %}<div class="bk-hint" style="color:var(--red)">{{ r.error }}</div>{% endif %}
+        </div>
+      </details>
+      {% endfor %}
+      {% else %}
       <table class="bk-table">
         {% for r in c.recipients %}
         <tr>
@@ -82,7 +124,29 @@
         </tr>
         {% endfor %}
       </table>
+      {% endif %}
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if c.personal and missing %}
+<script>
+// Claude pisze follow-upy w tle — strona odświeża się sama, aż wszystkie będą gotowe (najwyżej ~5 minut)
+(function () {
+  let n = 0; try { n = +(sessionStorage.getItem('bk-wait-{{ c.id }}') || 0); sessionStorage.setItem('bk-wait-{{ c.id }}', n + 1); } catch (e) {}
+  if (n < 50) setTimeout(() => location.reload(), 6000);
+})();
+async function bkDraft(btn) {
+  btn.disabled = true; btn.textContent = '✍️ Claude pisze…';
+  try { sessionStorage.removeItem('bk-wait-{{ c.id }}'); } catch (e) {}
+  try {
+    const r = await (await fetch('{{ url_for('crm_campaign_followups', cid=c.id) }}', {method: 'POST'})).json();
+    if (r.error) throw new Error(r.error);
+    setTimeout(() => location.reload(), 4000);
+  } catch (e) { btn.disabled = false; btn.textContent = '⚠️ ' + e.message; }
+}
+</script>
+{% endif %}
 {% endblock %}
