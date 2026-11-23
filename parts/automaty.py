@@ -6,7 +6,9 @@
 def backfill_next_steps():
     """Aktywne leady bez żadnego otwartego zadania dostają drugi krok — telefon do opiekuna leada:
     tydzień po ostatniej ofercie (nie wcześniej niż dziś), a leady jeszcze bez oferty — na dziś.
-    Zwraca liczbę leadów, którym dodano telefon."""
+    Zwraca liczbę leadów, którym dodano telefon. Bez automatów (auto_tasks_on) nic nie dodaje."""
+    if not auto_tasks_on():
+        return 0
     busy = {lid for (lid,) in db.session.query(Activity.lead_id).filter(
         Activity.lead_id.isnot(None), Activity.done.isnot(True)).distinct()}
     leads = [l for l in Lead.query.filter(Lead.stage.in_(ACTIVE_STAGES), Lead.clickup_pending.isnot(True)).all()

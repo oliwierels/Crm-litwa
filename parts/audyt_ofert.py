@@ -14,7 +14,10 @@ def last_offer_at(lead):
 
 
 def add_offer_second_step(lead, offer_at, actor_id=None):
-    """Brakujący drugi krok po ofercie: w CRM PL telefon, w CRM LT/DE follow-up mailem. Zwraca zadanie albo None."""
+    """Brakujący drugi krok po ofercie: w CRM PL telefon, w CRM LT/DE follow-up mailem. Zwraca zadanie albo None.
+    Bez automatów (auto_tasks_on) nic nie dodaje."""
+    if not auto_tasks_on():
+        return None
     sent_on = to_local(offer_at).date() if offer_at else to_local(datetime.utcnow()).date()
     if offer_second_step_kind(lead) == "call":
         return ensure_followup_call(lead, sent_on=sent_on)

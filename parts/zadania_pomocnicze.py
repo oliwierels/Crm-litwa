@@ -58,6 +58,7 @@ def record_stage_change(lead, new_stage, actor_id, reason=None, note=None):
     Bez bramek — to robią automaty CRM; zmiany od ludzi (UI, API, MCP) idą przez gated_stage_change."""
     if new_stage not in STAGES or new_stage == lead.stage:
         return False
+    was_open = lead.stage not in WON_STAGES
     db.session.add(StageHistory(
         lead_id=lead.id, from_stage=lead.stage, to_stage=new_stage, changed_by=actor_id, reason=reason, note=note,
     ))
@@ -70,6 +71,8 @@ def record_stage_change(lead, new_stage, actor_id, reason=None, note=None):
         ensure_followup_call(lead)  # oferta poszła (z CRM albo mailem poza nim) — za tydzień telefon
     if new_stage == "Wygrany":
         ensure_journey(lead)  # wygrany wpada do Customer Journey (umowa do wysłania)
+    if new_stage in WON_STAGES and was_open:
+        clear_open_tasks(lead)  # wygrany: dalej prowadzi Customer Journey — otwarte zadania z lejka znikają
     return True
 
 

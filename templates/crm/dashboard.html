@@ -211,11 +211,15 @@
     <div class="panel">
       <div class="panel-header" style="color:var(--yellow);display:flex;align-items:center;justify-content:space-between;gap:8px">
         <span><i class="bi bi-signpost-split"></i> Bez następnego kroku ({{ no_next_step|length }})</span>
+        {% if auto_tasks_on() %}
         <form method="post" action="{{ url_for('crm_backfill_steps') }}" style="margin:0">
           <button type="submit" class="btn btn-ghost btn-sm" style="font-size:11px"
                   data-msg="Dodać telefon wszystkim {{ no_next_step|length }} leadom bez kroku? Przypisany do opiekuna leada: tydzień po ofercie albo na dziś, jeśli oferty jeszcze nie było."
                   onclick="return confirm(this.dataset.msg)">📞 Telefon wszystkim</button>
         </form>
+        {% else %}
+        <span style="font-size:11px;color:var(--muted);font-weight:400" title="CRM nie dodaje zadań sam — krok wpisuje człowiek">otwórz leada i ustal krok</span>
+        {% endif %}
       </div>
       <div class="panel-body" style="padding:0 16px">
         {% for lead in no_next_step %}

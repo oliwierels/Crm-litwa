@@ -59,6 +59,13 @@ Ten sam kod co w CRM PL (`team.py`, `parts/raporty_dnia.py`) — opis w README C
   w CRM PL; tu działa zlecanie zadań (menu → Zespół), rangi i liczby dnia z tego CRM (także narzędzie `team_reports`),
 - rangi zapisują się w bazie tego CRM osobno — zmianę rangi trzeba zrobić w obu CRM.
 
+## Następny krok ustawia człowiek (od 23.11.2026)
+
+Ten sam kod co w CRM PL (`parts/nastepny_krok.py`): CRM nie dodaje już zadań sam; karta aktywnego leada bez zadania
+pokazuje okno „Ustal następny krok”; wygrany lead traci otwarte zadania (dalej Customer Journey), leady na Ofercie
+zachowują swoje. Dawne automaty wracają po `AUTO_TASKS=1`. Litewska lista ClickUp (`CLICKUP_LIST_ID`) wpada do
+zakładki „Z ClickUp” — tam leady się zatwierdza; do klienta nic nie wychodzi przed zatwierdzeniem.
+
 ## 🚨 Nowe leady — obsłużyć tego samego dnia
 
 Każdy nowy lead (osobno dla Litwy i Niemiec) wyskakuje w oknie, które zasłania CRM na każdej stronie, aż zostanie

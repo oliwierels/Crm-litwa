@@ -6,6 +6,12 @@ import pytest
 import crm
 
 
+@pytest.fixture(autouse=True)
+def _auto_tasks_on(monkeypatch):
+    """Te testy sprawdzają dawne automaty zadań — działają nadal po włączeniu AUTO_TASKS=1 (domyślnie wyłączone)."""
+    monkeypatch.setenv("AUTO_TASKS", "1")
+
+
 @pytest.fixture(scope="module")
 def app():
     with crm.app.app_context():

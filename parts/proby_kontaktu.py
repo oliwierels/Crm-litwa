@@ -77,7 +77,7 @@ def lead_failed_attempts(lead):
 def check_contact_limit(lead, actor_id=None):
     """Po limicie nieudanych prób (osoby prywatne 2, reszta 3): zadanie „Zdecyduj” dla opiekuna (bez automatycznej straty
     i bez żadnej wysyłki). Jedno na serię prób. Zwraca zadanie albo None."""
-    if not lead or lead.stage not in ACTIVE_STAGES or is_market_copy(lead):
+    if not auto_tasks_on() or not lead or lead.stage not in ACTIVE_STAGES or is_market_copy(lead):
         return None
     ev = lead_contact_events(lead)
     n = sales_rules.contact_attempts(ev)
@@ -105,7 +105,7 @@ def after_contact_outcome(a, user_id):
     lead = db.session.get(Lead, a.lead_id)
     db.session.expire(lead, ["activities"])
     decide = check_contact_limit(lead, user_id)
-    if decide is None and a.kind == "call":
+    if decide is None and a.kind == "call" and auto_tasks_on():
         has_call = Activity.query.filter(Activity.lead_id == lead.id, Activity.kind == "call",
                                          Activity.done.isnot(True)).first()
         if not has_call:

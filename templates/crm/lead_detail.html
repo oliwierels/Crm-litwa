@@ -27,6 +27,7 @@
 {% endblock %}
 
 {% block content %}
+{% include "crm/_next_step_gate.html" %}
 {% set ki = kind_icons %}
 {% set kl = kind_labels %}
 {% set urg_cls = {'overdue':'u-overdue','today':'u-today','soon':'u-soon','future':'u-future','done':'u-done'} %}
@@ -98,7 +99,7 @@
     </div>
 
     <!-- Stage -->
-    <div class="panel">
+    <div class="panel" id="lead-stage-panel">
       <div class="panel-header">Etap</div>
       <div class="panel-body">
         <form method="POST" action="{{ url_for('crm_set_stage', lead_id=lead.id) }}" style="display:flex;flex-direction:column;gap:4px">

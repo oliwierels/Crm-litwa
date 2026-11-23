@@ -1,0 +1,48 @@
+{# Następny krok ustawia człowiek: aktywny lead bez otwartego zadania — okno na karcie leada (parts/nastepny_krok.py) #}
+{% if lead_needs_next_step(lead) %}
+<div id="ns-gate" style="position:fixed;inset:0;z-index:9300;background:rgba(5,8,14,.86);display:flex;align-items:center;justify-content:center;padding:16px">
+  <form method="POST" action="{{ url_for('crm_add_activity', lead_id=lead.id) }}"
+        style="max-width:520px;width:100%;background:var(--panel);border:1px solid var(--accent);border-radius:12px;padding:20px 22px;box-shadow:0 20px 60px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:10px">
+    <div style="font-size:17px;font-weight:700">➡️ Ustal następny krok</div>
+    <div style="font-size:13px;line-height:1.5;color:var(--muted)">
+      <b style="color:var(--text)">{{ lead.company }}</b> ({{ lead.stage }}) nie ma zaplanowanego kroku. CRM nie dodaje zadań sam —
+      wpisz, co i kiedy dzieje się dalej z tym klientem.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:150px">
+        <label>Co</label>
+        <select name="kind" required style="width:100%">
+          {% for k in activity_kinds if k not in ('note', 'decision') %}<option value="{{ k }}">{{ kind_icons.get(k, '') }} {{ kind_labels.get(k, k) }}</option>{% endfor %}
+        </select>
+      </div>
+      <div style="flex:1;min-width:140px">
+        <label>Kiedy</label>
+        <input type="date" name="due_date" required style="width:100%" id="ns-due">
+      </div>
+      <div style="flex:1;min-width:120px">
+        <label>Kto</label>
+        <select name="assigned_to" style="width:100%">
+          {% for u in users %}<option value="{{ u.id }}" {{ 'selected' if u.id == (lead.assigned_to or user.id) }}>{{ u.name }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div>
+      <label>Konkretnie</label>
+      <input type="text" name="notes" required minlength="3" maxlength="500" style="width:100%"
+             placeholder="np. zadzwonić o decyzję po ofercie, wysłać umowę, dopytać o datę wydarzenia">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" type="submit">Zapisz krok</button>
+      <button class="btn btn-secondary" type="button"
+              onclick="document.getElementById('ns-gate').remove(); var p=document.getElementById('lead-stage-panel'); if(p) p.scrollIntoView({behavior:'smooth'});"
+              title="Gdy lead jest już wygrany albo stracony — zmień etap zamiast planować krok">Lead zamknięty — zmień etap</button>
+    </div>
+  </form>
+</div>
+<script>
+(function () {
+  var d = document.getElementById('ns-due');
+  if (d && !d.value) { var t = new Date(); d.value = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); }
+})();
+</script>
+{% endif %}

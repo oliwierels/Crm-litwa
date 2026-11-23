@@ -23,7 +23,8 @@ def crm_add_lead():
     kind = request.form.get("first_activity_kind", "").strip()
     due = parse_date(request.form.get("first_activity_due", ""))
     if kind and due:
-        db.session.add(Activity(lead_id=lead.id, kind=kind, due_date=due, assigned_to=lead.assigned_to))
+        db.session.add(Activity(lead_id=lead.id, kind=kind, due_date=due, assigned_to=lead.assigned_to,
+                                created_by=user["id"]))
         db.session.commit()
     if lead.stage == "Oferta":
         ensure_followup_call(lead)

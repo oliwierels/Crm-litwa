@@ -725,6 +725,7 @@ def _realize_scheduler():
                     sales_automation_pass()
                 run_offer_audit_once()
                 cleanup_offer_audit_steps()
+                cleanup_won_tasks_once()  # raz: wygrane leady bez otwartych zadań (dalej Customer Journey)
                 clear_form_day_event_dates()
                 db.session.remove()
             health_beat("automaty")
@@ -1669,9 +1670,11 @@ def sales_automation_pass():
     now = datetime.utcnow()
     today0 = datetime.combine(to_local(now).date(), datetime.min.time())
     made = {"drafts": 0, "reply_calls": 0, "decide": 0, "late": 0}
+    auto = auto_tasks_on()  # 1)–3) to zadania — domyślnie wyłączone, następny krok ustawia człowiek
     # 1) osoby prywatne — szkic pierwszej odpowiedzi
-    for lead in Lead.query.filter(Lead.stage == "Nowy", Lead.created_at >= now - timedelta(days=3),
-                                  Lead.handled_at.is_(None), Lead.clickup_pending.isnot(True), own_leads()).all():
+    for lead in (Lead.query.filter(Lead.stage == "Nowy", Lead.created_at >= now - timedelta(days=3),
+                                   Lead.handled_at.is_(None), Lead.clickup_pending.isnot(True), own_leads()).all()
+                 if auto else []):
         if not lead.emails or foreign_market(lead) or (lead.client_type or client_type_hint(lead)[0]) != "prywatna":
             continue
         if Activity.query.filter(Activity.lead_id == lead.id,
@@ -1692,8 +1695,8 @@ def sales_automation_pass():
         made["drafts"] += 1
     db.session.commit()
     # 2) prywatny klient odpisał po naszej pierwszej odpowiedzi → telefon (dopiero teraz)
-    for d in Activity.query.filter(Activity.notes.like(sales_rules.PRIVATE_DRAFT_PREFIX + "%"), Activity.done.is_(True),
-                                   Activity.done_at >= now - timedelta(days=30)).all():
+    for d in (Activity.query.filter(Activity.notes.like(sales_rules.PRIVATE_DRAFT_PREFIX + "%"), Activity.done.is_(True),
+                                    Activity.done_at >= now - timedelta(days=30)).all() if auto else []):
         lead = d.lead
         if not lead or lead.stage not in ACTIVE_STAGES:
             continue
@@ -3497,9 +3500,9 @@ ASSISTANT_TOOLS = [
         "description": "Przygotowuje ofertę PDF w firmowym layoucie 33bots razem z mailem do klienta i zapisuje ją w CRM "
                        "jako SZKIC DO SPRAWDZENIA (zakładka Oferty). Nic nie wysyła — użytkownik ogląda PDF i mail w CRM, "
                        "może poprawić treść maila i sam klika „Wyślij”. Wtedy mail z PDF w załączniku wychodzi ze skrzynki "
-                       "nadawcy, kopia trafia do Wysłanych, lead przechodzi na etap Oferta, dostaje wartość, zadanie follow-up "
-                       "i telefon do opiekuna leada tydzień po wysyłce (CRM dodaje go sam — nie dubluj go add_task). "
-                       "Zwraca link do podglądu — podaj go użytkownikowi.",
+                       "nadawcy, kopia trafia do Wysłanych, lead przechodzi na etap Oferta i dostaje wartość. CRM NIE dodaje "
+                       "zadań sam — następny krok (np. telefon po ofercie) ustawia człowiek: zapytaj, co i kiedy, i dodaj "
+                       "go add_task. Zwraca link do podglądu — podaj go użytkownikowi.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -3509,7 +3512,7 @@ ASSISTANT_TOOLS = [
                 "lead_id": {"type": "integer", "description": "Lead, którego dotyczy oferta"},
                 "sender": {"type": "string", "description": "Kto wysyła i jest kontaktem w ofercie: Oliwier albo Bartek (domyślnie rozmówca)"},
                 "value": {"type": "number", "description": "Opcjonalnie: wartość netto, która po wysyłce trafi do leada"},
-                "followup_days": {"type": "integer", "description": "Za ile dni po wysyłce zadanie follow-up (domyślnie 3, 0 = bez zadania)"},
+                "followup_days": {"type": "integer", "description": "Używane tylko przy włączonych automatach zadań (AUTO_TASKS=1): za ile dni po wysyłce zadanie follow-up"},
                 "offer": {
                     "type": "object",
                     "description": "Treść PDF. Kontakt (imię, e-mail, telefon) dopisuje się sam z nadawcy. "
@@ -3851,7 +3854,7 @@ def deliver_offer(offer, actor):
         if not lead.contact_email:
             lead.contact_email = offer.to_addr
         days = opts.get("followup_days", 3)
-        if days:
+        if days and auto_tasks_on():  # bez automatów następny krok po ofercie ustawia człowiek
             due = datetime.combine(date.today() + timedelta(days=int(days)), datetime.min.time())
             db.session.add(Activity(lead_id=lead.id, kind="email", due_date=due, assigned_to=sender["id"],
                                     notes=f"Follow-up oferty ({offer.price} netto) wysłanej {date.today():%d.%m}"))
@@ -6963,9 +6966,10 @@ def lead_form(token):
     db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(), assigned_to=owner,
                             notes=f"📝 Klient wypełnił formularz z danymi do wyceny\n{summary or '(bez danych)'}"))
     today = datetime.combine(to_local(datetime.utcnow()).date(), datetime.min.time())
-    db.session.add(Activity(lead_id=lead.id, kind="email", due_date=today, assigned_to=owner,
-                            notes=f"Przygotuj i wyślij ofertę — klient ({markets.get(lead_market(lead))['name']}) "
-                                  "wypełnił formularz (dane w komentarzu)."))
+    if auto_tasks_on():
+        db.session.add(Activity(lead_id=lead.id, kind="email", due_date=today, assigned_to=owner,
+                                notes=f"Przygotuj i wyślij ofertę — klient ({markets.get(lead_market(lead))['name']}) "
+                                      "wypełnił formularz (dane w komentarzu)."))
     db.session.commit()
     _notify_form_filled(lead.id, summary)
     if lt_auto_quote_enabled(lead_market(lead)):
@@ -7004,7 +7008,8 @@ def _notify_form_filled(lead_id, summary):
                         f"Lead: {lead.company}\nKontakt: {lead.contact_name or '—'} · {', '.join(lead.emails) or '—'}"
                         f" · {lead.contact_phone or '—'}\n\n{summary or '(bez danych)'}\n\n"
                         + (f"Otwórz w CRM: {link}\n" if link else "")
-                        + "\nW CRM czeka zadanie „Przygotuj i wyślij ofertę”.")
+                        + ("\nW CRM czeka zadanie „Przygotuj i wyślij ofertę”." if auto_tasks_on()
+                           else "\nDane są w leadzie — ustal w nim następny krok (np. oferta)."))
                 sender = lt_sender(code)
                 err = _smtp_send(", ".join(to), f"📝 Formularz wypełniony {m['flag']}: {lead.company}", body,
                                  sender["name"], sender=sender)
@@ -8041,9 +8046,10 @@ def _mail_send_from_form(boxes, user):
                 olead.currency = currency or olead.currency
             if olead.stage in ACTIVE_STAGES:
                 ensure_followup_call(olead)
-            due = datetime.combine(date.today() + timedelta(days=3), datetime.min.time())
-            db.session.add(Activity(lead_id=olead.id, kind="email", due_date=due, assigned_to=user["id"],
-                                    notes=f"Follow-up oferty ({offer.price} netto) wysłanej {date.today():%d.%m}"))
+            if auto_tasks_on():
+                due = datetime.combine(date.today() + timedelta(days=3), datetime.min.time())
+                db.session.add(Activity(lead_id=olead.id, kind="email", due_date=due, assigned_to=user["id"],
+                                        notes=f"Follow-up oferty ({offer.price} netto) wysłanej {date.today():%d.%m}"))
     task = db.session.get(MailTask, f.get("task", type=int) or 0)
     if task and task.status == "open":  # odpowiedź na sprawę z przeglądu poczty — sprawa załatwiona
         task.status, task.done_at, task.done_by, task.done_how = "done", now, user["id"], "odpowiedź wysłana"
@@ -8962,6 +8968,7 @@ def crm_mail_review_now():
     return redirect(url_for("crm_job", jid=_start_job("Claude przegląda pocztę", mail_review, code)))
 
 
+_include("nastepny_krok")
 _include("raporty_dnia")
 
 with app.app_context():

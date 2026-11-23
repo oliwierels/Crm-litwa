@@ -8,10 +8,21 @@ FOLLOWUP_AFTER_EMAIL_DAYS = 5  # telefon po wysłanym follow-upie mailem
 AUTO_CALL_PREFIX = "📞 Drugi krok: telefon"
 
 
+def auto_tasks_on():
+    """Czy CRM sam dodaje zadania: telefon / follow-up po ofercie, drugi krok dla leada bez kroku, szkic i telefon dla
+    osoby prywatnej, telefon po odpowiedzi, kolejna próba po „nie odebrał”, „Zdecyduj” po limicie prób, zadanie po
+    formularzu klienta, telefon o bazę wiedzy robota. Domyślnie NIE (od 23.11.2026): następny krok ustawia człowiek —
+    CRM wymaga go przy wejściu do leada (parts/nastepny_krok.py). AUTO_TASKS=1 w Railway przywraca dawne automaty."""
+    return os.environ.get("AUTO_TASKS", "0").strip() == "1"
+
+
 def ensure_followup_call(lead, sent_on=None, days=FOLLOWUP_CALL_DAYS, after="ofercie wysłanej"):
     """Drugi krok po ofercie: telefon tydzień po jej wysłaniu (nie wcześniej niż dziś), przypisany
     do opiekuna leada. Ręcznie zaplanowany otwarty telefon zostaje bez zmian, automatyczny przesuwa się
-    na nowy termin (np. po kolejnej wersji oferty albo po follow-upie mailem). Zwraca zadanie albo None."""
+    na nowy termin (np. po kolejnej wersji oferty albo po follow-upie mailem). Zwraca zadanie albo None.
+    Bez automatów (auto_tasks_on) nic nie dodaje — następny krok ustawia człowiek."""
+    if not auto_tasks_on():
+        return None
     today = to_local(datetime.utcnow()).date()
     sent_on = sent_on or today
     due = datetime.combine(max(sent_on + timedelta(days=days), today), datetime.min.time())
