@@ -300,3 +300,56 @@ def test_mail_engine_retries_when_claude_fails(app, monkeypatch):
     crm.mail_engine_pass()
     assert crm.get_setting(crm.MAIL_ENGINE_KEY) == str(m.id), "po 3 próbach — dalej, żeby jeden mail nie blokował reszty"
     assert crm.db.session.get(crm.Lead, lead.id).stage == "Oferta"
+
+
+def test_one_task_per_lead_once(app):
+    """Raz po wdrożeniu: lead z kilkoma otwartymi zadaniami (dawne automaty) zostaje z jednym; treść usuniętych
+    automatycznych zadań zostaje w komentarzu, zadanie od człowieka — jako komentarz „🧹 Nieaktualne”."""
+    for key in (crm.ONE_TASK_KEY, crm.ONE_TASK_KEY + "_lock"):
+        crm.AppSetting.query.filter_by(key=key).delete()
+    crm.db.session.commit()
+    days = lambda n: datetime.utcnow() - timedelta(days=n)  # noqa: E731
+    # A: stary telefon + partia po ofercie (telefon i follow-up mailem) → zostaje telefon z najnowszej partii
+    a = mk("Jedno Zadanie A")
+    a_old = task(a, "Zadzwoń — nowy lead", created_at=days(10))
+    a_call = task(a, "📞 Drugi krok: telefon po ofercie wysłanej 03.11", created_at=days(2))
+    a_mail = task(a, "Follow-up oferty (6 000 zł netto) wysłanej 03.11", kind="email", created_at=days(2))
+    # B: zadanie od człowieka wygrywa z nowszym automatycznym „Zdecyduj”
+    b = mk("Jedno Zadanie B")
+    b_human = task(b, "Oddzwonić po 15:00", created_by=OLIWIER, created_at=days(5))
+    task(b, "⚖️ Zdecyduj: 2 nieudane próby kontaktu z rzędu.", kind="decision", created_at=days(1))
+    # C: dwa od człowieka → zostaje nowsze, starsze staje się komentarzem
+    c = mk("Jedno Zadanie C")
+    c_old = task(c, "Wysłać zdjęcia z realizacji", kind="email", created_by=JERZY, created_at=days(4))
+    c_new = task(c, "Zapytać o godziny", created_by=JERZY, created_at=days(1))
+    # D: osoba prywatna — gotowy szkic pierwszej odpowiedzi ważniejszy niż telefon z tej samej partii
+    d = mk("Jedno Zadanie D")
+    d_draft = task(d, crm.sales_rules.PRIVATE_DRAFT_PREFIX + " — szkic gotowy.\nTemat: Robot\n---\nDzień dobry, ...",
+                   kind="email", created_at=days(3))
+    task(d, "📞 Zadzwoń do osoby prywatnej (najwyżej 2 próby)", created_at=days(3))
+    # E: jedno zadanie — bez zmian; zadania własne (bez leada) — bez zmian
+    e = mk("Jedno Zadanie E")
+    e_only = task(e, "Telefon w piątek")
+    own = [crm.Activity(lead_id=None, kind="call", assigned_to=OLIWIER, notes=f"Własne {i}") for i in range(2)]
+    crm.db.session.add_all(own)
+    crm.db.session.commit()
+
+    assert crm.one_task_per_lead_once() >= 5
+    open_ids = lambda lead: [x.id for x in crm.lead_open_tasks(lead.id).all()]  # noqa: E731
+    assert open_ids(a) == [a_call.id] and open_ids(b) == [b_human.id] and open_ids(c) == [c_new.id]
+    assert open_ids(d) == [d_draft.id] and open_ids(e) == [e_only.id]
+    assert crm.db.session.get(crm.Activity, a_old.id) is None and crm.db.session.get(crm.Activity, a_mail.id) is None
+    note = crm.Activity.query.filter(crm.Activity.lead_id == a.id, crm.Activity.kind == "note",
+                                     crm.Activity.notes.like(crm.CLEAN_PREFIX + "%")).one().notes
+    assert "jedno zadanie na leada" in note and "Follow-up oferty (6 000 zł netto)" in note and "Zadzwoń — nowy lead" in note
+    c_note = crm.db.session.get(crm.Activity, c_old.id)
+    assert c_note.kind == "note" and c_note.notes.startswith(crm.CLEAN_PREFIX) and "Wysłać zdjęcia" in c_note.notes
+    assert all(not x.done for x in own), "zadania własne bez zmian"
+    assert crm.Lead.query.filter(crm.Lead.id.in_([a.id, b.id, c.id, d.id, e.id])).count() == 5, "leady zostają"
+    report = crm.get_setting(crm.ONE_TASK_KEY)
+    assert report and '"tasks"' in report
+    task(a, "Nowe zadanie od człowieka", created_by=JERZY)
+    assert crm.one_task_per_lead_once() is None and len(open_ids(a)) == 2, "tylko raz — to nie jest stała reguła"
+    for x in own:
+        crm.db.session.delete(x)
+    crm.db.session.commit()

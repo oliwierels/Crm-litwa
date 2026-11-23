@@ -674,6 +674,11 @@ def _realize_scheduler():
                 run_offer_audit_once()
                 cleanup_offer_audit_steps()
                 cleanup_won_tasks_once()  # raz: wygrane leady bez otwartych zadań (dalej Customer Journey)
+                try:  # raz: lead z kilkoma otwartymi zadaniami (dawne automaty) zostaje z jednym (silnik_porzadku.py)
+                    one_task_per_lead_once()
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception("one_task_per_lead")
                 owner_cleanup_once()  # raz: leady z importu do domyślnego opiekuna rynku, zadania za opiekunem
                 owner_cleanup_v2_once()  # raz: to samo, liczą się tylko własne działania Oliwiera
                 clickup_release_waiting_once()  # raz: litewskie leady z „Z ClickUp” na tablicę (bez automatycznych maili)

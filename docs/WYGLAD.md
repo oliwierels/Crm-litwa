@@ -65,3 +65,6 @@ Te pliki są identyczne w obu repozytoriach (różnice rynku robią warunki: `al
 - **Nic nie znika**: zadanie od człowieka zamienia się w komentarz „🧹 Nieaktualne — powód: …”; automatyczne
   przypomnienie (bez autora) jest usuwane, a przy leadzie zostaje komentarz, ile zadań i dlaczego. Leadów silnik nie usuwa.
 - Każda decyzja = komentarz przy leadzie + powiadomienie w dzwonku (sekcja „Co się wydarzyło”).
+- Jednorazowo po wdrożeniu (24.11.2026, `ONE_TASK_KEY`): lead z kilkoma otwartymi zadaniami po dawnych automatach
+  zostaje z jednym — od człowieka przed automatycznym, z najnowszej partii, w partii: „Zdecyduj” → szkic pierwszej
+  odpowiedzi → telefon → mail. Treść zamkniętych zadań zostaje w komentarzu przy leadzie. To nie jest stała reguła.

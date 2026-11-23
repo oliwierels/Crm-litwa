@@ -15,6 +15,7 @@
 #    (zostaje w historii, nie liczy się jako zrobione), automatyczne przypomnienia (bez autora) znikają — przy leadzie
 #    zostaje jeden komentarz, ile i dlaczego. Każda decyzja silnika = komentarz przy leadzie + powiadomienie opiekuna.
 # 4) Powiadomienia (dzwonek 🔔): wygrane całego zespołu (z pokazem 🏆), decyzje silnika, „klient odpisał”.
+# 5) Jednorazowo (ONE_TASK_KEY): lead z kilkoma otwartymi zadaniami po dawnych automatach zostaje z jednym.
 
 MAIL_ENGINE_KEY = "mail_engine_last_id"
 MAIL_ENGINE_MAX_AGE_H = 72  # starszych maili silnik nie analizuje (np. po długiej przerwie w synchronizacji)
@@ -139,17 +140,30 @@ def retire_task(act, reason):
     return "note"
 
 
-def retire_tasks(lead, tasks, reason):
-    """Zamyka listę zadań leada i zostawia przy nim jeden komentarz z podsumowaniem. Zwraca liczbę zadań."""
+def _task_line(act):
+    """Jedna linia o zadaniu do komentarza: rodzaj, termin, treść."""
+    due = f" (termin {act.due_date:%d.%m})" if act.due_date else ""
+    return f"• {ACTIVITY_KIND_LABELS.get(act.kind, act.kind)}{due}" + (f": {act.notes}" if act.notes else "")
+
+
+def retire_tasks(lead, tasks, reason, keep_text=False):
+    """Zamyka listę zadań leada i zostawia przy nim jeden komentarz z podsumowaniem. keep_text: w komentarzu zostaje
+    też treść usuniętych automatycznych zadań (np. szkic maila), żeby nic nie przepadło. Zwraca liczbę zadań."""
     tasks = list(tasks)
     if not tasks:
         return 0
     kinds = [ACTIVITY_KIND_LABELS.get(a.kind, a.kind).lower() for a in tasks]
-    auto = sum(1 for a in tasks if retire_task(a, reason) == "deleted")
-    if auto:
+    lines = []
+    for a in tasks:
+        line = _task_line(a)
+        if retire_task(a, reason) == "deleted":
+            lines.append(line)
+    if lines:
+        text = f"{CLEAN_PREFIX} — {reason}: zamknięto {len(tasks)} zadań ({', '.join(kinds)})."
+        if keep_text:
+            text += "\n" + "\n".join(lines)
         db.session.add(Activity(lead_id=lead.id, kind="note", done=True, done_at=datetime.utcnow(),
-                                assigned_to=lead.assigned_to or USERS[0]["id"],
-                                notes=f"{CLEAN_PREFIX} — {reason}: zamknięto {len(tasks)} zadań ({', '.join(kinds)})."))
+                                assigned_to=lead.assigned_to or USERS[0]["id"], notes=text))
     return len(tasks)
 
 
@@ -177,6 +191,69 @@ def stage_hygiene_pass():
     if n:
         db.session.commit()
     return n
+
+
+# ---- jednorazowo: jedno otwarte zadanie na leada ----
+# Dawne automaty (wyłączone od 23.11.2026) dokładały kilka zadań naraz (telefon + follow-up po ofercie, szkic maila
+# + telefon do osoby prywatnej, „Zdecyduj” obok kolejnej próby). Raz po wdrożeniu każdy lead zostaje z jednym
+# otwartym zadaniem; to nie jest stała reguła — później człowiek może dodać tyle zadań, ile chce.
+
+ONE_TASK_KEY = "one_task_per_lead_v1"
+ONE_TASK_REASON = "porządek: jedno zadanie na leada"
+ONE_TASK_GROUP_MIN = 10  # zadania dodane w tych samych minutach (np. telefon i mail po jednej ofercie) = jedna „partia”
+# w jednej partii zostaje: decyzja po nieudanych próbach → gotowy szkic pierwszej odpowiedzi → telefon → spotkanie → mail
+_KEEP_ORDER = {"decision": 0, "call": 2, "meeting": 3, "online": 3, "email": 4, "sms": 5, "task": 5}
+
+
+def _keep_rank(act):
+    if (act.notes or "").startswith(sales_rules.PRIVATE_DRAFT_PREFIX):
+        return 1
+    return _KEEP_ORDER.get(act.kind, 6)
+
+
+def pick_task_to_keep(tasks):
+    """Które otwarte zadanie zostaje przy leadzie: dodane przez człowieka przed automatycznymi; z nich najnowsza partia
+    (świeższy obraz leada — np. „Zdecyduj” po nieudanych telefonach), w partii według rodzaju, potem najbliższy termin."""
+    tasks = list(tasks)
+    if not tasks:
+        return None
+    human = [a for a in tasks if a.created_by is not None]
+    pool = human or tasks
+    newest = max(a.created_at or datetime.min for a in pool)
+    batch = [a for a in pool if (a.created_at or datetime.min) >= newest - timedelta(minutes=ONE_TASK_GROUP_MIN)]
+    return min(batch, key=lambda a: (_keep_rank(a), a.due_date or datetime.max, a.id or 0))
+
+
+def one_task_per_lead_once():
+    """Jednorazowo po wdrożeniu: lead z kilkoma otwartymi zadaniami zostaje z jednym (pick_task_to_keep). Pozostałe
+    zamyka retire_tasks — od człowieka stają się komentarzem „🧹 Nieaktualne”, automatyczne znikają, a ich treść
+    zostaje w jednym komentarzu przy leadzie. Leady, notatki i zadania własne (bez leada) bez zmian.
+    Raport (leady, zadania) w ustawieniu ONE_TASK_KEY i w logu. Zwraca liczbę zamkniętych zadań albo None."""
+    if get_setting(ONE_TASK_KEY) or not _claim_once(ONE_TASK_KEY + "_lock"):
+        return None
+    try:
+        lead_ids = [r[0] for r in db.session.query(Activity.lead_id).filter(
+            Activity.lead_id.isnot(None), Activity.done.isnot(True), Activity.kind != "note").group_by(
+            Activity.lead_id).having(db.func.count(Activity.id) > 1).all()]
+        n_leads = n_tasks = 0
+        for lid in lead_ids:
+            lead = all_markets(Lead.query.filter(Lead.id == lid)).first()
+            if lead is None:
+                continue
+            tasks = lead_open_tasks(lid).all()
+            keep = pick_task_to_keep(tasks)
+            n_tasks += retire_tasks(lead, [a for a in tasks if a is not keep], ONE_TASK_REASON, keep_text=True)
+            n_leads += 1
+        set_setting(ONE_TASK_KEY, json.dumps({"at": datetime.utcnow().isoformat(timespec="seconds"),
+                                              "leads": n_leads, "tasks": n_tasks}))
+        db.session.commit()
+    except Exception:  # nic nie zapisane — blokada znika, następny obieg spróbuje jeszcze raz
+        db.session.rollback()
+        AppSetting.query.filter_by(key=(ONE_TASK_KEY + "_lock")[:64]).delete()
+        db.session.commit()
+        raise
+    app.logger.warning("porządek zadań: %s leadów, zamknięto %s zadań (zostało po jednym)", n_leads, n_tasks)
+    return n_tasks
 
 
 # ---- poczta → leady ----
