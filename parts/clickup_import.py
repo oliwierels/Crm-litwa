@@ -38,14 +38,12 @@ def _clickup_task_to_lead(task):
     if "contact_name" not in fields and _looks_like_person_name(fields["company"]):
         fields["contact_name"] = fields["company"]
 
-    # przypisanie po e-mailu asygnowanej osoby w ClickUp -> konto w CRM
+    # przypisanie po e-mailu asygnowanej osoby w ClickUp -> konto w CRM; bez niej lead dostaje domyślnego
+    # opiekuna rynku (default_owner w market.py — CRM PL: Jerzy) przy tworzeniu leada
     assignee_emails = {(a.get("email") or "").lower() for a in task.get("assignees", []) or []}
-    assigned_to = 1
-    for u in USERS:
-        if u.get("email", "").lower() in assignee_emails:
-            assigned_to = u["id"]
-            break
-    fields["assigned_to"] = assigned_to
+    assigned_to = next((u["id"] for u in USERS if (u.get("email") or "").lower() in assignee_emails), None)
+    if assigned_to:
+        fields["assigned_to"] = assigned_to
 
     created = task.get("date_created")
     if created:

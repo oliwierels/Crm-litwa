@@ -44,9 +44,11 @@ def crm_add_activity(lead_id):
     if not lead:
         abort(404)
     try:
-        assigned = int(request.form.get("assigned_to", lead.assigned_to or 1))
+        assigned = int(request.form.get("assigned_to") or get_current_user(request)["id"])
     except (TypeError, ValueError):
-        assigned = lead.assigned_to or 1
+        assigned = get_current_user(request)["id"]
+    if assigned not in USERS_BY_ID:
+        assigned = get_current_user(request)["id"]
     act = Activity(
         lead_id=lead_id,
         kind=request.form.get("kind", "note"),

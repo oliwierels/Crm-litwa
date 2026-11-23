@@ -9,7 +9,7 @@ def crm_add_lead():
     company = request.form.get("company", "").strip()
     if not company:
         return redirect(url_for("crm_leads"))
-    lead = Lead(company=company, assigned_to=1)
+    lead = Lead(company=company, assigned_to=default_owner())  # opiekun z formularza; bez niego — domyślny rynku
     msgs = _save_lead_fields(lead, request.form, actor_id=user["id"])
     if lead.stage not in STAGES:
         lead.stage = "Nowy"

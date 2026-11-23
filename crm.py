@@ -650,6 +650,7 @@ def _realize_scheduler():
                 run_offer_audit_once()
                 cleanup_offer_audit_steps()
                 cleanup_won_tasks_once()  # raz: wygrane leady bez otwartych zadań (dalej Customer Journey)
+                owner_cleanup_once()  # raz: leady z importu do domyślnego opiekuna rynku, zadania za opiekunem
                 clear_form_day_event_dates()
                 db.session.remove()
             health_beat("automaty")
@@ -982,7 +983,9 @@ def _clickup_task_to_lead_de(task):
         except (TypeError, ValueError):
             pass
     emails = {(a.get("email") or "").lower() for a in task.get("assignees") or []}
-    fields["assigned_to"] = next((u["id"] for u in USERS if (u.get("email") or "").lower() in emails), USERS[0]["id"])
+    owner = next((u["id"] for u in USERS if (u.get("email") or "").lower() in emails), None)
+    if owner:  # bez osoby w ClickUp — domyślny opiekun rynku przy tworzeniu leada
+        fields["assigned_to"] = owner
     return fields
 
 
@@ -1052,7 +1055,7 @@ def sync_clickup_de_leads():
             continue
         created = fields.pop("created_at", None)
         lead = Lead(company=fields["company"], clickup_task_id=task_id, stage="Nowy", clickup_pending=False,
-                    assigned_to=fields.get("assigned_to", 1), source=CLICKUP_DE_SOURCE, notes=fields.get("notes", ""),
+                    assigned_to=fields.get("assigned_to") or default_owner("de"), source=CLICKUP_DE_SOURCE, notes=fields.get("notes", ""),
                     currency="EUR", market="de")
         for f in _CLICKUP_REFRESH_FIELDS + ("contact_email2",):
             if f in fields:
@@ -1151,7 +1154,7 @@ def _sync_clickup_main(list_id):
         lead = Lead(
             company=fields["company"], clickup_task_id=task_id, stage="Nowy",
             clickup_pending=True,  # ląduje w zakładce "Z ClickUp", nie od razu w CRM
-            assigned_to=fields.get("assigned_to", 1), source=fields.get("source", "ClickUp"),
+            assigned_to=fields.get("assigned_to") or default_owner(DEFAULT_MARKET), source=fields.get("source", "ClickUp"),
             notes=fields.get("notes", ""), currency=fields.get("currency", "EUR"),
             market=markets.detect(fields.get("contact_phone"), [fields.get("contact_email")]) or DEFAULT_MARKET,
         )
@@ -3908,7 +3911,8 @@ def _assistant_execute(name, inp, user):
         if mcode not in markets.MARKETS:  # rynek: podany → z telefonu / maila / kraju → oglądany w CRM
             mcode = markets.detect(inp.get("contact_phone"), [inp.get("contact_email")],
                                    inp.get("billing_country"), inp.get("location")) or current_market()
-        lead = Lead(company=company, stage="Nowy", assigned_to=user["id"], currency="EUR", quality="Średni",
+        # opiekun: podany w assigned_to (niżej), inaczej domyślny opiekun rynku, nie osoba pytająca
+        lead = Lead(company=company, stage="Nowy", assigned_to=default_owner(mcode), currency="EUR", quality="Średni",
                     market=mcode)
         err = _assistant_apply_lead_fields(lead, inp, user)
         if err:
@@ -4746,7 +4750,9 @@ def process_inbox_message(rec, force=False):
                                 assigned_to=lead.assigned_to or 1, notes=_inbox_note(rec, header)))
         rec.status, rec.lead_id, rec.reason = "dopisany", lead.id, "klient jest już w CRM"
         return
-    assignee = USERS_BY_ID.get(_assistant_resolve_user(os.environ.get("INBOX_ASSIGN_TO", "Oliwier"), 1), USERS[0])
+    # opiekun: INBOX_ASSIGN_TO z Railway, a gdy brak — domyślny opiekun rynku skrzynki (CRM PL: Jerzy)
+    wanted = _assistant_resolve_user(os.environ.get("INBOX_ASSIGN_TO", "").strip(), None)
+    assignee = USERS_BY_ID.get(wanted or default_owner(getattr(rec, "market", None) or DEFAULT_MARKET), USERS[0])
     fields = {
         "company": (str(res.get("company") or "").strip() or res.get("contact_name") or contact_email or "Nowe zapytanie")[:200],
         "contact_name": res.get("contact_name") or None, "contact_email": contact_email or None,
@@ -8966,6 +8972,7 @@ def crm_mail_review_now():
 
 
 _include("nastepny_krok")
+_include("opiekun")
 _include("raporty_dnia")
 
 with app.app_context():

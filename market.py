@@ -30,6 +30,7 @@ ALL = {
         "offer_second_step": "call",  # po ofercie: telefon
         # umowa: VAT 23%, wykonawca do wyboru (33Bots Bartosz Wysocki albo Robonova Oliwier Latek — journey.CONTRACTORS)
         "contract_vat": "23", "contractors": True,
+        "default_owner": 3,  # opiekun nowych leadów bez wskazanej osoby: Jerzy (obsługuje wszystkie polskie leady)
     },
     "lt": {
         "code": "lt", "lang": "lt", "flag": "🇱🇹", "name": "Litwa", "country": "LT", "domain": "33bots.lt",
@@ -47,6 +48,7 @@ ALL = {
         "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
         "offer_second_step": "email",  # po ofercie: follow-up mailem w języku klienta (CRM PL: telefon)
         "contract_vat": "0",  # umowa: odwrotne obciążenie (bez VAT)
+        "default_owner": 1,  # opiekun nowych leadów bez wskazanej osoby: Oliwier
         "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         # --- formularz dla klienta (/f/…) ---
         "form": {
@@ -159,6 +161,7 @@ ALL = {
         "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
         "offer_second_step": "email",  # po ofercie: follow-up mailem w języku klienta (CRM PL: telefon)
         "contract_vat": "0",  # umowa: odwrotne obciążenie (bez VAT)
+        "default_owner": 1,  # opiekun nowych leadów bez wskazanej osoby: Oliwier
         "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         "form": {
             "title": "33Bots – Angaben zur Veranstaltung",

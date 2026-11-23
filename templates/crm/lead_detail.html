@@ -550,7 +550,7 @@
             <div>
               <label>Przypisz do</label>
               <select name="assigned_to">
-                {% for u in users %}<option value="{{ u.id }}" {% if u.id==lead.assigned_to %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+                {% for u in users %}<option value="{{ u.id }}" {% if u.id==user.id %}selected{% endif %}>{{ u.name }}{{ ' (opiekun)' if u.id==lead.assigned_to }}</option>{% endfor %}
               </select>
             </div>
             <div style="padding-top:18px">

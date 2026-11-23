@@ -440,7 +440,7 @@ tr:hover td { background: var(--panel2); }
             <div>
               <label>Przypisz do</label>
               <select name="assigned_to">
-                {% for u in users %}<option value="{{ u.id }}" {% if u.id == user.id %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+                {% for u in users %}<option value="{{ u.id }}" {% if u.id == default_owner() %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
               </select>
             </div>
             <div>

@@ -22,7 +22,7 @@
       <div style="flex:1;min-width:120px">
         <label>Kto</label>
         <select name="assigned_to" style="width:100%">
-          {% for u in users %}<option value="{{ u.id }}" {{ 'selected' if u.id == (lead.assigned_to or user.id) }}>{{ u.name }}</option>{% endfor %}
+          {% for u in users %}<option value="{{ u.id }}" {{ 'selected' if u.id == user.id }}>{{ u.name }}{{ ' (opiekun)' if u.id == lead.assigned_to }}</option>{% endfor %}
         </select>
       </div>
     </div>
