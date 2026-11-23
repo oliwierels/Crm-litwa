@@ -255,9 +255,22 @@ def _team_day_label(d):
     return f"{team.WEEKDAYS_SHORT[d.weekday()]} {d:%d.%m}"
 
 
+def team_local_hour():
+    """Godzina w Polsce (osobna funkcja — testy podstawiają godzinę)."""
+    return to_local(datetime.utcnow()).hour
+
+
+def team_block_hour():
+    try:
+        return max(team.REMIND_HOUR, min(23, int(os.environ.get("DAY_REPORT_BLOCK_HOUR", team.BLOCK_HOUR))))
+    except ValueError:
+        return team.BLOCK_HOUR
+
+
 def team_gate():
-    """Dla szablonu: czego brakuje zalogowanej osobie — brakujące raporty z poprzednich dni (blokują CRM) i dzisiejszy
-    raport (przypomnienie od team.REMIND_HOUR). None, gdy osoba nie ma obowiązku raportu."""
+    """Dla szablonu: czego brakuje zalogowanej osobie. Brakujące raporty z poprzednich dni blokują CRM; dzisiejszy —
+    od team.REMIND_HOUR okno przypomnienia (do odłożenia na 30 min), od team_block_hour() blokada, dopóki nie złożony.
+    Strony raportu nigdy nie są blokowane. None, gdy osoba nie ma obowiązku raportu."""
     def make():
         if not team_reports_on():
             return None
@@ -270,16 +283,51 @@ def team_gate():
         missing = team.missing_days(filed, since, today)
         today_due = team.is_required_day(today) and today not in filed and since is not None and since <= today
         on_report = request.endpoint in TEAM_REPORT_ENDPOINTS
+        hour, block_hour = team_local_hour(), team_block_hour()
+        today_block = today_due and hour >= block_hour and not on_report
         return {"missing": [{"iso": d.isoformat(), "label": _team_day_label(d)} for d in missing],
-                "today_due": today_due, "block": bool(missing) and not on_report,
-                "remind": (today_due and not missing and not on_report
-                           and to_local(datetime.utcnow()).hour >= team.REMIND_HOUR)}
+                "today_due": today_due, "today_block": today_block, "block_hour": block_hour,
+                "block": (bool(missing) and not on_report) or today_block,
+                "remind": today_due and not missing and not on_report and team.REMIND_HOUR <= hour < block_hour,
+                "snooze_min": team.REMIND_SNOOZE_MIN}
     try:
         return _team_cache("crm.team_gate", make)
     except Exception:
         db.session.rollback()
         app.logger.exception("team_gate")
         return None
+
+
+TEAM_REMIND_MAIL_KEY = "team_remind_mail:{}:{}"  # dzień, osoba — przypomnienie mailem najwyżej raz dziennie
+
+
+def team_report_reminders():
+    """W tle (po team.REMIND_HOUR, dzień roboczy): jeden mail do osoby z obowiązkiem raportu, która dziś jeszcze go
+    nie złożyła — gdyby nie była wtedy w CRM. Mail idzie z jej własnej skrzynki do niej samej. Zwraca liczbę maili."""
+    if not team_reports_on():
+        return 0
+    today = _local_today()
+    if team_local_hour() < team.REMIND_HOUR or not team.is_required_day(today):
+        return 0
+    sent = 0
+    base = public_base_url() if "public_base_url" in globals() else ""
+    for u in USERS:
+        if not team_role(u)["report"] or not u.get("email"):
+            continue
+        since = team_since(u)
+        if since is None or since > today or today in set(team_reports(u["id"], today, today)):
+            continue
+        key = TEAM_REMIND_MAIL_KEY.format(today.isoformat(), u["id"])
+        if get_setting(key) or not _claim_once(key + "_lock"):
+            continue
+        body = (f"Cześć {u['name']},\n\nprzypomnienie z CRM: pamiętaj, żeby wypełnić raport dnia — co dziś zrobiłeś.\n"
+                + (f"Raport: {base}/crm/raport\n" if base else "Raport: CRM → Raport dnia\n")
+                + f"\nOd {team_block_hour()}:00 CRM zablokuje się, dopóki dzisiejszy raport nie będzie złożony.\n\nCRM 33Bots")
+        err = _smtp_send(u["email"], "📝 Raport dnia — co dziś zrobiłeś?", body, u["name"], sender=u)
+        set_setting(key, (err or "wysłany")[:200])
+        db.session.commit()
+        sent += 0 if err else 1
+    return sent
 
 
 def _team_last_touch(r):

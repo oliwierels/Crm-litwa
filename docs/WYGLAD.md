@@ -9,7 +9,9 @@
   Z ClickUp / Duplikaty).
 - **Szukajka Ctrl+K** (albo „/”): leady po firmie, osobie, telefonie, mailu + strony + akcje.
 - **Dzwonek** 🔔: przypomnienia, które nie blokują pracy (raport dnia, strażnik, „czy ktoś oddzwaniał?”, leady czekające
-  u innych). Blokują tylko: nowy lead u jego opiekuna i brakujący raport dnia z poprzednich dni.
+  u innych). Blokują: nowy lead u jego opiekuna i raport dnia — brak raportu z poprzednich dni od razu, a dzisiejszego:
+  od 15:00 okno „Pamiętaj o raporcie dnia” (do odłożenia na 30 min) + jeden mail przypomnienia, od 17:00 blokada CRM
+  (`DAY_REPORT_BLOCK_HOUR`), dopóki raport nie jest złożony.
 - **Wygrana** 🏆 (`static/wygrana.js`): przejście leada na „Wygrany” (tablica, nagłówek, edycja) to pokaz jak główna
   wygrana w kasynie (klimat i grafika kasyna, nazwy nasze): szkolny dzwonek „brrrr” i trzęsienie ziemi strony →
   WYGRANA! (wybuch i fontanna monet, licznik kwoty, światełka dookoła) → „JERZY ZAMYKA TEMAT!” (imię osoby) →

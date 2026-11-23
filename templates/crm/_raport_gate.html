@@ -1,19 +1,41 @@
-{# Raport dnia: blokada CRM przy brakujących raportach z poprzednich dni + przypomnienie o dzisiejszym (reguły: team.py) #}
+{# Raport dnia (reguły: team.py, parts/raporty_dnia.py):
+   - brak raportu z poprzednich dni → CRM zablokowany, dopóki nie uzupełniony,
+   - dzisiejszy: od 15:00 okno przypomnienia (można odłożyć na 30 min), od godziny blokady → CRM zablokowany.
+   Strony raportu nigdy nie są blokowane. #}
 {% set tg = team_gate() %}
 {% if tg and tg.block %}
 <div style="position:fixed;inset:0;z-index:9400;background:rgba(15,17,21,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="max-width:520px;width:100%;background:var(--panel);border:1px solid var(--border);border-top:4px solid var(--red);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow-lg)">
     <div style="font-size:18px;font-weight:700;margin-bottom:8px">📝 Najpierw raport dnia</div>
     <div style="font-size:13.5px;line-height:1.55">
+      {% if tg.missing %}
       Brakuje {{ 'raportu' if tg.missing|length == 1 else 'raportów' }} za:
-      <b>{% for m in tg.missing %}{{ m.label }}{{ ', ' if not loop.last }}{% endfor %}</b>.
+      <b>{% for m in tg.missing %}{{ m.label }}{{ ', ' if not loop.last }}{% endfor %}</b>{% if tg.today_block %} i za <b>dziś</b>{% endif %}.
+      {% else %}
+      Jest po {{ tg.block_hour }}:00, a dzisiejszego raportu jeszcze nie ma — napisz, <b>co dziś zrobiłeś</b>.
+      {% endif %}
       Raport dnia jest obowiązkowy — dopóki go nie uzupełnisz, reszta CRM jest zablokowana.
       Jeśli tego dnia nie pracowałeś, zaznacz w raporcie „Dzień wolny”.
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
       {% for m in tg.missing %}<a class="btn {{ 'btn-primary' if loop.first else 'btn-secondary' }}" href="{{ url_for('crm_day_report_day', day=m.iso) }}">Uzupełnij {{ m.label }}</a>{% endfor %}
+      {% if tg.today_block %}<a class="btn {{ 'btn-secondary' if tg.missing else 'btn-primary' }}" href="{{ url_for('crm_day_report') }}">📝 Raport za dziś</a>{% endif %}
     </div>
     <div style="font-size:11.5px;color:var(--muted);margin-top:12px">Uzupełniony po terminie zapisze się jako spóźniony. Zwolnić z raportu za dany dzień może osoba z wyższą rangą (Zespół → tabela dni).</div>
+  </div>
+</div>
+{% elif tg and tg.remind and not request.cookies.get('report_snooze') %}
+<div id="rg-remind" style="position:fixed;inset:0;z-index:9300;background:rgba(15,17,21,.45);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="max-width:480px;width:100%;background:var(--panel);border:1px solid var(--border);border-top:4px solid var(--yellow);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow-lg)">
+    <div style="font-size:18px;font-weight:700;margin-bottom:8px">📝 Pamiętaj o raporcie dnia</div>
+    <div style="font-size:13.5px;line-height:1.55">
+      Wypełnij raport — <b>co dziś zrobiłeś</b>. Zajmie to 2 minuty, a liczby (telefony, maile, oferty, zadania)
+      CRM uzupełnia sam. Od <b>{{ tg.block_hour }}:00</b> CRM zablokuje się, dopóki dzisiejszy raport nie będzie złożony.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <a class="btn btn-primary" href="{{ url_for('crm_day_report') }}">📝 Wypełnij teraz</a>
+      <button type="button" class="btn btn-secondary" onclick="document.cookie = 'report_snooze=1; max-age={{ tg.snooze_min * 60 }}; path=/; samesite=lax'; document.getElementById('rg-remind').remove()">Przypomnij za {{ tg.snooze_min }} min</button>
+    </div>
   </div>
 </div>
 {% endif %}

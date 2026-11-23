@@ -663,6 +663,11 @@ def _realize_scheduler():
                 except Exception:
                     db.session.rollback()
                     app.logger.exception("stage_hygiene")
+                try:  # raport dnia: od 15:00 jeden mail z przypomnieniem do osoby bez dzisiejszego raportu
+                    team_report_reminders()
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception("team_report_reminders")
                 auto_merge_duplicates()
                 if os.environ.get("SALES_AUTOMATION", "1") != "0":
                     sales_automation_pass()

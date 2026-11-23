@@ -303,3 +303,43 @@ def test_switch_turns_reports_off(monkeypatch):
     assert report(JERZY, today()) is None
     monkeypatch.delenv("DAY_REPORTS")
     assert crm.team_reports_on() is (not LT), "domyślnie: CRM PL tak, CRM LT/DE nie (jeden raport na osobę)"
+
+
+def test_today_report_reminds_at_15_and_blocks_from_17(monkeypatch):
+    """Dzisiejszy raport: przed 15:00 spokój, od 15:00 okno przypomnienia (do odłożenia na 30 min), od 17:00 blokada
+    całego CRM, dopóki raport nie jest złożony; strona raportu zawsze otwarta; Zarządu to nie dotyczy."""
+    since(JERZY, 0)
+    monkeypatch.setattr(crm, "team_local_hour", lambda: 14)
+    html = client(JERZY).get("/crm/").get_data(as_text=True)
+    assert "Pamiętaj o raporcie dnia" not in html and "Najpierw raport dnia" not in html
+    monkeypatch.setattr(crm, "team_local_hour", lambda: 15)
+    html = client(JERZY).get("/crm/").get_data(as_text=True)
+    assert "Pamiętaj o raporcie dnia" in html and "Najpierw raport dnia" not in html and "Przypomnij za 30 min" in html
+    snoozed = client(JERZY)
+    snoozed.set_cookie("report_snooze", "1")
+    assert "Pamiętaj o raporcie dnia" not in snoozed.get("/crm/").get_data(as_text=True)
+    monkeypatch.setattr(crm, "team_local_hour", lambda: 17)
+    html = client(JERZY).get("/crm/").get_data(as_text=True)
+    assert "Najpierw raport dnia" in html and "co dziś zrobiłeś" in html and "/crm/raport" in html
+    assert "Najpierw raport dnia" in snoozed.get("/crm/").get_data(as_text=True), "po 17:00 odłożenie nie działa"
+    page = client(JERZY).get("/crm/raport", follow_redirects=True).get_data(as_text=True)
+    assert "Najpierw raport dnia" not in page and 'name="summary"' in page, "strona raportu nie jest blokowana"
+    assert "Najpierw raport dnia" not in client(BARTEK).get("/crm/").get_data(as_text=True)
+    assert post(JERZY, today(), status="work", summary=GOOD).status_code == 302
+    html = client(JERZY).get("/crm/").get_data(as_text=True)
+    assert "Najpierw raport dnia" not in html and "Pamiętaj o raporcie dnia" not in html
+
+
+def test_reminder_mail_once_a_day_only_without_report(monkeypatch):
+    since(JERZY, 0)
+    sent = []
+    monkeypatch.setattr(crm, "_smtp_send", lambda to, subject, body, name, **kw: sent.append((to, subject, body)) or None)
+    monkeypatch.setattr(crm, "team_local_hour", lambda: 14)
+    assert crm.team_report_reminders() == 0, "przed 15:00 nic"
+    monkeypatch.setattr(crm, "team_local_hour", lambda: 15)
+    expected = 1 if crm.USERS_BY_ID[JERZY].get("email") else 0
+    assert crm.team_report_reminders() == expected
+    if expected:
+        assert sent[0][0] == crm.USERS_BY_ID[JERZY]["email"] and "co dziś zrobiłeś" in sent[0][2]
+    assert crm.team_report_reminders() == 0, "najwyżej jeden mail dziennie"
+    assert all(to != crm.USERS_BY_ID[BARTEK].get("email") for to, _s, _b in sent), "Zarząd nie dostaje przypomnień"
