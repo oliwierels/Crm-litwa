@@ -1,19 +1,29 @@
-"""Rynki CRM: Litwa (lt) i Niemcy (de) w jednej aplikacji.
+"""Rynki CRM: Polska (pl), Litwa (lt) i Niemcy (de) — jeden kod dla obu serwisów CRM.
 
-Każdy lead ma swój rynek (Lead.market). Wszystko, co idzie do klienta — maile, oferta PDF, umowa,
-formularz, wycena, wiadomość na WhatsApp/Viber — jest w języku rynku leada. Tutaj są teksty i ustawienia
-rynków; crm.py, journey.py, offers.py i pricing.py biorą je stąd.
+Każdy serwis włącza swoje rynki zmienną CRM_MARKETS (Railway): CRM PL „pl”, CRM LT/DE „lt,de”. MARKETS to rynki
+włączone w tym serwisie (przełącznik w menu, filtr widoków), ALL — wszystkie znane. Każdy lead ma swój rynek
+(Lead.market). Wszystko, co idzie do klienta — maile, oferta PDF, umowa, formularz, wycena, wiadomość na
+WhatsApp/Viber — jest w języku rynku leada. Tutaj są teksty i ustawienia rynków; reszta kodu bierze je stąd.
 """
 import os
-
-DEFAULT = "lt"
 
 
 def _env(name, default):
     return os.environ.get(name, "").strip() or default
 
 
-MARKETS = {
+ALL = {
+    "pl": {
+        # Polska — CRM PL. Ustawienia i teksty specyficzne dla PL są jeszcze w kodzie CRM PL i trafiają tu
+        # stopniowo przy scalaniu (docs/PORZADKI.md); na razie tylko dane rynku.
+        "code": "pl", "lang": "pl", "flag": "🇵🇱", "name": "Polska", "country": "PL", "domain": "33bots.pl",
+        "brand": "RoboRent CRM", "html_lang": "pl",
+        "lang_name_pl": "polski", "lang_in_pl": "po polsku",
+        "mailboxes": "", "own_email": "kontakt@33bots.pl", "inquiry_box": "kontakt@33bots.pl",
+        "phone_codes": ("48",), "mobile_local": ("", 9),
+        "hours_unit": "h", "date_style": "dots",
+        "auto_quote_default": "0", "auto_send": False, "messengers": False, "mail_phone": True, "whatsapp_lang": "pl",
+    },
     "lt": {
         "code": "lt", "lang": "lt", "flag": "🇱🇹", "name": "Litwa", "country": "LT", "domain": "33bots.lt",
         "brand": "33bots CRM 🇱🇹", "html_lang": "lt",
@@ -237,6 +247,21 @@ MARKETS = {
 }
 
 
+def _active_codes():
+    """Rynki tego serwisu: CRM_MARKETS (np. „pl” albo „lt,de”). Bez zmiennej — przejściowo, dopóki są dwa
+    repozytoria — jak dawniej: repozytorium CRM LT/DE (ma pl_move.py) = lt,de, CRM PL = pl."""
+    codes = [c.strip().lower() for c in os.environ.get("CRM_MARKETS", "").split(",") if c.strip().lower() in ALL]
+    if codes:
+        return list(dict.fromkeys(codes))
+    here = os.path.dirname(os.path.abspath(__file__))
+    return ["lt", "de"] if os.path.exists(os.path.join(here, "pl_move.py")) else ["pl"]
+
+
+MARKETS = {code: ALL[code] for code in _active_codes()}
+DEFAULT = next(iter(MARKETS))
+
+
+
 # nazwy miast dla klienta (w jego języku) — klucz jak w logistics.CITIES / CITY_ALIASES
 CITY_NATIVE = {
     "lt": {"vilnius": "Vilnius", "wilno": "Vilnius", "kaunas": "Kaunas", "kowno": "Kaunas", "klaipeda": "Klaipėda",
@@ -254,7 +279,8 @@ CITY_NATIVE = {
 
 
 def get(code):
-    return MARKETS.get((code or "").lower()) or MARKETS[DEFAULT]
+    """Ustawienia rynku (także rynku spoza tego serwisu, np. lead przeniesiony); nieznany kod — rynek domyślny."""
+    return ALL.get((code or "").lower()) or MARKETS[DEFAULT]
 
 
 def codes():

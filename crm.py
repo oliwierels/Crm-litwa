@@ -46,45 +46,7 @@ app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("RAILWAY_ENVIRONMENT")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 db = SQLAlchemy(app)
 
-# ---------- RYNKI: Litwa i Niemcy w jednym CRM ----------
-# Każdy lead ma rynek (Lead.market: lt / de). Przełącznik w menu wybiera, który rynek oglądamy — widoki pokazują
-# tylko leady (i ich zadania, oferty, umowy, maile) tego rynku. Wszystko do klienta idzie w języku rynku leada.
-DEFAULT_MARKET = os.environ.get("DEFAULT_MARKET", "").strip().lower() if os.environ.get(
-    "DEFAULT_MARKET", "").strip().lower() in markets.MARKETS else "lt"
-MARKET_COOKIE = "crm_market"
-
-
-def current_market():
-    """Rynek oglądany w CRM (przełącznik w menu); poza zapytaniem przeglądarki — domyślny."""
-    if has_request_context():
-        forced = getattr(g, "market_force", None)
-        if forced:
-            return forced
-        code = request.cookies.get(MARKET_COOKIE, "")
-        if code in markets.MARKETS:
-            return code
-    return DEFAULT_MARKET
-
-
-def M(code=None):
-    """Teksty i ustawienia rynku (market.py)."""
-    return markets.get(code or current_market())
-
-
-def lead_market(lead):
-    return (getattr(lead, "market", None) or DEFAULT_MARKET) if lead is not None else current_market()
-
-
-def wrong_language(code, *texts):
-    """Kod języka, gdy tekst do klienta wyraźnie NIE jest w języku rynku `code` (np. 'en', 'pl'), inaczej None."""
-    lang = poczta.detect_lang("\n".join(str(t or "") for t in texts))
-    return lang if lang and lang != markets.get(code)["lang"] else None
-
-
-def _default_market():
-    if has_request_context():
-        return getattr(g, "market_force", None) or current_market()
-    return DEFAULT_MARKET
+_include("rynki")
 
 
 USERS = [
@@ -518,84 +480,7 @@ def get_current_user(req):
         return USERS[0]
 
 
-# ---------- FILTR RYNKU (Litwa / Niemcy) ----------
-# W zapytaniach z przeglądarki CRM pokazuje tylko leady oglądanego rynku — także ich zadania, oferty, umowy,
-# dokumenty i maile (filtr dokładany automatycznie do każdego zapytania ORM). Wątki w tle widzą wszystko.
-from sqlalchemy import event as _sa_event, select as _sa_select  # noqa: E402
-from sqlalchemy.orm import Session as _OrmSession, with_loader_criteria  # noqa: E402
-
-_MARKET_FREE_ENDPOINTS = {"static", "lead_form", "mcp_endpoint", "whatsapp_webhook", "set_ui_lang", "set_market",
-                          "crm_login", "crm_logout", "index"}
-
-
-def _lead_children():
-    return (Activity, LeadEventDate, StageHistory, Crew, Journey, JourneyMail, JourneyDocument, SentOffer,
-            ContractRequest, CampaignRecipient)
-
-
-@_sa_event.listens_for(_OrmSession, "do_orm_execute")
-def _market_criteria(state):
-    if not state.is_select or state.execution_options.get("all_markets") or not has_request_context():
-        return
-    code = getattr(g, "market_filter", None)
-    if not code:
-        return
-    opts = [with_loader_criteria(Lead, lambda cls: cls.market == code, include_aliases=True),
-            with_loader_criteria(MailMessage, lambda cls: cls.market == code, include_aliases=True),
-            with_loader_criteria(Campaign, lambda cls: cls.market == code, include_aliases=True),
-            with_loader_criteria(InboxMessage, lambda cls: cls.market == code, include_aliases=True),
-            with_loader_criteria(MailTask, lambda cls: cls.market == code, include_aliases=True)]
-    for model in _lead_children():
-        opts.append(with_loader_criteria(
-            model, lambda cls: db.or_(cls.lead_id.is_(None),
-                                      cls.lead_id.in_(_sa_select(Lead.id).where(Lead.market == code))),
-            include_aliases=True))
-    state.statement = state.statement.options(*opts)
-
-
-def all_markets(query):
-    """Zapytanie bez filtra rynku (np. szukanie duplikatów, link do leada z drugiego rynku)."""
-    return query.execution_options(all_markets=True)
-
-
-@app.before_request
-def _set_market_filter():
-    for key in ("market_force", "market_switched", "market_filter"):  # nic nie przechodzi z poprzedniego zapytania
-        g.pop(key, None)
-    if request.endpoint in _MARKET_FREE_ENDPOINTS or request.endpoint is None or request.path.startswith("/f/"):
-        return None
-    code = current_market()
-    lead_id = (request.view_args or {}).get("lead_id")
-    if lead_id:  # link do leada z drugiego rynku — przełącz się na jego rynek
-        other = all_markets(db.session.query(Lead.market).filter(Lead.id == lead_id)).scalar()
-        if other and other != code:
-            g.market_force = other
-            g.market_switched = other
-            code = other
-    g.market_filter = code
-    return None
-
-
-@app.after_request
-def _remember_switched_market(resp):
-    switched = getattr(g, "market_switched", None) if has_request_context() else None
-    if switched:
-        resp.set_cookie(MARKET_COOKIE, switched, max_age=3600 * 24 * 365, samesite="Lax")
-    return resp
-
-
-@app.route("/crm/rynek/<code>")
-def set_market(code):
-    resp = redirect(url_for("crm_dashboard") if "/leads/" in (request.referrer or "") else (request.referrer or "/crm/"))
-    if code in markets.MARKETS:
-        resp.set_cookie(MARKET_COOKIE, code, max_age=3600 * 24 * 365, samesite="Lax")
-    return resp
-
-
-@app.context_processor
-def _inject_market():
-    code = current_market()
-    return {"mkt": M(code), "mkt_code": code, "all_mkts": markets.MARKETS, "crm_brand": M(code)["brand"]}
+_include("rynki_filtr")
 
 
 # ---------- JĘZYK INTERFEJSU (PL / LT) ----------
