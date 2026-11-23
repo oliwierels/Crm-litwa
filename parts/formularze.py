@@ -34,12 +34,14 @@ def is_machine_address(addr):
 
 
 def is_form_notification(row):
-    """Mail z powiadomieniem o wypełnionym formularzu na stronie (Formspree itp.)."""
+    """Mail z powiadomieniem o wypełnionym formularzu na stronie (Formspree, FormSubmit, Getform…) —
+    MailMessage z Poczty albo InboxMessage z importu zapytań."""
     if row is None or getattr(row, "folder", "in") != "in":
         return False
     frm = row.from_addr or ""
+    text = getattr(row, "body_text", None) or getattr(row, "body", None) or ""  # MailMessage albo InboxMessage
     return _form_domain(frm) or (is_machine_address(frm) and bool(
-        _FORM_SUBJECT.search(row.subject or "") or _FORM_BODY.search(row.body_text or "")))
+        _FORM_SUBJECT.search(row.subject or "") or _FORM_BODY.search(text)))
 
 
 def is_machine_mail(row):

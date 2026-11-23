@@ -168,3 +168,22 @@ def test_merge_keeps_duplicate_dates_as_note(app):
     crm.db.session.commit()
     notes = " ".join(a.notes for a in crm.Activity.query.filter_by(lead_id=keeper.id, kind="note").all())
     assert "Scalono duplikat" in notes and f"{d2:%d.%m.%Y}" in notes, "nowy termin z kopii widoczny przy leadzie"
+
+
+def test_inbox_other_form_provider_uses_body_email(app, monkeypatch):
+    """FormSubmit / Getform: formularz rozpoznany wspólną funkcją — adres klienta z treści, gdy Claude go nie podał."""
+    body = "New submission\n\nname: Ola Inny Formularz\nemail: ola.inny@formsubmit-test.pl\nmessage: robot na urodziny"
+    rec = crm.InboxMessage(message_key="<inbox-formsubmit-1>", from_addr="submissions@formsubmit.co",
+                           subject="New Form Submission", received_at=datetime.utcnow(), body=body)
+    crm.db.session.add(rec)
+    crm.db.session.commit()
+    assert crm.is_form_notification(rec)
+    monkeypatch.setattr(crm, "_ai_forced_tool", lambda *a, **k: {
+        "is_inquiry": True, "contact_email": "", "contact_name": "Ola Inny Formularz", "company": "Ola Inny Formularz",
+        "summary": "Robot na urodziny", "quality": "Średni", "reason": "formularz"})
+    monkeypatch.setattr(crm, "_ai_client", lambda: object())
+    crm.process_inbox_message(rec)
+    crm.db.session.commit()
+    lead = crm.db.session.get(crm.Lead, rec.lead_id)
+    MADE.append(lead.id)
+    assert lead.contact_email == "ola.inny@formsubmit-test.pl" and lead.source.startswith("Formularz")

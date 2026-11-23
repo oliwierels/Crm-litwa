@@ -4832,6 +4832,7 @@ def process_inbox_message(rec, force=False):
     """Klasyfikuje mail i tworzy leada albo dopisuje go do istniejącego. Ustawia rec.status."""
     sender = (rec.from_addr or "").lower()
     is_form = "formspree" in sender or "new form submission" in (rec.subject or "").lower()
+    is_form = is_form or is_form_notification(rec)  # parts/formularze.py: też FormSubmit, Getform…
     if not force and not is_form:
         lead = _find_lead_by_contact(sender)
         if lead:
