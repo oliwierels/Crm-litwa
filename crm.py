@@ -357,9 +357,9 @@ def ensure_schema():
                     conn.exec_driver_sql(f"ALTER TABLE mail_messages ADD COLUMN {col} {typ}")
             for code in markets.MARKETS:  # mail bez rynku (zapisany starszym kodem) — rynek z domeny skrzynki
                 tld = markets.get(code)["domain"].rsplit(".", 1)[-1]
-                conn.exec_driver_sql(f"UPDATE mail_messages SET market = '{code}' "
-                                     f"WHERE market IS NULL AND mailbox LIKE '%.{tld}'")
-            conn.exec_driver_sql(f"UPDATE mail_messages SET market = '{mkt}' WHERE market IS NULL")
+                conn.execute(db.text("UPDATE mail_messages SET market = :code WHERE market IS NULL AND mailbox LIKE :box"),
+                             {"code": code, "box": f"%.{tld}"})
+            conn.execute(db.text("UPDATE mail_messages SET market = :code WHERE market IS NULL"), {"code": mkt})
     if "inbox_messages" in insp.get_table_names():
         icols = [col["name"] for col in insp.get_columns("inbox_messages")]
         with db.engine.begin() as conn:
