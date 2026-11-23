@@ -287,7 +287,7 @@ class MailMessage(db.Model):
     __table_args__ = (db.UniqueConstraint("mailbox", "folder", "uidvalidity", "uid", name="uq_mail_uid"),)
     id = db.Column(db.Integer, primary_key=True)
     mailbox = db.Column(db.String(200), index=True, nullable=False)
-    market = db.Column(db.String(2), index=True)  # pl | lt | de — z domeny skrzynki
+    market = db.Column(db.String(2), index=True, default=_default_market)  # pl | lt | de — rynek skrzynki
     folder = db.Column(db.String(10), nullable=False)  # in | sent
     uid = db.Column(db.Integer, nullable=True)  # None = wysłany z CRM, czeka na kopię z Wysłanych
     uidvalidity = db.Column(db.String(40), nullable=True)
@@ -355,6 +355,11 @@ def ensure_schema():
                              ("translate_error", "VARCHAR(300)"), ("quoted_pl", "TEXT")):  # tłumaczenie na polski
                 if col not in mcols:
                     conn.exec_driver_sql(f"ALTER TABLE mail_messages ADD COLUMN {col} {typ}")
+            for code in markets.MARKETS:  # mail bez rynku (zapisany starszym kodem) — rynek z domeny skrzynki
+                tld = markets.get(code)["domain"].rsplit(".", 1)[-1]
+                conn.exec_driver_sql(f"UPDATE mail_messages SET market = '{code}' "
+                                     f"WHERE market IS NULL AND mailbox LIKE '%.{tld}'")
+            conn.exec_driver_sql(f"UPDATE mail_messages SET market = '{mkt}' WHERE market IS NULL")
     if "inbox_messages" in insp.get_table_names():
         icols = [col["name"] for col in insp.get_columns("inbox_messages")]
         with db.engine.begin() as conn:
@@ -6926,40 +6931,52 @@ def _env_pairs():
     """(login, hasło) ze wszystkich znanych zmiennych skrzynek w Railway."""
     pairs = []
     env = os.environ
-    for k, v in env.items():
+    for u, p in (("INBOX_IMAP_USER", "INBOX_IMAP_PASS"), ("SMTP_USER", "SMTP_PASS")):
+        if env.get(u, "").strip() and env.get(p, "").strip():
+            pairs.append((env[u].strip().lower(), env[p].strip()))
+    for k, v in sorted(env.items()):
         for pre_user, pre_pass in (("SMTP_USER_", "SMTP_PASS_"), ("IMAP_USER_", "IMAP_PASS_"), ("MAIL_USER_", "MAIL_PASS_")):
             if k.startswith(pre_user) and v.strip():
                 pwd = env.get(pre_pass + k[len(pre_user):], "").strip()
                 if pwd:
                     pairs.append((v.strip().lower(), pwd))
-    for u, p in (("INBOX_IMAP_USER", "INBOX_IMAP_PASS"), ("SMTP_USER", "SMTP_PASS")):
-        if env.get(u, "").strip() and env.get(p, "").strip():
-            pairs.append((env[u].strip().lower(), env[p].strip()))
+    for u in USERS:  # SMTP_PASS_<IMIĘ> bez SMTP_USER_<IMIĘ> — adres z profilu
+        key = re.sub(r"[^A-Z0-9]", "_", u["name"].upper())
+        pwd = env.get(f"SMTP_PASS_{key}", "").strip()
+        if pwd and u.get("email") and not env.get(f"SMTP_USER_{key}", "").strip():
+            pairs.append((u["email"].lower(), pwd))
     return pairs
 
 
 def mail_boxes(code="all"):
-    """Skrzynki zakładki Poczta: [{login, pwd, host, port, label, key, market, user_id}].
-    Lista rynku: MAILBOXES_LT / MAILBOXES_DE (po przecinku) albo domyślna (o.latek@ i kontakt@33bots.lt/.de);
-    code="all" — wszystkie rynki. Hasło z pasującej zmiennej (SMTP_/IMAP_/MAIL_USER_X + _PASS_X, INBOX_IMAP_*),
-    a gdy brak — MAIL_PASSWORD (wspólne hasło skrzynek)."""
+    """Skrzynki zakładki Poczta: [{login, pwd, host, port, label, key, market, user_id}]; code="all" — wszystkie
+    rynki serwisu. Lista rynku: MAILBOXES_<RYNEK> (po przecinku; rynek domyślny serwisu także MAILBOXES), potem
+    lista z market.py (CRM LT/DE: o.latek@ i kontakt@33bots.lt/.de), a gdy pusta (CRM PL) — wszystkie skrzynki
+    @<domena rynku> z hasłem w Railway (kontakt@ na początku). Hasło z pasującej zmiennej (SMTP_/IMAP_/MAIL_USER_X
+    + _PASS_X, INBOX_IMAP_*, SMTP_PASS_<IMIĘ>), a gdy brak — MAIL_PASSWORD (wspólne hasło skrzynek)."""
     if code == "all":
         return [b for mc in markets.MARKETS for b in mail_boxes(mc)]
     m = markets.get(code)
     raw = os.environ.get(f"MAILBOXES_{m['code'].upper()}", "").strip() or (
-        os.environ.get("MAILBOXES", "").strip() if m["code"] == "lt" else "") or m["mailboxes"]
+        os.environ.get("MAILBOXES", "").strip() if m["code"] == markets.DEFAULT else "") or m["mailboxes"]
     pairs = dict(reversed(_env_pairs()))
     common = os.environ.get("MAIL_PASSWORD", "").strip()
+    if raw:
+        logins = [x.strip().lower() for x in raw.split(",") if x.strip()]
+    else:
+        logins = [lg for lg in dict.fromkeys(p[0] for p in _env_pairs()) if lg.endswith("@" + m["domain"])]
+        logins.sort(key=lambda lg: (lg.split("@")[0] not in ("kontakt", "info", "hi"), lg))
     host = os.environ.get("IMAP_HOST", "").strip() or os.environ.get("SMTP_HOST", "").strip()
     out = []
-    for login in [x.strip().lower() for x in raw.split(",") if x.strip()]:
-        pwd = pairs.get(login) or common
-        key = re.sub(r"[^A-Z0-9]", "_", login.split("@")[0].upper() + "_" + login.split("@")[-1].split(".")[-1].upper())
-        owner = next((u for u in USERS if (u.get("email") or "").split("@")[0].lower() == login.split("@")[0]), None)
+    for login in logins:
         local = login.split("@")[0]
+        # klucz zmiennych IMAP_HOST_<KLUCZ>: przy kilku rynkach z końcówką domeny (KONTAKT_LT / KONTAKT_DE)
+        tld = "_" + login.split("@")[-1].split(".")[-1].upper() if len(markets.MARKETS) > 1 else ""
+        key = re.sub(r"[^A-Z0-9]", "_", local.upper() + tld)
+        owner = next((u for u in USERS if (u.get("email") or "").split("@")[0].lower() == local), None)
         label = (owner.get("full_name") if owner else None) or (
             "Oliwier Latek" if local.startswith("o.latek") else "33Bots" if local in ("kontakt", "info", "hi") else login)
-        out.append({"login": login, "pwd": pwd, "key": key, "label": label, "market": m["code"],
+        out.append({"login": login, "pwd": pairs.get(login) or common, "key": key, "label": label, "market": m["code"],
                     "host": os.environ.get(f"IMAP_HOST_{key}", "").strip() or host,
                     "port": int(os.environ.get(f"IMAP_PORT_{key}", "").strip() or os.environ.get("IMAP_PORT", 993)),
                     "user_id": owner["id"] if owner else None})
@@ -7196,14 +7213,20 @@ def mail_translate_subjects(rows):
 MAIL_RETRANSLATE_KEY = "mail_retranslate_v1"
 
 
+def _translate_markets():
+    """Rynki serwisu, na których maile w Poczcie tłumaczymy na polski (market.py: translate_mail; CRM PL — żaden)."""
+    return [c for c in markets.MARKETS if markets.get(c).get("translate_mail")]
+
+
 def mail_fix_bad_translations(days=120):
     """Raz: maile, których „tłumaczenie” zostało w obcym języku (np. niemiecki przepisany bez zmian), idą do
     ponownego tłumaczenia."""
-    if get_setting(MAIL_RETRANSLATE_KEY):
+    if get_setting(MAIL_RETRANSLATE_KEY) or not _translate_markets():
         return 0
     since = datetime.utcnow() - timedelta(days=days)
     n = 0
     for r in all_markets(MailMessage.query.filter(MailMessage.translated_at.isnot(None),
+                                                  MailMessage.market.in_(_translate_markets()),
                                                   MailMessage.date >= since)).all():
         if (r.lang or "") == "pl":
             continue
@@ -7221,16 +7244,34 @@ def mail_fix_bad_translations(days=120):
 
 
 def mail_auto_translate(limit=15):
-    """W tle: tłumaczy świeże maile od klientów (ostatnie MAIL_AUTO_TRANSLATE_DAYS dni) zanim ktoś je otworzy."""
-    if not _ai_client():
+    """W tle: tłumaczy świeże maile od klientów (ostatnie MAIL_AUTO_TRANSLATE_DAYS dni) zanim ktoś je otworzy —
+    tylko na rynkach z tłumaczeniem (market.py: translate_mail)."""
+    if not _ai_client() or not _translate_markets():
         return 0
     since = datetime.utcnow() - timedelta(days=MAIL_AUTO_TRANSLATE_DAYS)
-    rows = (MailMessage.query.filter(MailMessage.translated_at.is_(None), MailMessage.translate_error.is_(None),
-                                     MailMessage.date >= since)
+    rows = (all_markets(MailMessage.query.filter(MailMessage.translated_at.is_(None),
+                                                 MailMessage.translate_error.is_(None),
+                                                 MailMessage.market.in_(_translate_markets()),
+                                                 MailMessage.date >= since))
             .order_by(MailMessage.date.desc()).limit(limit).all())
     for r in rows:
         mail_translate(r)
     return len(rows)
+
+
+MAIL_SEEN_CLEANUP_KEY = "mail_seen_cleanup_v1"
+
+
+def mail_mark_all_seen_once():
+    """Jednorazowo (CRM PL): wszystkie dotychczasowe maile w Odebranych → przeczytane (historyczne świeciły się
+    jako nowe). Nowe maile po tym dalej przychodzą jako nieprzeczytane."""
+    if get_setting(MAIL_SEEN_CLEANUP_KEY) or not _claim_once(MAIL_SEEN_CLEANUP_KEY):
+        return 0
+    n = (MailMessage.query.filter(MailMessage.folder == "in", MailMessage.seen.isnot(True))
+         .update({"seen": True}, synchronize_session=False))
+    set_setting(MAIL_SEEN_CLEANUP_KEY, f"{n} maili @ {datetime.utcnow():%Y-%m-%d %H:%M}")
+    db.session.commit()
+    return n
 
 
 def _mail_scheduler():
@@ -7239,8 +7280,11 @@ def _mail_scheduler():
         try:
             res = None
             with app.app_context():
+                if "pl" in markets.MARKETS:  # jednorazowa naprawa starych maili CRM PL (świeciły się jako nowe)
+                    mail_mark_all_seen_once()
                 if mail_boxes():
                     res = mail_sync_all()
+                    mail_tasks_autoclose()
                     mail_fix_bad_translations()
                     mail_auto_translate()
                 db.session.remove()
@@ -7459,10 +7503,11 @@ def crm_mail_new_lead(mid):
     domain = addr.split("@")[-1] if addr else ""
     company = row.from_name if row.folder == "in" and row.from_name else (domain.split(".")[0].capitalize() if domain else "Lead z maila")
     user = get_current_user(request)
+    code = row.market if row.market in markets.MARKETS else current_market()  # rynek skrzynki, na którą przyszedł
     lead = Lead(company=company[:200], contact_name=(row.from_name or "")[:200] if row.folder == "in" else "",
-                contact_email=addr, stage="Nowy", assigned_to=user["id"], currency="EUR", source="Mail",
-                market=row.market or current_market(),
-                notes=f"Z maila „{row.subject or ''}” ({row.date:%Y-%m-%d} )".replace(" )", ")") if row.date else "")
+                contact_email=addr, stage="Nowy", assigned_to=user["id"], source="Mail",
+                market=code, currency=M(code)["currency"],
+                notes=f"Z maila „{row.subject or ''}” ({row.date:%Y-%m-%d})" if row.date else "")
     db.session.add(lead)
     db.session.flush()
     db.session.add(StageHistory(lead_id=lead.id, from_stage=None, to_stage="Nowy", changed_by=user["id"]))
@@ -7492,7 +7537,7 @@ def crm_mail_translate_draft():
     return jsonify({"ok": True, "subject": subj, "body": text})
 
 
-# --- Claude pisze maila (odpowiedź albo nowy) — po polsku i od razu w języku klienta ---
+# --- Claude pisze maila (odpowiedź albo nowy) — w języku klienta; przy tłumaczeniu (LT/DE) obok po polsku ---
 MAIL_REPLY_AI_MODEL = os.environ.get("MAIL_REPLY_AI_MODEL", "").strip() or "claude-opus-5-5"
 MAIL_DRAFT_TOOL = {
     "name": "write_email",
@@ -8099,13 +8144,31 @@ def lead_alert_since():
         return datetime.utcnow() - timedelta(days=LEAD_ALERT_DAYS)
 
 
+CONTACT_KINDS = ("call", "sms", "email", "online", "meeting")  # zrobione zadanie tego rodzaju = kontakt z klientem
+FOREIGN_MOVE_GRACE_MIN = 30  # tyle minut CRM LT/DE ma na zabranie leada, zanim wróci do alarmu w polskim CRM
+
+
+def _contact_done_ids():
+    """Leady, z którymi już był kontakt zapisany w CRM (telefon — nie „nie odebrał”, mail, oferta, mail z podróży)."""
+    acts = db.session.query(Activity.lead_id).filter(
+        Activity.lead_id.isnot(None), Activity.done.is_(True), Activity.kind.in_(CONTACT_KINDS),
+        db.or_(Activity.notes.is_(None), db.not_(Activity.notes.like("📵%"))))
+    offers = db.session.query(SentOffer.lead_id).filter(SentOffer.lead_id.isnot(None), SentOffer.sent_at.isnot(None))
+    mails = db.session.query(JourneyMail.lead_id).filter(JourneyMail.lead_id.isnot(None), JourneyMail.folder == "sent")
+    return acts.union(offers, mails)
+
+
 def unhandled_leads(code=None):
-    """Nowe leady rynku `code` (domyślnie oglądanego), z którymi nikt się jeszcze nie skontaktował."""
+    """Nowe leady rynku `code` (domyślnie oglądanego), z którymi nikt się jeszcze nie skontaktował (do obsłużenia
+    dziś). Nieodebrany telefon (📵) to jeszcze nie kontakt."""
     code = code or current_market()
     q = all_markets(Lead.query.filter(Lead.market == code, Lead.created_at >= lead_alert_since(),
                                       Lead.handled_at.is_(None), Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
-                                      Lead.clickup_pending.isnot(True)))
-    return q.order_by(Lead.created_at).all()
+                                      Lead.clickup_pending.isnot(True), Lead.id.notin_(_contact_done_ids())))
+    # w CRM PL litewskie i niemieckie leady obsługuje CRM LT / DE (zabiera je w ciągu kilku minut) — tu ich nie
+    # pokazujemy; gdyby po FOREIGN_MOVE_GRACE_MIN nadal tu były (przenoszenie nie działa), wracają do alarmu
+    grace = datetime.utcnow() - timedelta(minutes=FOREIGN_MOVE_GRACE_MIN)
+    return [l for l in q.order_by(Lead.created_at).all() if not (foreign_market(l) and l.created_at and l.created_at > grace)]
 
 
 def mark_lead_handled(lead, user_id=None, how="ręcznie", note=None):
@@ -8122,11 +8185,12 @@ def _auto_handle_leads(session, _ctx):
     """Kontakt z klientem zapisany w CRM (wysłany mail, oferta, wycena, WhatsApp, odbyty telefon) = lead obsłużony."""
     ids = set()
     for obj in session.new:
-        if isinstance(obj, Activity) and obj.lead_id and obj.done and (
-                obj.kind in ("call", "sms", "email", "meeting") or (obj.notes or "").startswith(_HANDLED_NOTE_PREFIXES)):
+        if isinstance(obj, Activity) and obj.lead_id and obj.done and not (obj.notes or "").startswith("📵") and (
+                obj.kind in CONTACT_KINDS or (obj.notes or "").startswith(_HANDLED_NOTE_PREFIXES)):
             ids.add(obj.lead_id)
     for obj in session.dirty:
-        if isinstance(obj, Activity) and obj.lead_id and obj.done and obj.kind in ("call", "sms", "email", "meeting"):
+        if isinstance(obj, Activity) and obj.lead_id and obj.done and obj.kind in CONTACT_KINDS and \
+                not (obj.notes or "").startswith("📵"):
             ids.add(obj.lead_id)
     if ids:
         session.connection().execute(
@@ -8137,11 +8201,13 @@ def _auto_handle_leads(session, _ctx):
 def _lead_alert_row(lead):
     created = to_local(lead.created_at) if lead.created_at else None
     age_h = (datetime.utcnow() - lead.created_at).total_seconds() / 3600 if lead.created_at else 0
+    lang = lead_language(lead)  # flaga tylko przy kliencie w innym języku niż rynek (np. zagraniczny lead w CRM PL)
     return {"id": lead.id, "company": lead.company, "contact": lead.contact_name or "", "phone": lead.contact_phone or "",
             "email": ", ".join(lead.emails), "has_email": bool(lead.emails), "source": lead.source or "",
             "when": f"{created:%d.%m %H:%M}" if created else "", "age_h": round(age_h, 1),
             "old": bool(created and created.date() < to_local(datetime.utcnow()).date()),
             "notes": " ".join((lead.notes or "").split())[:220], "market": lead.market,
+            "flag": "" if lang == M(lead_market(lead))["lang"] else {"de": "🇩🇪", "lt": "🇱🇹", "en": "🌍"}.get(lang, ""),
             "resp_min": lead_response_minutes(lead), "target": sales_rules.RESPONSE_TARGET_MIN,
             "late": (lead_response_minutes(lead) or 0) > sales_rules.RESPONSE_TARGET_MIN,
             "draft_id": next((a.id for a in lead.activities if not a.done

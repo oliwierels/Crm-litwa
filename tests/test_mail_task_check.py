@@ -106,7 +106,7 @@ def test_review_new_task_checked_before_list(app, monkeypatch):
         return {"items": [{"task": 0, "done": True, "evidence": "Wycena poszła osobnym mailem"}]}
 
     monkeypatch.setattr(crm, "_ai_forced_tool", fake)
-    res = crm.mail_review(*(["lt"] if LT else []))
+    res = crm.mail_review(crm.markets.DEFAULT)
     assert "już załatwionych" in res["info"]
     t = crm.all_markets(crm.MailTask.query.filter(crm.MailTask.thread_key == "t-rev")).one()
     assert t.status == "done" and t.done_how == crm.MAIL_TASK_DONE_HOW

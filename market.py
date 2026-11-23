@@ -23,6 +23,10 @@ ALL = {
         "phone_codes": ("48",), "mobile_local": ("", 9),
         "hours_unit": "h", "date_style": "dots",
         "auto_quote_default": "0", "auto_send": False, "messengers": False, "mail_phone": True, "whatsapp_lang": "pl",
+        "bye": "Pozdrawiam,",
+        # polski CRM dostaje też zapytania z zagranicy: język klienta rozpoznany z kraju / maila / telefonu
+        # (litewskie i niemieckie leady przechodzą same do CRM LT/DE), maile w Poczcie bez tłumaczenia
+        "detect_lang": True, "translate_mail": False,
     },
     "lt": {
         "code": "lt", "lang": "lt", "flag": "🇱🇹", "name": "Litwa", "country": "LT", "domain": "33bots.lt",
@@ -37,6 +41,8 @@ ALL = {
         "messengers": True,  # WhatsApp / Viber z leada i kalkulatora
         "mail_phone": True,  # numer telefonu nadawcy w podpisie maili
         "whatsapp_lang": "lt",
+        "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
+        "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         # --- formularz dla klienta (/f/…) ---
         "form": {
             "title": "33Bots – renginio informacija",
@@ -145,6 +151,8 @@ ALL = {
         "messengers": False,  # Niemcy: bez WhatsApp / Viber — oferta tylko mailem
         "mail_phone": False,  # Niemcy: bez polskiego numeru w mailach — telefon tylko w PDF oferty
         "whatsapp_lang": "de",
+        "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
+        "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         "form": {
             "title": "33Bots – Angaben zur Veranstaltung",
             "done_h1": "Vielen Dank! Wir haben Ihre Angaben erhalten.",
