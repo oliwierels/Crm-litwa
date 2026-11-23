@@ -1060,16 +1060,36 @@ def _clickup_task_to_lead_de(task):
     return fields
 
 
+CLICKUP_DE_SINCE_KEY = "clickup_de_direct_since"
+CLICKUP_DE_SINCE_MARGIN_MIN = 60  # zgłoszenia z ostatniej godziny przed podłączeniem bierzemy (PL mógł ich jeszcze nie przekazać)
+
+
+def clickup_de_since():
+    """Od kiedy ten CRM czyta niemiecką listę ClickUp wprost (UTC; zapisane przy pierwszym udanym odczycie, z zapasem).
+    Zgłoszenia utworzone wcześniej, których tu nie ma, NIE stają się leadami: do tej chwili niemieckie zgłoszenia
+    przychodziły przez CRM PL, więc brak takiego leada znaczy, że był już obsłużony, scalony albo usunięty — bez tej
+    granicy pierwszy odczyt zasypałby tablicę i okno „obsłuż dziś” starymi zgłoszeniami."""
+    try:
+        return datetime.fromisoformat(get_setting(CLICKUP_DE_SINCE_KEY))
+    except (TypeError, ValueError):
+        since = datetime.utcnow().replace(microsecond=0) - timedelta(minutes=CLICKUP_DE_SINCE_MARGIN_MIN)
+        set_setting(CLICKUP_DE_SINCE_KEY, since.isoformat())
+        db.session.commit()
+        return since
+
+
 def sync_clickup_de_leads():
     """Niemiecka lista ClickUp → leady rynku Niemcy, wszystkie od razu na tablicę (zaległe w CRM od chwili importu).
-    Bez duplikatów (task, telefon, e-mail). Zwraca (ok, nowe, komunikat)."""
+    Bez duplikatów (task, telefon, e-mail) i bez zgłoszeń sprzed podłączenia listy (clickup_de_since).
+    Zwraca (ok, nowe, komunikat)."""
     list_ids, token = clickup_de_config()
     if list_ids is None:
         return False, 0, "Niemiecka lista ClickUp niepodłączona: ustaw CLICKUP_API_TOKEN_DE (i ewentualnie CLICKUP_LIST_ID_DE)"
     if not list_ids:
         return False, 0, "Niemcy: klucz CLICKUP_API_TOKEN_DE nie widzi listy z niemieckimi zgłoszeniami"
-    imported = linked = moved = 0
+    imported = linked = moved = older = 0
     tasks = [t for lid in list_ids for t in _clickup_fetch_all_tasks(lid, token=token)]
+    since = clickup_de_since()  # dopiero po udanym odczycie listy
     for task in tasks:
         task_id = task.get("id")
         if not task_id:
@@ -1086,6 +1106,9 @@ def sync_clickup_de_leads():
                 moved += 1
             continue
         if db.session.get(AppSetting, f"clickup_dup:{task_id}"[:64]):
+            continue
+        if fields.get("created_at") and fields["created_at"] < since:
+            older += 1  # sprzed podłączenia listy do tego CRM — nie ruszamy (ani leada, ani notatki)
             continue
         same = find_recent_duplicate(fields.get("contact_email"), fields.get("contact_phone"))
         if same:
@@ -1120,7 +1143,9 @@ def sync_clickup_de_leads():
     db.session.commit()
     return True, imported, (f"Niemcy (ClickUp DE): {imported} nowych"
                             + (f", {linked} połączono z istniejącymi" if linked else "")
-                            + (f", {moved} przeniesiono z poczekalni" if moved else ""))
+                            + (f", {moved} przeniesiono z poczekalni" if moved else "")
+                            + f" · zgłoszeń na liście: {len(tasks)}"
+                            + (f", w tym {older} sprzed podłączenia {to_local(since):%d.%m %H:%M} (bez zmian)" if older else ""))
 
 
 def sync_clickup_main_leads():
@@ -8603,7 +8628,8 @@ HEALTH_HINTS = {
     "poczta": "Hasło skrzynki w Railway (IMAP_PASS_* albo SMTP_PASS_*, MAIL_PASSWORD), serwer IMAP_HOST_LT / IMAP_HOST. "
               "Błąd logowania = zmienione albo wygasłe hasło skrzynki.",
     "przeglad": "Przegląd poczty i sprawdzanie spraw przez Claude'a: ANTHROPIC_API_KEY (i środki na koncie Anthropic).",
-    "raport": "Poranny raport: SMTP_HOST, SMTP_USER, SMTP_PASS, REPORT_EMAILS.",
+    "raport": "Poranny raport: REPORT_EMAILS (adresaci), REPORT_FROM (imię osoby, z której skrzynki wychodzi; jej hasło "
+              "SMTP_PASS_<IMIĘ>) albo wspólna skrzynka SMTP_USER / SMTP_PASS; do tego SMTP_HOST.",
     "quiet:leads": "Brak nowych leadów dłużej niż zwykle: sprawdź formularz na stronie (LT / DE), reklamy, ClickUp i "
                    "czujnik „Przenoszenie leadów z CRM PL”.",
     "quiet:mail": "Brak nowych maili w skrzynce dłużej niż zwykle: zaloguj się do skrzynki w przeglądarce (czy poczta "
@@ -8655,7 +8681,7 @@ def health_jobs():
         for b in mail_boxes():
             add(f"poczta:{b['login']}", f"Poczta {b['login']}", 30)
     add("przeglad", "Przegląd poczty przez Claude'a i sprawdzanie spraw", 30, env("MAIL_REVIEW", "1") != "0")
-    add("raport", "Poranny raport mailowy", 26 * 60, bool(env("SMTP_HOST")))
+    add("raport", "Poranny raport mailowy", 26 * 60, report_wanted())  # niezamówiony raport to nie awaria
     return jobs
 
 

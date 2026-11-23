@@ -25,6 +25,12 @@ def app():
         yield crm.app
 
 
+def connected(ago):
+    """Niemiecka lista podłączona do tego CRM `ago` temu (None = jeszcze nigdy — pierwszy odczyt przed nami)."""
+    crm.set_setting(crm.CLICKUP_DE_SINCE_KEY, (datetime.utcnow() - ago).isoformat(timespec="seconds") if ago else "")
+    crm.db.session.commit()
+
+
 def de_task(tid, name, phone, email, created, due=None, extra_fields=()):
     cfs = [{"name": "Vor- und Nachname", "type": "short_text", "value": name},
            {"name": "Telefonnummer", "type": "phone", "value": phone},
@@ -54,6 +60,7 @@ def test_german_list_imports_to_market_de(app, monkeypatch):
     monkeypatch.setenv("CLICKUP_API_TOKEN_DE", "tok-de")
     monkeypatch.delenv("CLICKUP_LIST_ID", raising=False)
     monkeypatch.setattr(crm.requests, "get", fake_get)
+    connected(timedelta(days=30))  # lista czytana tu od miesiąca; de-2 to zgłoszenie, które doszło z opóźnieniem
 
     ok, n, msg = crm.sync_clickup_leads()
     assert ok and n == 2, msg
@@ -79,6 +86,54 @@ def test_german_list_imports_to_market_de(app, monkeypatch):
     ok, n, _ = crm.sync_clickup_leads()
     assert ok and n == 0
     assert crm.all_markets(crm.Lead.query).filter(crm.Lead.clickup_task_id.in_(["de-1", "de-2", "de-9"])).count() == 3
+
+
+def test_first_direct_read_does_not_flood_crm_with_old_tasks(app, monkeypatch):
+    """Pierwszy odczyt niemieckiej listy wprost (wcześniej zgłoszenia szły przez CRM PL): stare zgłoszenia, których
+    tu nie ma, nie stają się leadami ani notatkami; świeże (ostatnia godzina i późniejsze) wchodzą normalnie."""
+    now = datetime.utcnow().replace(microsecond=0)
+    moved = crm.Lead(company="Przeniesiony z PL", stage="Oferta", assigned_to=1, clickup_task_id="hist-1", market="de",
+                     contact_email="stary@beispiel.de", created_at=now - timedelta(days=40))
+    crm.db.session.add(moved)
+    crm.db.session.commit()
+    tasks = [de_task("hist-1", "Przeniesiony z PL", "+4915100000001", "stary@beispiel.de", now - timedelta(days=40)),
+             de_task("hist-2", "Stary Usunięty", "+4915100000002", "usuniety@beispiel.de", now - timedelta(days=25)),
+             de_task("hist-3", "Stary Sprzed Tygodnia", "+4915100000003", "tydzien@beispiel.de", now - timedelta(days=7)),
+             de_task("hist-4", "Świeży Sprzed Kwadransa", "+4915100000004", "swiezy@beispiel.de", now - timedelta(minutes=20))]
+    monkeypatch.setenv("CLICKUP_LIST_ID_DE", "DE-LIST")
+    monkeypatch.setenv("CLICKUP_API_TOKEN_DE", "tok-de")
+    monkeypatch.delenv("CLICKUP_LIST_ID", raising=False)
+    monkeypatch.setattr(crm.requests, "get", lambda url, headers=None, params=None, timeout=None: Resp(
+        {"tasks": tasks if (params or {}).get("page", 0) == 0 else [], "last_page": True}))
+    connected(None)
+    notes_before = crm.Activity.query.filter_by(lead_id=moved.id).count()
+
+    ok, n, msg = crm.sync_clickup_de_leads()
+    assert ok and n == 1, msg
+    assert "zgłoszeń na liście: 4" in msg and "w tym 2 sprzed podłączenia" in msg
+    by_task = lambda t: crm.all_markets(crm.Lead.query.filter_by(clickup_task_id=t)).first()  # noqa: E731
+    assert by_task("hist-2") is None and by_task("hist-3") is None, "stare zgłoszenia nie zalewają CRM"
+    assert by_task("hist-4") is not None and by_task("hist-4").market == "de", "z ostatniej godziny — wchodzi"
+    assert crm.Activity.query.filter_by(lead_id=moved.id).count() == notes_before, "przeniesiony wcześniej lead bez zmian"
+    since = crm.clickup_de_since()
+    assert now - timedelta(minutes=crm.CLICKUP_DE_SINCE_MARGIN_MIN + 1) <= since <= now - timedelta(minutes=59)
+
+    # granica zostaje — następne zgłoszenie wchodzi, stare dalej nie, nawet jeśli import miał przerwę
+    tasks.append(de_task("hist-5", "Nowy Po Podłączeniu", "+4915100000005", "nowy@beispiel.de", datetime.utcnow()))
+    ok, n, msg = crm.sync_clickup_de_leads()
+    assert ok and n == 1 and by_task("hist-5") is not None and by_task("hist-2") is None, msg
+    assert crm.clickup_de_since() == since
+
+
+def test_broken_config_does_not_start_the_clock(app, monkeypatch):
+    """Lista bez klucza (albo ClickUp nie odpowiada): moment podłączenia NIE jest zapisywany — liczy się od pierwszego
+    udanego odczytu, inaczej zgłoszenia z czasu awarii konfiguracji zostałyby uznane za „stare”."""
+    monkeypatch.setenv("CLICKUP_LIST_ID_DE", "DE-LIST")
+    monkeypatch.delenv("CLICKUP_API_TOKEN_DE", raising=False)
+    monkeypatch.delenv("CLICKUP_API_TOKEN", raising=False)
+    connected(None)
+    ok, n, msg = crm.sync_clickup_de_leads()
+    assert not ok and "niepodłączona" in msg and crm.get_setting(crm.CLICKUP_DE_SINCE_KEY) == ""
 
 
 def test_german_task_already_pending_from_main_list_moves_to_de(app, monkeypatch):
@@ -131,6 +186,7 @@ def test_german_list_found_by_key_alone(app, monkeypatch):
     monkeypatch.setattr(crm.requests, "get", fake_get)
     crm.set_setting(crm.CLICKUP_DE_LISTS_KEY, "")
     crm.db.session.commit()
+    connected(None)
     assert crm.clickup_de_configured()
     with app.test_request_context():
         assert crm.clickup_de_config() == ([], "tok-only") and not calls, "w zapytaniu bez szukania list"

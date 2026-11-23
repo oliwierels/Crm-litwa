@@ -16,7 +16,7 @@ Bazy danych i zmienne zostają osobne, kod jest wspólny.
 **Wspólne pliki** (identyczne w Moja-apka i Crm-litwa): `sales_rules.py`, `health.py` (strażnik CRM),
 `team.py` (rangi i raport dnia), `logistics.py`, `poczta.py`, **cały katalog `parts/`**; testy: `test_sales_rules.py`,
 `test_health_rules.py`, `test_health_crm.py`, `test_mail_task_check.py`, `test_pages_open.py`,
-`test_ai_forced_tool.py`, `test_team_rules.py`, `test_team_reports.py`; szablony zespołu: `raport_dnia.html`,
+`test_ai_forced_tool.py`, `test_team_rules.py`, `test_team_reports.py`, `test_daily_report.py`; szablony zespołu: `raport_dnia.html`,
 `zespol.html`, `_raport_gate.html`.
 
 **`parts/` — wspólne części `crm.py` (39 plików tematycznych, ok. 4,5 tys. linii):** modele, logowanie, bramki
@@ -37,10 +37,11 @@ używany), nieużywane funkcje `_setting_number`, `in_cur`, `logistics.daterange
 **ClickUp — 3 listy, 3 importy:**
 - lista polska → CRM PL (`CLICKUP_API_TOKEN`, `CLICKUP_LIST_ID` w serwisie PL);
 - lista litewska → CRM LT/DE (`CLICKUP_API_TOKEN`, `CLICKUP_LIST_ID` w serwisie LT/DE);
-- lista niemiecka → CRM, w którego ustawieniach jest `CLICKUP_API_TOKEN_DE` (listę znajduje sam; opcjonalnie
-  `CLICKUP_LIST_ID_DE`). Docelowo **CRM LT/DE**. Przejściowo klucz jest w serwisie PL — wtedy PL importuje i
-  przenoszenie z PL oddaje leady do CRM DE. Gdyby klucz był w obu serwisach naraz, przenoszenie z PL rozpozna
-  zadanie ClickUp, które już jest w LT/DE, i usunie duplikat w PL (bez drugiej kopii).
+- lista niemiecka → **CRM LT/DE** (od 23.11.2026): `CLICKUP_API_TOKEN_DE` + `CLICKUP_LIST_ID_DE` w serwisie LT/DE.
+  CRM PL jej już nie czyta (w serwisie PL nie ma `CLICKUP_LIST_ID_DE`; kod importu w PL został, ale jest uśpiony).
+  Przy pierwszym odczycie wprost CRM LT/DE zapamiętał moment podłączenia (`clickup_de_direct_since`): zgłoszenia
+  sprzed niego, których w LT/DE nie ma, nie stają się leadami — przyszły wcześniej przez CRM PL. Gdyby obie drogi
+  działały naraz, przenoszenie z PL rozpozna zadanie ClickUp, które już jest w LT/DE, i usunie duplikat w PL.
 - Poczta (kontakt@, skrzynki) to osobna droga: zapytania z maili, nie z ClickUp.
 
 **Duplikacja `crm.py`** (PL ↔ LT/DE, pomiar 15.11): 319 identycznych funkcji (4,8 tys. linii), 149 różnych
@@ -57,11 +58,8 @@ używany), nieużywane funkcje `_setting_number`, `in_cur`, `logistics.daterange
 3. **Jedno repozytorium** — serwis CRM LT/DE w Railway przepięty na repozytorium Moja-apka (zmienna rynków,
    np. `CRM_MARKETS=lt,de`, w PL `pl`). Najpierw próbny serwis Railway na kopii bazy, potem przełączenie.
    Crm-litwa zostaje jako archiwum.
-4. **Po przeniesieniu klucza ClickUp DE do LT/DE** — usunąć z CRM PL import niemieckiej listy.
+4. Usunąć z CRM PL uśpiony kod importu niemieckiej listy ClickUp (klucz jest już w LT/DE, etap zamknięty 23.11.2026).
 
 ## Do zrobienia przez zespół (Railway)
 
-- Przenieść `CLICKUP_API_TOKEN_DE` (i `CLICKUP_LIST_ID_DE`, jeśli jest) z serwisu **CRM PL** do serwisu
-  **CRM LT/DE**: dodać w LT/DE, potem usunąć w PL. Strona „Stan CRM” w LT/DE pokaże „Import niemieckich
-  zgłoszeń z ClickUp: OK”.
 - Kopie zapasowe obu baz przed etapem 3.
