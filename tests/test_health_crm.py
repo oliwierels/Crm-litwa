@@ -9,7 +9,7 @@ import pytest
 
 import crm
 
-LT = hasattr(crm.MailMessage, "market")
+LT = "lt" in crm.markets.MARKETS
 
 
 @pytest.fixture(scope="module")

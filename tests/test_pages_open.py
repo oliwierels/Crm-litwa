@@ -8,7 +8,7 @@ import requests
 
 import crm
 
-LT = hasattr(crm.Lead, "market")
+LT = "lt" in crm.markets.MARKETS
 MARKETS = ["lt", "de"] if LT else [None]
 # te adresy przy samym wejściu łączą się z ClickUp albo wysyłają raport — nie klikamy ich w teście
 SKIP = {"/crm/integrations/clickup/debug", "/crm/integrations/clickup/sync", "/crm/report/test", "/crm/logout"}

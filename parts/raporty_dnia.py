@@ -45,7 +45,7 @@ TEAM_NOT_DONE_PREFIX = "❌ Raport dnia"
 
 def team_reports_on():
     """Raport dnia włączony w tym CRM. Domyślnie tylko w CRM PL — jedna osoba składa jeden raport."""
-    default = "0" if hasattr(Lead, "market") else "1"
+    default = "1" if "pl" in markets.MARKETS else "0"
     return os.environ.get("DAY_REPORTS", default).strip() != "0"
 
 

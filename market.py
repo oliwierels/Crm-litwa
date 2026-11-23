@@ -17,7 +17,7 @@ ALL = {
         # Polska — CRM PL. Ustawienia i teksty specyficzne dla PL są jeszcze w kodzie CRM PL i trafiają tu
         # stopniowo przy scalaniu (docs/PORZADKI.md); na razie tylko dane rynku.
         "code": "pl", "lang": "pl", "flag": "🇵🇱", "name": "Polska", "country": "PL", "domain": "33bots.pl",
-        "brand": "RoboRent CRM", "html_lang": "pl",
+        "brand": "RoboRent CRM", "html_lang": "pl", "currency": "PLN",
         "lang_name_pl": "polski", "lang_in_pl": "po polsku",
         "mailboxes": "", "own_email": "kontakt@33bots.pl", "inquiry_box": "kontakt@33bots.pl",
         "phone_codes": ("48",), "mobile_local": ("", 9),
@@ -26,7 +26,7 @@ ALL = {
     },
     "lt": {
         "code": "lt", "lang": "lt", "flag": "🇱🇹", "name": "Litwa", "country": "LT", "domain": "33bots.lt",
-        "brand": "33bots CRM 🇱🇹", "html_lang": "lt",
+        "brand": "33bots CRM 🇱🇹", "html_lang": "lt", "currency": "EUR",
         "lang_name_pl": "litewski", "lang_in_pl": "po litewsku",
         "mailboxes": "o.latek@33bots.lt,kontakt@33bots.lt",
         "own_email": "o.latek@33bots.lt", "inquiry_box": "kontakt@33bots.lt",
@@ -134,7 +134,7 @@ ALL = {
     },
     "de": {
         "code": "de", "lang": "de", "flag": "🇩🇪", "name": "Niemcy", "country": "DE", "domain": "33bots.de",
-        "brand": "33bots CRM 🇩🇪", "html_lang": "de",
+        "brand": "33bots CRM 🇩🇪", "html_lang": "de", "currency": "EUR",
         "lang_name_pl": "niemiecki", "lang_in_pl": "po niemiecku",
         "mailboxes": "o.latek@33bots.de,kontakt@33bots.de",
         "own_email": "o.latek@33bots.de", "inquiry_box": "kontakt@33bots.de",

@@ -110,13 +110,13 @@ class Lead(db.Model):
     pl_id = db.Column(db.Integer, nullable=True)  # id leada w polskim CRM, jeśli został stamtąd przeniesiony
     pl_copy_id = db.Column(db.Integer, nullable=True)  # kopia wygranego leada w polskim CRM (logistyka)
     pl_copy_hash = db.Column(db.String(40), nullable=True)  # odcisk danych wysłanych ostatnio do tej kopii
-    market = db.Column(db.String(2), nullable=False, default=_default_market, index=True)  # lt | de
+    market = db.Column(db.String(2), nullable=False, default=_default_market, index=True)  # pl | lt | de
     contact_phone = db.Column(db.String(50))
     stage = db.Column(db.String(50), nullable=False, default="Nowy")
     robot_model = db.Column(db.String(100))
     rental_days = db.Column(db.Integer)
     value_pln = db.Column(db.Float)
-    currency = db.Column(db.String(8), default="EUR")
+    currency = db.Column(db.String(8), default=lambda: markets.get(_default_market())["currency"])
     quality = db.Column(db.String(16), default="Średni")
     contract_signed = db.Column(db.Boolean, default=False)
     notes = db.Column(db.Text)
@@ -130,7 +130,7 @@ class Lead(db.Model):
     lt_mail_at = db.Column(db.DateTime, nullable=True)  # wysłany mail do litewskiego leada (prośba o dane)
     # proces sprzedaży (sales_rules.py): typ klienta, kraj, powód straty, potwierdzenie wygranej, telefon potwierdzający
     client_type = db.Column(db.String(20), nullable=True)  # firma | prywatna | agencja | partner
-    country = db.Column(db.String(4), nullable=True)  # pusty = kraj rynku (LT / DE)
+    country = db.Column(db.String(4), nullable=True)  # PL / LT / DE / RO…; pusty = kraj rynku albo podpowiedź z danych
     lost_reason = db.Column(db.String(30), nullable=True)
     lost_comment = db.Column(db.Text, nullable=True)
     win_confirmation = db.Column(db.String(20), nullable=True)  # umowa | mail
@@ -187,6 +187,8 @@ class Journey(db.Model):
     invoice_uuid = db.Column(db.String(64))  # faktura wystawiona z CRM w inFakt
     invoice_number = db.Column(db.String(64))
     invoice_at = db.Column(db.DateTime)
+    invoice_issuer = db.Column(db.String(40))  # wystawca (konto inFakt): "" = INFAKT_API_KEY, np. "oliwier"
+    robot_persona = db.Column(db.Text)  # JSON: osobowość robota na to wydarzenie (agent ElevenLabs) — robot_agent.py
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -212,7 +214,7 @@ class Campaign(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     started_at = db.Column(db.DateTime)
     last_sent_at = db.Column(db.DateTime)
-    market = db.Column(db.String(2), nullable=False, default=_default_market)  # lt / de — język i nadawca
+    market = db.Column(db.String(2), nullable=False, default=_default_market)  # pl / lt / de — język i nadawca
 
     recipients = db.relationship("CampaignRecipient", backref="campaign", cascade="all, delete-orphan",
                                  order_by="CampaignRecipient.id")
@@ -267,20 +269,20 @@ class InboxMessage(db.Model):
     reason = db.Column(db.String(300))
     lead_id = db.Column(db.Integer, db.ForeignKey("leads.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    mailbox = db.Column(db.String(200))  # skrzynka zapytań (kontakt@33bots.lt / kontakt@33bots.de)
-    market = db.Column(db.String(2), nullable=False, default="lt")
+    mailbox = db.Column(db.String(200))  # skrzynka zapytań (kontakt@ danego rynku)
+    market = db.Column(db.String(2), nullable=False, default=lambda: markets.DEFAULT)
 
     lead = db.relationship("Lead")
 
 
 class MailMessage(db.Model):
-    """Mail ze skrzynki firmowej (Odebrane albo Wysłane) — zakładka Poczta. Tłumaczenie na polski
-    trzymamy obok oryginału, żeby każdy mail tłumaczyć tylko raz."""
+    """Mail ze skrzynki firmowej (Odebrane albo Wysłane) — zakładka Poczta. Tłumaczenie na polski (maile w języku
+    innego rynku) trzymamy obok oryginału, żeby każdy mail tłumaczyć tylko raz."""
     __tablename__ = "mail_messages"
     __table_args__ = (db.UniqueConstraint("mailbox", "folder", "uidvalidity", "uid", name="uq_mail_uid"),)
     id = db.Column(db.Integer, primary_key=True)
     mailbox = db.Column(db.String(200), index=True, nullable=False)
-    market = db.Column(db.String(2), index=True)  # lt | de — z domeny skrzynki
+    market = db.Column(db.String(2), index=True)  # pl | lt | de — z domeny skrzynki
     folder = db.Column(db.String(10), nullable=False)  # in | sent
     uid = db.Column(db.Integer, nullable=True)  # None = wysłany z CRM, czeka na kopię z Wysłanych
     uidvalidity = db.Column(db.String(40), nullable=True)
@@ -293,7 +295,7 @@ class MailMessage(db.Model):
     to_addrs = db.Column(db.Text)
     to_names = db.Column(db.Text)
     cc_addrs = db.Column(db.Text)
-    addrs = db.Column(db.Text)  # " a@x.lt b@y.lt " — szukanie po adresie leada
+    addrs = db.Column(db.Text)  # " a@x.pl b@y.lt " — szukanie po adresie leada
     subject = db.Column(db.String(500))
     date = db.Column(db.DateTime, index=True)
     body_text = db.Column(db.Text)
@@ -322,40 +324,49 @@ class GeoCache(db.Model):
 
 
 def ensure_schema():
-    # brakujące kolumny (działa na SQLite i Postgresie)
+    # brakujące kolumny (działa na SQLite i Postgresie); rynek w starych wierszach = rynek domyślny serwisu
+    mkt, cur = markets.DEFAULT, markets.get(markets.DEFAULT)["currency"]
+    _j_cols = {c["name"] for c in db.inspect(db.engine).get_columns("journeys")}
+    with db.engine.begin() as conn:  # docs/MIGRACJE.md
+        if "invoice_issuer" not in _j_cols:  # wystawca faktury — kilka kont inFakt
+            conn.exec_driver_sql("ALTER TABLE journeys ADD COLUMN invoice_issuer VARCHAR(40)")
+        if "robot_persona" not in _j_cols:  # osobowość robota na wydarzenie (agent ElevenLabs)
+            conn.exec_driver_sql("ALTER TABLE journeys ADD COLUMN robot_persona TEXT")
     _mt_cols = {c["name"] for c in db.inspect(db.engine).get_columns("mail_tasks")}
     with db.engine.begin() as conn:  # sprawy z poczty: sprawdzanie, czy już załatwione (docs/MIGRACJE.md)
-        for col, typ in (("checked_at", "TIMESTAMP NULL"), ("check_note", "TEXT")):
+        for col, typ in (("checked_at", "TIMESTAMP NULL"), ("check_note", "TEXT"),
+                         ("market", f"VARCHAR(2) NOT NULL DEFAULT '{mkt}'")):
             if col not in _mt_cols:
                 conn.exec_driver_sql(f"ALTER TABLE mail_tasks ADD COLUMN {col} {typ}")
     insp = db.inspect(db.engine)
     if "mail_messages" in insp.get_table_names():
         mcols = [col["name"] for col in insp.get_columns("mail_messages")]
-        if "market" not in mcols:
-            with db.engine.begin() as conn:
-                conn.exec_driver_sql("ALTER TABLE mail_messages ADD COLUMN market VARCHAR(2)")
-                conn.exec_driver_sql("UPDATE mail_messages SET market = 'de' WHERE mailbox LIKE '%.de'")
-                conn.exec_driver_sql("UPDATE mail_messages SET market = 'lt' WHERE market IS NULL")
-        if "quoted_pl" not in mcols:
-            with db.engine.begin() as conn:
-                conn.exec_driver_sql("ALTER TABLE mail_messages ADD COLUMN quoted_pl TEXT")
+        with db.engine.begin() as conn:
+            if "market" not in mcols:  # rynek maila z domeny skrzynki (.de → de), reszta — rynek domyślny
+                conn.exec_driver_sql(f"ALTER TABLE mail_messages ADD COLUMN market VARCHAR(2) DEFAULT '{mkt}'")
+                if "de" in markets.MARKETS:
+                    conn.exec_driver_sql("UPDATE mail_messages SET market = 'de' WHERE mailbox LIKE '%.de'")
+            for col, typ in (("subject_pl", "VARCHAR(600)"), ("body_pl", "TEXT"), ("translated_at", "TIMESTAMP NULL"),
+                             ("translate_error", "VARCHAR(300)"), ("quoted_pl", "TEXT")):  # tłumaczenie na polski
+                if col not in mcols:
+                    conn.exec_driver_sql(f"ALTER TABLE mail_messages ADD COLUMN {col} {typ}")
     if "inbox_messages" in insp.get_table_names():
         icols = [col["name"] for col in insp.get_columns("inbox_messages")]
         with db.engine.begin() as conn:
             if "mailbox" not in icols:
                 conn.exec_driver_sql("ALTER TABLE inbox_messages ADD COLUMN mailbox VARCHAR(200)")
             if "market" not in icols:
-                conn.exec_driver_sql("ALTER TABLE inbox_messages ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT 'lt'")
+                conn.exec_driver_sql(f"ALTER TABLE inbox_messages ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT '{mkt}'")
     if "campaigns" in insp.get_table_names():
         if "market" not in [col["name"] for col in insp.get_columns("campaigns")]:
             with db.engine.begin() as conn:
-                conn.exec_driver_sql("ALTER TABLE campaigns ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT 'lt'")
+                conn.exec_driver_sql(f"ALTER TABLE campaigns ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT '{mkt}'")
     cols = [c["name"] for c in db.inspect(db.engine).get_columns("leads")]
     with db.engine.begin() as conn:
         if "contact_email2" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN contact_email2 VARCHAR(200)")
         if "market" not in cols:
-            conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT 'lt'")
+            conn.exec_driver_sql(f"ALTER TABLE leads ADD COLUMN market VARCHAR(2) NOT NULL DEFAULT '{mkt}'")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_leads_market ON leads (market)")
         for col, typ in (("handled_at", "TIMESTAMP NULL"), ("handled_by", "INTEGER"), ("handled_how", "VARCHAR(40)")):
             if col not in cols:
@@ -385,7 +396,7 @@ def ensure_schema():
         if "event_date" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN event_date TIMESTAMP NULL")
         if "currency" not in cols:
-            conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN currency VARCHAR(8) DEFAULT 'EUR'")
+            conn.exec_driver_sql(f"ALTER TABLE leads ADD COLUMN currency VARCHAR(8) DEFAULT '{cur}'")
         if "location" not in cols:
             conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN location VARCHAR(200)")
         if "event_end_date" not in cols:
@@ -444,7 +455,7 @@ def ensure_schema():
     # zamień stare nazwy modeli robotów na aktualne
     for old, new in ROBOT_MODEL_ALIASES.items():
         Lead.query.filter_by(robot_model=old).update({"robot_model": new})
-    Lead.query.filter(Lead.currency.is_(None)).update({"currency": "EUR"})
+    Lead.query.filter(Lead.currency.is_(None)).update({"currency": cur})
     Lead.query.filter(Lead.quality.is_(None)).update({"quality": "Średni"})
     Lead.query.filter(Lead.contract_signed.is_(None)).update({"contract_signed": False})
     Lead.query.filter(Lead.clickup_pending.is_(None)).update({"clickup_pending": False})

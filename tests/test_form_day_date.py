@@ -5,7 +5,7 @@ import pytest
 
 import crm
 
-MK = {"market": "lt"} if hasattr(crm.Lead, "market") else {}
+MK = {"market": "lt"} if "lt" in crm.markets.MARKETS else {}
 
 
 @pytest.fixture(scope="module")

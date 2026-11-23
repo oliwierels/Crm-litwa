@@ -9,7 +9,7 @@ import pytest
 import crm
 import team
 
-LT = hasattr(crm.Lead, "market")
+LT = "lt" in crm.markets.MARKETS
 OLIWIER, BARTEK, JERZY = 1, 2, 3
 MARK = "ZT "  # początek notatki zadań z tego testu (sprzątanie)
 

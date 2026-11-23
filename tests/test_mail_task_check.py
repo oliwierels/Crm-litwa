@@ -7,7 +7,7 @@ import pytest
 
 import crm
 
-LT = hasattr(crm.MailMessage, "market")
+LT = "lt" in crm.markets.MARKETS
 MK = {"market": "lt"} if LT else {}
 DOM = "lt" if LT else "pl"
 
