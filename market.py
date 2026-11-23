@@ -28,6 +28,8 @@ ALL = {
         # (litewskie i niemieckie leady przechodzą same do CRM LT/DE), maile w Poczcie bez tłumaczenia
         "detect_lang": True, "translate_mail": False,
         "offer_second_step": "call",  # po ofercie: telefon
+        # umowa: VAT 23%, wykonawca do wyboru (33Bots Bartosz Wysocki albo Robonova Oliwier Latek — journey.CONTRACTORS)
+        "contract_vat": "23", "contractors": True,
     },
     "lt": {
         "code": "lt", "lang": "lt", "flag": "🇱🇹", "name": "Litwa", "country": "LT", "domain": "33bots.lt",
@@ -44,6 +46,7 @@ ALL = {
         "whatsapp_lang": "lt",
         "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
         "offer_second_step": "email",  # po ofercie: follow-up mailem w języku klienta (CRM PL: telefon)
+        "contract_vat": "0",  # umowa: odwrotne obciążenie (bez VAT)
         "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         # --- formularz dla klienta (/f/…) ---
         "form": {
@@ -155,6 +158,7 @@ ALL = {
         "whatsapp_lang": "de",
         "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
         "offer_second_step": "email",  # po ofercie: follow-up mailem w języku klienta (CRM PL: telefon)
+        "contract_vat": "0",  # umowa: odwrotne obciążenie (bez VAT)
         "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         "form": {
             "title": "33Bots – Angaben zur Veranstaltung",

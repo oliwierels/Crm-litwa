@@ -14,17 +14,18 @@ from datetime import date, timedelta
 
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "docs")
-KB_INSTRUCTION_PATH = os.path.join(_DOCS_DIR, "Roboto_ziniu_baze_instrukcija.pdf")
-KB_INSTRUCTION_NAME = "Roboto_ziniu_baze_instrukcija.pdf"
 # instrukcja bazy wiedzy w języku rynku: (ścieżka, nazwa załącznika)
 KB_INSTRUCTIONS = {
-    "lt": (KB_INSTRUCTION_PATH, KB_INSTRUCTION_NAME),
+    "pl": (os.path.join(_DOCS_DIR, "Baza_wiedzy_robota_instrukcja.pdf"), "Baza_wiedzy_robota_instrukcja.pdf"),
+    "lt": (os.path.join(_DOCS_DIR, "Roboto_ziniu_baze_instrukcija.pdf"), "Roboto_ziniu_baze_instrukcija.pdf"),
     "de": (os.path.join(_DOCS_DIR, "Roboter_Wissensdatenbank_Anleitung.pdf"), "Roboter_Wissensdatenbank_Anleitung.pdf"),
 }
 
 
-def kb_instruction(code="lt"):
-    return KB_INSTRUCTIONS.get(code) or KB_INSTRUCTIONS["lt"]
+def kb_instruction(code="pl"):
+    return KB_INSTRUCTIONS.get(code) or KB_INSTRUCTIONS["pl"]
+
+
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 # --- kanban ---
@@ -222,7 +223,7 @@ CURRENCY_WORDS = {
     "USD": ("dolar", "dolary", "dolarów"),
     "GBP": ("funt", "funty", "funtów"),
 }
-CURRENCY_SYMBOL = {"PLN": "PLN", "EUR": "EUR", "USD": "USD", "GBP": "GBP"}
+CURRENCY_SYMBOL = {"PLN": "zł", "EUR": "EUR", "USD": "USD", "GBP": "GBP"}  # w polskiej umowie
 
 
 def amount_words(amount, currency="PLN"):
@@ -339,8 +340,12 @@ def de_amount_words(amount, currency="EUR"):
 
 
 def amount_words_for(code, amount, currency="EUR"):
-    """Kwota słownie w języku rynku (umowa)."""
-    return de_amount_words(amount, currency) if code == "de" else lt_amount_words(amount, currency)
+    """Kwota słownie w języku umowy rynku (polski / litewski / niemiecki)."""
+    if code == "de":
+        return de_amount_words(amount, currency)
+    if code == "lt":
+        return lt_amount_words(amount, currency)
+    return amount_words(amount, currency)
 
 
 def money(amount):
@@ -351,21 +356,48 @@ def money(amount):
 # --- wzór umowy (klient uzupełnia swoje dane w DOCX) ---
 
 DOTS = "…………………………"
-CLIENT_BLANK = (
-    "………………………………………… (įmonės / įstaigos pavadinimas arba vardas ir pavardė), buveinės / gyvenamosios vietos "
-    "adresas: ………………………………………………, įmonės kodas: ……………………, PVM mokėtojo kodas: ……………………, "
-    "atstovaujama: ………………………………… (vardas, pavardė, pareigos)"
-)
-
+# opis Zamawiającego w umowie — miejsce do uzupełnienia przez klienta, w języku umowy rynku
 CLIENT_BLANKS = {
-    "lt": CLIENT_BLANK,
+    "pl": (
+           "………………………………………… (pełna nazwa firmy / instytucji albo imię i nazwisko) z siedzibą / adresem: "
+           "………………………………………………, NIP: ……………………, REGON: ……………………, KRS: ……………………, "
+           "reprezentowanym przez: ………………………………… (imię, nazwisko, funkcja)"),
+    "lt": (
+           "………………………………………… (įmonės / įstaigos pavadinimas arba vardas ir pavardė), buveinės / gyvenamosios vietos "
+           "adresas: ………………………………………………, įmonės kodas: ……………………, PVM mokėtojo kodas: ……………………, "
+           "atstovaujama: ………………………………… (vardas, pavardė, pareigos)"),
     "de": ("………………………………………… (Firma / Name der Einrichtung bzw. Vor- und Nachname), Sitz / Anschrift: "
            "………………………………………………, Handelsregisternummer: ……………………, USt-IdNr.: ……………………, "
            "vertreten durch: ………………………………… (Vor- und Nachname, Funktion)"),
 }
 
+# Wykonawca umowy (CRM PL) — kto podpisuje po stronie 33Bots. Kod jak konto w inFakt: "" = Bartosz (INFAKT_API_KEY), "oliwier".
+CONTRACTORS = {
+    "": {"label": "33Bots Bartosz Wysocki", "nip": "5253090645", "opis": (
+        "Bartosz Wysocki, prowadzący działalność gospodarczą pod firmą 33Bots Bartosz Wysocki z adresem do doręczeń: Plac Jana Henryka "
+        "Dąbrowskiego nr 12, lok. 120, 00-055 Warszawa, wpisany do Centralnej Ewidencji i Informacji o Działalności Gospodarczej (CEIDG), "
+        "NIP: 5253090645, REGON: 544792095, reprezentowanym przez Bartosza Wysockiego")},
+    "oliwier": {"label": "Robonova Oliwier Latek", "nip": "7142069608", "opis": (
+        "Oliwier Latek, prowadzący działalność gospodarczą pod firmą Robonova Oliwier Latek z adresem do doręczeń: ul. 27 Wołyńskiej "
+        "Dywizji AK nr 8, 21-150 Kock, wpisany do Centralnej Ewidencji i Informacji o Działalności Gospodarczej (CEIDG), "
+        "NIP: 7142069608, REGON: 545935527, reprezentowanym przez Oliwiera Latka")},
+}
+_LEGACY_CONTRACTOR = CONTRACTORS[""]["opis"]  # tak było wpisane na sztywno we wzorze — starsze własne wzory wciąż to mają
+
+
+def contractor(code):
+    return CONTRACTORS.get(code or "", CONTRACTORS[""])
+
+
+def with_contractor_field(template_text):
+    """Własny wzór tekstowy z danymi Bartosza wpisanymi na sztywno → pole {{ wykonawca_opis }}."""
+    return (template_text or "").replace(_LEGACY_CONTRACTOR, "{{ wykonawca_opis }}")
+
+
 # pola dostępne we wzorze ({{ nazwa }}) — także we wgranym własnym DOCX
 FIELDS_DOC = [
+    ("wykonawca_opis", "Wykonawca (33Bots) — dane firmy wybranej przy wysyłce umowy (CRM PL: Bartosz albo Oliwier)"),
+    ("wykonawca_firma", "Nazwa firmy Wykonawcy, np. 33Bots Bartosz Wysocki"),
     ("klient_opis", "Opis Zamawiającego — w wysyłanej umowie miejsce do uzupełnienia przez klienta"),
     ("nazwa_wydarzenia", "Nazwa wydarzenia"),
     ("daty_wydarzenia", "Dni wydarzenia, np. 17.10.2026"),
@@ -377,12 +409,12 @@ FIELDS_DOC = [
     ("rodzaj_przestrzeni", "Gdzie będzie pracował robot"),
     ("robot", "Model robota"),
     ("cena_netto", "Cena netto, np. 6 500,00"),
-    ("cena_netto_slownie", "Cena netto słownie (w języku rynku: litewski / niemiecki)"),
-    ("vat_stawka", "Stawka VAT, np. 0% (odwrotne obciążenie)"),
+    ("cena_netto_slownie", "Cena netto słownie (w języku umowy)"),
+    ("vat_stawka", "Stawka VAT, np. 23% (Polska) albo 0% (Litwa / Niemcy: odwrotne obciążenie)"),
     ("vat_kwota", "Kwota VAT"),
     ("cena_brutto", "Cena brutto"),
-    ("cena_brutto_slownie", "Cena brutto słownie (w języku rynku: litewski / niemiecki)"),
-    ("waluta", "Waluta, np. EUR"),
+    ("cena_brutto_slownie", "Cena brutto słownie (w języku umowy)"),
+    ("waluta", "Waluta, np. zł albo EUR"),
     ("numer_umowy", "Numer umowy (nr leada/rok)"),
     ("data_umowy", "Data zawarcia — do uzupełnienia"),
     ("miasto", "Miejscowość zawarcia — do uzupełnienia"),
@@ -419,7 +451,84 @@ EDITABLE_FIELDS = [
 ]
 
 # treść umowy 33Bots — ta sama co w dawnym generatorze PDF (draft 4)
-DEFAULT_TEMPLATE = """# HUMANOIDINIO ROBOTO SUTEIKIMO PASLAUGŲ SUTARTIS Nr. {{ numer_umowy }}
+DEFAULT_TEMPLATE_PL = """# UMOWA O ŚWIADCZENIE USŁUGI UDOSTĘPNIENIA ROBOTA HUMANOIDALNEGO
+**zawarta w dniu {{ data_umowy }} w miejscowości {{ miasto }}, dalej zwana „Umową”, pomiędzy:**
+**Zamawiającym:** {{ klient_opis }}
+a
+**Wykonawcą:** {{ wykonawca_opis }}, dalej łącznie zwane „Stronami”.
+
+## § 1. Przedmiot Umowy
+1. **Przedmiotem Umowy jest odpłatne świadczenie przez Wykonawcę usługi polegającej na czasowym udostępnieniu 1 sztuki robota humanoidalnego ({{ robot }}) wraz z obsługą operatora podczas wydarzenia organizowanego przez Zamawiającego („Wydarzenie”):**
+– **Nazwa Wydarzenia: {{ nazwa_wydarzenia }}**
+– **Data Wydarzenia: {{ daty_wydarzenia }}**
+– **Godziny realizacji usługi: {{ godziny }}**
+– **Miejsce realizacji: {{ miejsce_wydarzenia }}**
+– **Charakter Wydarzenia: {{ charakter_wydarzenia }}**
+1. Usługa obejmuje w szczególności: a) terminowe udostępnienie robota humanoidalnego; b) transport robota do miejsca Wydarzenia (adres wskazany w § 1 Umowy) oraz jego montaż na miejscu Wydarzenia; c) pełną obsługę i opiekę nad robotem przez certyfikowanego operatora Wykonawcy przez cały czas trwania Wydarzenia; d) pełną personalizację i zaprogramowanie wypowiedzi robota pod założenia Wydarzenia; e) umieszczenie znaków towarowych Zamawiającego na robocie na czas trwania Wydarzenia; f) prowadzenie interakcji z uczestnikami Wydarzenia.
+1. Wykonawca jest uprawniony do korzystania z podwykonawców w celu realizacji Umowy, w tym w szczególności z operatora, przy czym Wykonawca ponosi pełną odpowiedzialność za ich działania i zaniechania.
+1. **Wykonawca oświadcza, iż ma pełną świadomość, że usługa będzie realizowana w następującej przestrzeni: {{ rodzaj_przestrzeni }}.**
+
+## § 2. Charakter i jakość usługi
+1. Wykonawca zobowiązuje się do realizacji usługi z należytą starannością, gwarantując, że udostępniony robot jest sprawny technicznie i zdolny do realizacji założeń scenariusza.
+1. Wykonawca gwarantuje, że robot będzie dostępny do interakcji z uczestnikami przez co najmniej 80% czasu trwania godzin realizacji usługi określonych w § 1 ust. 1. Przerwy techniczne przekraczające ten limit będą traktowane jako nienależyte wykonanie Umowy.
+1. Wykonawca zapewnia, że system AI wykorzystywany w robocie zostanie skonfigurowany zgodnie z dostarczoną przez Zamawiającego bazą wiedzy.
+
+## § 3. Zasady realizacji i bezpieczeństwa
+1. Robot może być obsługiwany wyłącznie przez operatora Wykonawcy.
+1. Operator Wykonawcy pełni rolę opiekuna urządzenia i jest odpowiedzialny za zapewnienie bezpieczeństwa robota oraz zapobieganie ingerencjom osób trzecich, które mogłyby doprowadzić do uszkodzenia sprzętu.
+1. Operator ma prawo wstrzymać interakcję w przypadku realnego zagrożenia bezpieczeństwa ludzi lub sprzętu, jednakże nie może on samowolnie odmawiać realizacji scenariusza bez uzasadnienia technicznego lub prawnego.
+
+## § 4. Warunki techniczne i organizacyjne
+1. Zamawiający zapewni do poprawnego działania robota:
+a) bezpieczną przestrzeń do prezentacji robota i płaską powierzchnię do poruszania się,
+a) dostęp do standardowego gniazdka zasilania 230V na zapleczu w celu ładowania akumulatorów.
+1. Wykonawca przyjmuje do wiadomości i akceptuje, że Zamawiający nie ponosi odpowiedzialności za uszkodzenia Robota wynikające z przyczyn niezależnych od Zamawiającego, jednakże zobowiązuje się do zapewnienia warunków wolnych od nietypowych zagrożeń dla sprzętu elektronicznego.
+
+## § 5. Wynagrodzenie
+1. Wynagrodzenie Wykonawcy za kompleksową realizację usługi wynosi {{ cena_netto }} {{ waluta }} netto.
+1. Do powyższej kwoty zostanie doliczony podatek VAT zgodnie z obowiązującą stawką {{ vat_stawka }}.
+1. Łączna wartość Umowy wynosi {{ cena_brutto }} {{ waluta }} brutto.
+1. Termin płatności wynosi 14 dni od daty otrzymania faktury VAT.
+1. Faktury będą wystawiane wyłącznie za pośrednictwem Krajowego Systemu e-Faktur (KSeF). Za dzień wystawienia faktury uznaje się dzień jej przesłania do KSeF. Za dzień otrzymania faktury przez Zamawiającego uznaje się dzień przydzielenia jej numeru identyfikującego w systemie KSeF.
+1. Płatność zostanie dokonana przelewem na rachunek bankowy Wykonawcy wskazany na fakturze VAT. Za dzień zapłaty uznaje się dzień obciążenia rachunku bankowego Zamawiającego.
+
+## § 6. Odpowiedzialność za sprzęt
+1. Zamawiający ponosi odpowiedzialność za szkody w robocie powstałe z winy umyślnej Zamawiającego lub jego pracowników.
+1. Zamawiający nie ponosi odpowiedzialności za szkody wyrządzone w robocie przez osoby trzecie, o ile szkoda nie powstała w wyniku rażącego zaniedbania nadzoru przez Operatora Wykonawcy.
+1. W przypadku uszkodzenia robota z winy osób trzecich, Wykonawca w pierwszej kolejności dochodzi roszczeń od sprawcy szkody.
+
+## § 7. Materiały promocyjne i wizerunek
+1. Podczas Wydarzenia Robot może być wyposażony w materiały promocyjne Zamawiającego i Wykonawcy, w tym odzież, gadżety oraz inne elementy zawierające logo lub oznaczenia Zamawiającego.
+1. Zamawiający jest uprawniony do wykonywania zdjęć i nagrań z udziałem Robota oraz do ich wykorzystywania w celach informacyjnych i promocyjnych, bez konieczności uiszczania z tego tytułu dodatkowego wynagrodzenia na rzecz Wykonawcy.
+1. Wykonawca nie jest uprawniony do publikowania ani wykorzystywania zdjęć, nagrań lub informacji dotyczących Wydarzenia, siedziby Zamawiającego ani współpracy Stron w celach promocyjnych, marketingowych lub referencyjnych bez uprzedniej pisemnej zgody Zamawiającego.
+
+## § 8. Odpowiedzialność Wykonawcy
+1. Wykonawca ponosi pełną odpowiedzialność cywilną i karną za szkody wyrządzone osobom trzecim lub w mieniu Zamawiającego przez robota lub operatora Wykonawcy.
+1. Wykonawca oświadcza, że posiada ważne ubezpieczenie sprzętu oraz odpowiednie ubezpieczenie OC prowadzonej działalności gospodarczej obejmujące ryzyka związane z udostępnianiem robotów humanoidalnych.
+1. Odpowiedzialność Wykonawcy nie jest ograniczona do wysokości wynagrodzenia z tytułu niniejszej Umowy.
+
+## § 9. Rezygnacja i rozwiązanie umowy
+1. W przypadku rezygnacji Zamawiającego na mniej niż 3 dni przed Wydarzeniem, zapłaci on Wykonawcy 50% wynagrodzenia brutto.
+1. Zamawiający ma prawo rozwiązać umowę ze skutkiem natychmiastowym, jeżeli Wykonawca nie dostarczy sprawnego robota w terminie lub w przypadku wystąpienia jakichkolwiek usterek, awarii lub nieprawidłowości w działaniu robota, które uniemożliwią realizację przedmiotu Umowy i realizację założeń Wydarzenia.
+1. W przypadku rozwiązania Umowy w trybie wskazanym w ust. 2 Zamawiający nie będzie zobowiązany do zapłaty Wynagrodzenia Wykonawcy oraz będzie uprawniony do naliczenia Wykonawcy kary umownej w wysokości wynagrodzenia brutto, o którym mowa w § 5 ust. 3. Uprawnienie to nie wyłącza prawa do domagania się przez Zamawiającego odszkodowania przewyższającego wartość kary umownej na zasadach ogólnych.
+
+## § 10. RODO i Poufność
+1. Strony zobowiązują się do przetwarzania danych osobowych zgodnie z RODO.
+1. Wykonawca zobowiązuje się do bezpowrotnego usunięcia wszystkich logów tekstowych i danych z Bazy Wiedzy natychmiast po zakończeniu Wydarzenia.
+1. Strony zobowiązują się do zachowania poufności informacji handlowych i technicznych przez okres 3 lat od zakończenia Umowy.
+
+## § 11. Postanowienia końcowe
+1. Wszelkie zmiany Umowy wymagają formy pisemnej pod rygorem nieważności.
+1. W sprawach nieuregulowanych stosuje się przepisy Kodeksu cywilnego.
+1. Wszelkie spory wynikające z niniejszej Umowy będą rozstrzygane przez sąd powszechny właściwy dla siedziby Zamawiającego.
+1. Umowę sporządzono w dwóch jednobrzmiących egzemplarzach, po jednym dla każdej ze Stron.
+
+**Podpisy Stron:**
+[[podpisy: ZAMAWIAJĄCY | WYKONAWCA (33Bots)]]
+"""
+
+# umowa po litewsku (rynek Litwa)
+DEFAULT_TEMPLATE_LT = """# HUMANOIDINIO ROBOTO SUTEIKIMO PASLAUGŲ SUTARTIS Nr. {{ numer_umowy }}
 **Sudaryta {{ data_umowy }}, {{ miasto }} (toliau – „Sutartis“), tarp:**
 **Užsakovo:** {{ klient_opis }}
 ir
@@ -571,11 +680,11 @@ a) Zugang zu einer Standardsteckdose (230 V) hinter der Bühne zum Laden der Akk
 [[podpisy: AUFTRAGGEBER | AUFTRAGNEHMER (33Bots)]]
 """
 
-DEFAULT_TEMPLATES = {"lt": DEFAULT_TEMPLATE, "de": DEFAULT_TEMPLATE_DE}
+DEFAULT_TEMPLATES = {"pl": DEFAULT_TEMPLATE_PL, "lt": DEFAULT_TEMPLATE_LT, "de": DEFAULT_TEMPLATE_DE}
 
 
-def default_template(code="lt"):
-    return DEFAULT_TEMPLATES.get(code) or DEFAULT_TEMPLATE
+def default_template(code="pl"):
+    return DEFAULT_TEMPLATES.get(code) or DEFAULT_TEMPLATE_PL
 
 def _sandbox():
     # wzór może przyjść od człowieka (wgrany DOCX) — renderujemy w piaskownicy, bez wykonywania kodu
@@ -596,20 +705,24 @@ def parse_amount(value):
     return v if v > 0 else None
 
 
-def contract_context(fields, lead_id, today, email="", phone="", code="lt"):
+def contract_context(fields, lead_id, today, email="", phone="", code="pl"):
     """Pola do wzoru: to, co znamy z leada / okienka, reszta jako miejsce do uzupełnienia przez klienta
-    (opis klienta i kwoty słownie w języku rynku)."""
+    (opis klienta i kwoty słownie w języku umowy rynku)."""
     f = {k: _clean(v) for k, v in (fields or {}).items() if v is not None}
     blank = lambda key: f.get(key) or DOTS  # noqa: E731
-    currency = (f.get("waluta") or "EUR").upper()
+    currency = (f.get("waluta") or ("PLN" if code == "pl" else "EUR")).upper()
     netto = parse_amount(f.get("cena_netto"))
     vat_rate = parse_amount(f.get("vat"))
-    vat_rate = vat_rate or 0.0  # LT: domyślnie odwrotne obciążenie (bez PVM)
+    if vat_rate is None and str(f.get("vat", "")).strip() == "":  # PL: 23%, LT / DE: odwrotne obciążenie (bez VAT)
+        vat_rate = 23.0 if code == "pl" else 0.0
+    vat_rate = vat_rate or 0.0
     days_text = f.get("daty_wydarzenia", "")
     days = [x.strip() for x in re.split(r"[,;]", days_text) if x.strip()]
     ctx = {k: DOTS for k in KNOWN_FIELDS}
     ctx.update({
-        "klient_opis": CLIENT_BLANKS.get(code, CLIENT_BLANK),
+        "klient_opis": CLIENT_BLANKS.get(code) or CLIENT_BLANKS["pl"],
+        "wykonawca_opis": contractor(f.get("wykonawca")).get("opis"),
+        "wykonawca_firma": contractor(f.get("wykonawca")).get("label"),
         "nazwa_wydarzenia": blank("nazwa_wydarzenia"),
         "daty_wydarzenia": days_text or DOTS,
         "data_wydarzenia": days[0] if days else DOTS,
@@ -619,7 +732,7 @@ def contract_context(fields, lead_id, today, email="", phone="", code="lt"):
         "charakter_wydarzenia": blank("charakter_wydarzenia"),
         "rodzaj_przestrzeni": blank("rodzaj_przestrzeni"),
         "robot": f.get("robot") or "Unitree G1",
-        "waluta": CURRENCY_SYMBOL.get(currency, currency),
+        "waluta": CURRENCY_SYMBOL.get(currency, currency) if code == "pl" else currency,
         "vat_stawka": f"{vat_rate:g}%",
         "numer_umowy": f"{lead_id}/{today.year}",
         "email": _clean(email) or DOTS,
@@ -632,15 +745,16 @@ def contract_context(fields, lead_id, today, email="", phone="", code="lt"):
         brutto = round(netto + vat, 2)
         ctx.update({
             "cena_netto": money(netto), "cena_netto_slownie": amount_words_for(code, netto, currency),
-            "vat_kwota": money(vat) if vat else "", "cena_brutto": money(brutto),
+            "vat_kwota": money(vat) if vat or code == "pl" else "", "cena_brutto": money(brutto),
             "cena_brutto_slownie": amount_words_for(code, brutto, currency),
         })
     return ctx
 
 
-def sample_context(today, code="lt"):
+def sample_context(today, code="pl"):
+    net, currency, vat = ("6500", "PLN", "23") if code == "pl" else ("1300", "EUR", "0")
     return contract_context({"nazwa_wydarzenia": "Prezentacja", "daty_wydarzenia": today.strftime("%d.%m.%Y"),
-                             "cena_netto": "1300", "waluta": "EUR", "vat": "0"}, 77, today, code=code)
+                             "cena_netto": net, "waluta": currency, "vat": vat}, 77, today, code=code)
 
 
 # --- DOCX ---
@@ -761,8 +875,18 @@ def fill_docx(docx_bytes, ctx):
     from docx import Document
     doc = Document(io.BytesIO(docx_bytes))
     env = _sandbox()
+    party = ctx.get("wykonawca_opis") or _LEGACY_CONTRACTOR
     for p in _docx_paragraphs(doc):
         text = p.text
+        if party != _LEGACY_CONTRACTOR and _LEGACY_CONTRACTOR in text:  # dane Bartosza na sztywno we wgranym wzorze
+            run = next((r for r in p.runs if _LEGACY_CONTRACTOR in r.text), None)
+            if run is not None:
+                run.text = run.text.replace(_LEGACY_CONTRACTOR, party)
+            elif p.runs:
+                p.runs[0].text = text.replace(_LEGACY_CONTRACTOR, party)
+                for r in p.runs[1:]:
+                    r.text = ""
+            text = p.text
         if "{{" not in text and "{%" not in text:
             continue
         rendered = env.from_string(text).render(**ctx)
@@ -775,6 +899,21 @@ def fill_docx(docx_bytes, ctx):
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()
+
+
+def contract_party_error(docx_bytes, code):
+    """Czy umowa ma dane wybranego Wykonawcy (jego NIP) i nie ma danych drugiego. Błąd albo None."""
+    from docx import Document
+    doc = Document(io.BytesIO(docx_bytes))
+    flat = re.sub(r"[\s\-]", "", "\n".join(p.text for p in _docx_paragraphs(doc)))
+    me = contractor(code)
+    others = [c for k, c in CONTRACTORS.items() if k != (code or "") and c["nip"] in flat]
+    if me["nip"] not in flat or others:
+        return (f"Umowa nie ma danych Wykonawcy {me['label']} (NIP {me['nip']})"
+                + (f", a ma dane {others[0]['label']}" if others else "")
+                + " — wzór umowy ma dane wpisane na sztywno. Wstaw w nim pole {{ wykonawca_opis }} "
+                  "(Customer Journey → Ustawienia → wzór umowy) albo wybierz innego Wykonawcę.")
+    return None
 
 
 def check_docx_template(docx_bytes):
@@ -900,7 +1039,7 @@ def docx_text(data):
     return "\n".join(p.text for p in _docx_paragraphs(doc) if p.text.strip())
 
 
-def extract_text(filename, data, limit=3000):
+def extract_text(filename, data, limit=3000, max_pages=4):
     try:
         ext = file_ext(filename)
         if is_pdf(data):
@@ -908,7 +1047,7 @@ def extract_text(filename, data, limit=3000):
             from pypdf import PdfReader
             logging.getLogger("pypdf").setLevel(logging.ERROR)  # uszkodzone PDF-y od klientów nie śmiecą w logach
             reader = PdfReader(io.BytesIO(data))
-            text = "\n".join((page.extract_text() or "") for page in reader.pages[:4])
+            text = "\n".join((page.extract_text() or "") for page in reader.pages[:max_pages])
         elif ext in (".docx", ".docm", ".dotx"):
             text = docx_text(data)
         elif ext in _TEXT_EXT:
@@ -949,9 +1088,10 @@ def signature(owner):
     return "\n".join(x for x in lines if x)
 
 
-def _when(days, code="lt"):
-    """' jūsų renginiui 2026-11-21', ' jūsų renginiui 2026-11-21–23' (dni po kolei) albo
-    ' jūsų renginiams 2026-11-21 ir 2026-12-05' (osobne terminy); po niemiecku
+def _when(days, code="pl"):
+    """PL: ' na wydarzenie 21.11.2026', ' na wydarzenie 21.11–23.11.2026' (dni po kolei) albo
+    ' na wydarzenia 21.11.2026 i 05.12.2026' (osobne terminy); LT: ' jūsų renginiui 2026-11-21',
+    ' jūsų renginiui 2026-11-21–23', ' jūsų renginiams 2026-11-21 ir 2026-12-05'; DE:
     ' für Ihre Veranstaltung am 21.11.2026', ' … vom 21.–23.11.2026', ' für Ihre Veranstaltungen am … und …'."""
     days = sorted(set(d for d in days if d))
     if not days:
@@ -963,22 +1103,102 @@ def _when(days, code="lt"):
             return f" für Ihre Veranstaltung vom {days[0]:%d.%m.}–{days[-1]:%d.%m.%Y}"
         listed = [f"{d:%d.%m.%Y}" for d in days]
         return f" für Ihre Veranstaltungen am {', '.join(listed[:-1])} und {listed[-1]}"
+    if code == "lt":
+        if len(days) == 1:
+            return f" jūsų renginiui {days[0]:%Y-%m-%d}"
+        if all((b - a).days == 1 for a, b in zip(days, days[1:])):
+            return f" jūsų renginiui {days[0]:%Y-%m-%d}–{days[-1]:%m-%d}"
+        listed = [f"{d:%Y-%m-%d}" for d in days]
+        return f" jūsų renginiams {', '.join(listed[:-1])} ir {listed[-1]}"
     if len(days) == 1:
-        return f" jūsų renginiui {days[0]:%Y-%m-%d}"
+        return f" na wydarzenie {days[0]:%d.%m.%Y}"
     if all((b - a).days == 1 for a, b in zip(days, days[1:])):
-        return f" jūsų renginiui {days[0]:%Y-%m-%d}–{days[-1]:%m-%d}"
-    listed = [f"{d:%Y-%m-%d}" for d in days]
-    return f" jūsų renginiams {', '.join(listed[:-1])} ir {listed[-1]}"
+        return f" na wydarzenie {days[0]:%d.%m}–{days[-1]:%d.%m.%Y}"
+    listed = [f"{d:%d.%m.%Y}" for d in days]
+    return f" na wydarzenia {', '.join(listed[:-1])} i {listed[-1]}"
 
 
 def email_draft(kind, company, robot, days, owner, today, kb_deadline_days, sent_on=None,
-                review_link="", prev_subject="", code="lt"):
-    """(temat, treść) maila danego rodzaju — w języku rynku (Litwa: litewski, Niemcy: niemiecki). Bez imienia
-    w powitaniu. Umowa i baza wiedzy idą zwykle osobnymi mailami; „umowa_baza” to oba w jednym mailu."""
-    if code == "de":
-        return _email_draft_de(kind, company, robot, days, owner, today, kb_deadline_days, sent_on,
-                               review_link, prev_subject)
-    when = _when(days)
+                review_link="", prev_subject="", code="pl"):
+    """(temat, treść) maila danego rodzaju — w języku rynku (Polska: polski, Litwa: litewski, Niemcy: niemiecki).
+    Bez imienia w powitaniu — tak piszemy do klientów. Umowa i baza wiedzy idą zwykle osobnymi, prostymi mailami
+    (każdy ma swój przycisk na karcie); „umowa_baza” to oba w jednym mailu, do wyboru."""
+    draft = {"lt": _email_draft_lt, "de": _email_draft_de}.get(code, _email_draft_pl)
+    return draft(kind, company, robot, days, owner, today, kb_deadline_days, sent_on, review_link, prev_subject)
+
+
+def _email_draft_pl(kind, company, robot, days, owner, today, kb_deadline_days, sent_on=None,
+                    review_link="", prev_subject=""):
+    when = _when(days, "pl")
+    robot = robot or "Unitree G1"
+    first = min(days) if days else None
+    deadline = (first - timedelta(days=kb_deadline_days)) if first else None
+    kb_by = (f"najpóźniej do {max(deadline, today):%d.%m.%Y} (tydzień przed wydarzeniem)"
+             if deadline else "najpóźniej tydzień przed wydarzeniem")
+    head = "Dzień dobry,\n\n"
+    tail = "\n\nW razie pytań jestem do dyspozycji.\n\nZ pozdrowieniami,\n" + signature(owner)
+    label = f"{first:%d.%m.%Y}" if first else company
+    if kind == "umowa":
+        subject = f"Umowa — wynajem robota {label} | 33Bots"
+        body = (head +
+                f"dziękujemy za wybór 33Bots! W załączniku przesyłamy umowę na wynajem robota humanoidalnego "
+                f"{robot}{when}.\n\n"
+                "Prosimy o:\n"
+                "1. uzupełnienie w umowie danych Zamawiającego (pola wykropkowane) i brakujących szczegółów wydarzenia,\n"
+                "2. podpisanie umowy i odesłanie jej w odpowiedzi na tę wiadomość — skan, zdjęcie albo PDF "
+                "z podpisem elektronicznym.\n\n"
+                "Gdyby któryś zapis wymagał zmian, chętnie to omówimy." + tail)
+    elif kind == "umowa_baza":
+        subject = f"Umowa i baza wiedzy — wynajem robota {label} | 33Bots"
+        body = (head +
+                f"dziękujemy za wybór 33Bots! W załącznikach przesyłamy umowę na wynajem robota humanoidalnego "
+                f"{robot}{when} oraz w PDF instrukcję przygotowania bazy wiedzy dla robota.\n\n"
+                "Umowa — prosimy o:\n"
+                "1. uzupełnienie w umowie danych Zamawiającego (pola wykropkowane) i brakujących szczegółów wydarzenia,\n"
+                "2. podpisanie umowy i odesłanie jej w odpowiedzi na tę wiadomość — skan, zdjęcie albo PDF "
+                "z podpisem elektronicznym.\n\n"
+                "Baza wiedzy — na jej podstawie robot rozmawia z gośćmi: opowiada o firmie, odpowiada na pytania "
+                f"i trzyma się ustalonego tonu. Prosimy o przesłanie jej {kb_by} — jako plik albo zwykła odpowiedź "
+                "na tę wiadomość. Chętnie pomożemy ją przygotować.\n\n"
+                "Gdyby któryś zapis umowy wymagał zmian, chętnie to omówimy." + tail)
+    elif kind == "umowa_przypomnienie":
+        subject = prev_subject if prev_subject.lower().startswith("re:") else (
+            f"Re: {prev_subject}" if prev_subject else f"Przypomnienie: umowa — wynajem robota {label} | 33Bots")
+        sent = f", którą wysłaliśmy {sent_on:%d.%m}" if sent_on else ""
+        body = (head +
+                f"uprzejmie przypominam o umowie na wynajem robota {robot}{when}{sent}. Prosimy o uzupełnienie "
+                "danych, podpisanie i odesłanie umowy w odpowiedzi na tę wiadomość — umowę dołączam ponownie. "
+                "Gdyby któryś zapis wymagał zmian, chętnie to omówimy." + tail)
+    elif kind == "baza":
+        subject = f"Baza wiedzy dla robota — {label} | 33Bots"
+        body = (head +
+                f"w załączniku przesyłamy w PDF instrukcję przygotowania bazy wiedzy dla robota{when} — "
+                "można ją spokojnie przejrzeć. Na podstawie bazy wiedzy robot rozmawia z gośćmi: opowiada o firmie, "
+                "odpowiada na pytania i trzyma się ustalonego tonu.\n\n"
+                f"Prosimy o przesłanie bazy wiedzy {kb_by} — jako plik albo zwykła odpowiedź na tę wiadomość. "
+                "Chętnie pomożemy ją przygotować." + tail)
+    elif kind == "baza_przypomnienie":
+        subject = f"Przypomnienie: baza wiedzy dla robota — {label} | 33Bots"
+        body = (head +
+                f"uprzejmie przypominam o bazie wiedzy dla robota{when} — prosimy o nią {kb_by}, żebyśmy zdążyli "
+                "przygotować robota. Instrukcję przesyłam ponownie w załączniku; wystarczy odpowiedzieć na tę "
+                "wiadomość z plikiem albo treścią." + tail)
+    elif kind == "opinia":
+        subject = "Dziękujemy za wspólne wydarzenie! | 33Bots"
+        link = f"\n\n{review_link}" if review_link else ""
+        ask = ("Będziemy wdzięczni za krótką opinię — zajmie minutę:" if review_link else
+               "Będziemy wdzięczni za kilka słów opinii w odpowiedzi na tę wiadomość.")
+        body = (head +
+                f"dziękujemy za zaproszenie robota {robot}{when}! Mamy nadzieję, że goście byli zadowoleni.\n\n"
+                f"{ask}{link}\n\nKażda opinia pomaga nam rozwijać 33Bots." + tail)
+    else:
+        raise ValueError(kind)
+    return subject, body
+
+
+def _email_draft_lt(kind, company, robot, days, owner, today, kb_deadline_days, sent_on=None,
+                    review_link="", prev_subject=""):
+    when = _when(days, "lt")
     robot = robot or "Unitree G1"
     first = min(days) if days else None
     deadline = (first - timedelta(days=kb_deadline_days)) if first else None
@@ -1110,7 +1330,8 @@ def _email_draft_de(kind, company, robot, days, owner, today, kb_deadline_days, 
 
 # --- faktura po wydarzeniu (inFakt) i dane do faktury z NIP ---
 
-OWN_NIP = "5253090645"  # 33Bots — nie bierzemy go za NIP klienta, gdy czytamy umowę
+OWN_NIP = "5253090645"  # 33Bots Bartosz Wysocki
+OWN_NIPS = {c["nip"] for c in CONTRACTORS.values()}  # nasze firmy — nie bierzemy ich za NIP klienta, gdy czytamy umowę
 _NIP_RE = re.compile(r"NIP[\s:.\-]*(?:PL)?[\s]*([0-9][0-9\- ]{8,14}[0-9])", re.IGNORECASE)
 _POSTCODE_RE = re.compile(r"(\d{2}-\d{3})\s+(.+)$")
 
@@ -1127,11 +1348,12 @@ def nip_valid(raw):
     return s % 11 == int(d[9]) and s % 11 != 10
 
 
-def find_nip(text, exclude=OWN_NIP):
-    """Pierwszy poprawny NIP klienta w tekście (np. z odesłanej umowy) albo ''."""
+def find_nip(text, exclude=OWN_NIPS):
+    """Pierwszy poprawny NIP klienta w tekście (np. z odesłanej umowy) albo '' — bez NIP-ów naszych firm."""
+    exclude = {exclude} if isinstance(exclude, str) else set(exclude or ())
     for m in _NIP_RE.finditer(text or ""):
         d = nip_digits(m.group(1))
-        if nip_valid(d) and d != exclude:
+        if nip_valid(d) and d not in exclude:
             return d
     return ""
 
@@ -1161,9 +1383,9 @@ _SERVICE_NAME = {
 _SERVICE_NAME_PL = "Wynajem robota humanoidalnego {robot} z obsługą operatora"
 
 
-def invoice_service_name(robot, days, event_name="", code="lt"):
-    """Pozycja na fakturze w języku klienta (litewski / niemiecki) z polskim tłumaczeniem po ukośniku —
-    klient czyta swoją część, księgowość w Polsce swoją. Nigdy po angielsku."""
+def invoice_service_name(robot, days, event_name="", code="pl"):
+    """Pozycja na fakturze: w CRM PL po polsku; na Litwie / w Niemczech w języku klienta z polskim tłumaczeniem
+    po ukośniku — klient czyta swoją część, księgowość w Polsce swoją. Nigdy po angielsku."""
     days = sorted(set(d for d in days if d))
     when = ""
     if days:
@@ -1171,11 +1393,13 @@ def invoice_service_name(robot, days, event_name="", code="lt"):
                 f" — {', '.join(f'{d:%d.%m.%Y}' for d in days)}")
     what = f" „{event_name}”" if event_name else ""
     robot = robot or "Unitree G1"
-    native = (_SERVICE_NAME.get(code) or _SERVICE_NAME["lt"]).format(robot=robot)
+    if code not in _SERVICE_NAME:
+        return f"Usługa udostępnienia robota humanoidalnego {robot} wraz z obsługą operatora{what}{when}"
+    native = _SERVICE_NAME[code].format(robot=robot)
     return f"{native} / {_SERVICE_NAME_PL.format(robot=robot)}{what}{when}"
 
 
-def invoice_email(number, days, payment_date, owner, code="lt"):
+def invoice_email(number, days, payment_date, owner, code="pl"):
     when = _when(days, code)
     if code == "de":
         subject = f"Rechnung {number} – 33Bots" if number else "Rechnung – 33Bots"
@@ -1184,6 +1408,14 @@ def invoice_email(number, days, payment_date, owner, code="lt"):
                 f"Zahlungsziel: {payment_date:%d.%m.%Y}.\n\n"
                 "Vielen Dank für die Zusammenarbeit – wir hoffen, Ihre Gäste waren begeistert!\n\n"
                 "Mit freundlichen Grüßen\n" + signature(owner))
+        return subject, body
+    if code == "pl":
+        subject = f"Faktura {number} — 33Bots" if number else "Faktura — 33Bots"
+        body = ("Dzień dobry,\n\n"
+                f"w załączniku przesyłam fakturę{(' nr ' + number) if number else ''} za wynajem robota{when}. "
+                f"Termin płatności: {payment_date:%d.%m.%Y}.\n\n"
+                "Dziękujemy za współpracę — mamy nadzieję, że goście byli zadowoleni!\n\n"
+                "Z pozdrowieniami,\n" + signature(owner))
         return subject, body
     subject = f"Sąskaita faktūra {number} – 33Bots" if number else "Sąskaita faktūra – 33Bots"
     body = ("Laba diena,\n\n"

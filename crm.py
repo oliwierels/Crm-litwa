@@ -2362,16 +2362,17 @@ _include("logistyka_widoki")
 # ---------- USTAWIENIA (AppSetting) ----------
 
 SETTING_DEFAULTS = {
-    "umowa_wzor": journey.DEFAULT_TEMPLATE,  # tekst umowy (z dawnego generatora — mógł być zmieniony)
+    "umowa_wzor": journey.default_template(markets.DEFAULT),  # tekst umowy rynku domyślnego (mógł być zmieniony)
     "umowa_wzor_de": journey.DEFAULT_TEMPLATE_DE,  # umowa po niemiecku (rynek Niemcy)
-    "umowa_vat": "0",  # LT: odwrotne obciążenie
+    "umowa_vat": markets.get(markets.DEFAULT)["contract_vat"],  # PL 23%, LT / DE: odwrotne obciążenie (0%)
 }
 
 
 def mkey(base, code=None):
-    """Klucz ustawienia osobny dla rynku: Litwa — dawna nazwa (np. jr_template_docx), Niemcy — z końcówką _de."""
+    """Klucz ustawienia osobny dla rynku: rynek domyślny serwisu — dawna nazwa (np. jr_template_docx), inne
+    rynki — z końcówką rynku (_de)."""
     code = code or current_market()
-    return base if code == "lt" else f"{base}_{code}"
+    return base if code == markets.DEFAULT else f"{base}_{code}"
 
 
 def get_setting(key):
@@ -2518,7 +2519,7 @@ def journey_owner():
 
 
 def market_sender(user, code):
-    """Nadawca maili do klienta z rynku `code` — zawsze skrzynka w domenie rynku (33bots.lt / 33bots.de):
+    """Nadawca maili do klienta z rynku `code` — zawsze skrzynka w domenie rynku (33bots.pl / .lt / .de):
     1) skrzynka tej osoby z listy rynku (o.latek@33bots.de …), 2) jej osobna skrzynka z Railway (SMTP_USER_<IMIĘ>)
     w domenie rynku, 3) wspólna kontakt@ rynku podpisana imieniem osoby, 4) inna skrzynka rynku — wtedy nadawcą
     jest jej właściciel (nigdy cudze imię z cudzym adresem). Bez skrzynek rynku — dawne ustawienia osoby."""
@@ -2625,6 +2626,21 @@ def ensure_journeys():
 _include("journey_umowa")
 
 
+def default_contract_party(lead):
+    """Wykonawca umowy, gdy nikt jeszcze nie wybrał: lead Oliwiera → jego firma, reszta → 33Bots Bartosz Wysocki."""
+    owner = USERS_BY_ID.get(lead.assigned_to) or {}
+    return "oliwier" if owner.get("name") == "Oliwier" else ""
+
+
+def contract_party(j):
+    """Wykonawca wybrany przy wysyłce umowy ("" = Bartosz, "oliwier") albo None, gdy umowa jeszcze nie poszła z CRM."""
+    code = _jjson(j.contract_fields).get("wykonawca") if j is not None else None
+    return code if code in journey.CONTRACTORS else None
+
+
+app.jinja_env.globals.update(contract_party=contract_party, journey_contractors=journey.CONTRACTORS)
+
+
 def journey_contract_fields(j, lead):
     """Pola umowy do okienka: z leada, nadpisane tym, co człowiek poprawił przy poprzedniej wysyłce."""
     days = journey_days(lead)
@@ -2638,10 +2654,14 @@ def journey_contract_fields(j, lead):
         "rodzaj_przestrzeni": "",
         "robot": lead.robot_model or "Unitree G1",
         "cena_netto": f"{lead.value_pln:g}" if lead.value_pln else "",
-        "waluta": lead.currency or "EUR",
-        "vat": str(get_setting("umowa_vat") or "0"),
+        "waluta": lead.currency or M(lead_market(lead))["currency"],
+        "vat": str(get_setting("umowa_vat") or M(lead_market(lead))["contract_vat"]),
     }
+    if M(lead_market(lead)).get("contractors"):  # CRM PL: kto podpisuje po stronie 33Bots (journey.CONTRACTORS)
+        base["wykonawca"] = default_contract_party(lead)
     base.update({k: str(v) for k, v in _jjson(j.contract_fields).items() if k in base})
+    if "wykonawca" in base and base["wykonawca"] not in journey.CONTRACTORS:
+        base["wykonawca"] = default_contract_party(lead)
     return base
 
 
@@ -2657,17 +2677,18 @@ def journey_contract_docx(lead, fields):
 
 
 def contract_template(code):
-    """Tekst umowy rynku (Litwa — po litewsku, Niemcy — po niemiecku)."""
-    return get_setting(mkey("umowa_wzor", code)) or journey.default_template(code)
+    """Tekst umowy rynku (Polska — po polsku, Litwa — po litewsku, Niemcy — po niemiecku). Własny wzór z danymi
+    Bartosza wpisanymi na sztywno dostaje pole {{ wykonawca_opis }} (wybór wykonawcy w CRM PL)."""
+    return journey.with_contractor_field(get_setting(mkey("umowa_wzor", code)) or journey.default_template(code))
 
 
 def journey_contract_filename(lead):
-    word = {"lt": "Sutartis", "de": "Vertrag"}.get(lead_market(lead), "Sutartis")
+    word = {"pl": "Umowa", "lt": "Sutartis", "de": "Vertrag"}.get(lead_market(lead), "Umowa")
     return f"{word}_33Bots_{journey.slug(lead.company)}.docx"
 
 
-def _journey_kb_instruction(code="lt"):
-    with open(journey.kb_instruction(code)[0], "rb") as fh:
+def _journey_kb_instruction(code=None):
+    with open(journey.kb_instruction(code or DEFAULT_MARKET)[0], "rb") as fh:
         return fh.read()
 
 
@@ -2695,12 +2716,15 @@ def journey_draft(j, lead, kind):
     elif owner.get("email") and login.lower() != owner["email"].lower():
         key = re.sub(r"[^A-Z0-9]", "_", owner["name"].upper())
         warnings.append(f"Skrzynka {owner['name']} nie jest podpięta (SMTP_PASS_{key}) — mail wyjdzie z {login}.")
+    fields = journey_contract_fields(j, lead) if kind in ("umowa", "umowa_baza") else None
     return {
         "kind": kind, "label": journey.EMAIL_KINDS[kind], "company": lead.company,
         "to": ", ".join(lead.emails), "recipients": lead.emails, "from": f"{owner.get('full_name') or owner['name']} <{login or owner.get('email', '')}>",
         "subject": human_text(subject), "body": human_text(body), "attachments": attachments, "warnings": warnings,
-        "fields": journey_contract_fields(j, lead) if kind in ("umowa", "umowa_baza") else None,
+        "fields": fields,
         "field_labels": journey.EDITABLE_FIELDS if kind in ("umowa", "umowa_baza") else [],
+        "parties": [{"code": k, "label": c["label"], "nip": c["nip"]} for k, c in journey.CONTRACTORS.items()]
+        if fields and "wykonawca" in fields else [],  # CRM PL: wybór wykonawcy umowy
     }
 
 
@@ -2715,8 +2739,13 @@ def journey_send(j, lead, kind, to_addr, subject, body, fields, user):
     attachments, contract = [], None
     if kind in ("umowa", "umowa_baza"):
         allowed = journey_contract_fields(j, lead)
-        fields = {k: str(v).strip()[:300] for k, v in (fields or {}).items() if k in allowed}
+        fields = {k: str(v).strip()[:300] for k, v in (fields or {}).items() if k in allowed and v is not None}
+        if "wykonawca" in allowed and fields.get("wykonawca") not in journey.CONTRACTORS:  # CRM PL: wybór wykonawcy
+            fields["wykonawca"] = allowed["wykonawca"]
         contract = journey_contract_docx(lead, fields)
+        party_err = journey.contract_party_error(contract, fields["wykonawca"]) if "wykonawca" in fields else None
+        if party_err:  # nigdy nie wysyłamy umowy z danymi innej firmy, niż wybrano
+            return party_err
         attachments.append((journey_contract_filename(lead), contract, journey.DOCX_MIME))
     elif kind == "umowa_przypomnienie":
         last = (JourneyDocument.query.filter_by(lead_id=lead.id, kind="umowa_wyslana")
@@ -2760,7 +2789,9 @@ def journey_send(j, lead, kind, to_addr, subject, body, fields, user):
         _journey_maybe_close(j)
     j.needs_review = False  # człowiek zajął się tym klientem — pytanie „co już poszło?” niepotrzebne
     j.updated_at = now
-    _journey_note(lead, f"📨 {journey.EMAIL_KINDS[kind]} — wysłane do {to_addr} (od: {owner.get('full_name') or owner['name']})\n"
+    party_note = (f"\nWykonawca w umowie: {journey.contractor(fields.get('wykonawca')).get('label')}"
+                  if kind in ("umowa", "umowa_baza") and "wykonawca" in (fields or {}) else "")
+    _journey_note(lead, f"📨 {journey.EMAIL_KINDS[kind]} — wysłane do {to_addr} (od: {owner.get('full_name') or owner['name']}){party_note}\n"
                         f"Temat: {subject}\n---\n{body}", user["id"])
     db.session.commit()
     _journey_badge_reset()
@@ -2829,6 +2860,8 @@ def crm_journey_contract_preview(lead_id):
     j, lead = _journey_or_404(lead_id)
     allowed = journey_contract_fields(j, lead)
     fields = {k: (request.form.get(k) or "").strip()[:300] for k in allowed}
+    if "wykonawca" in allowed and ("wykonawca" not in request.form or fields["wykonawca"] not in journey.CONTRACTORS):
+        fields["wykonawca"] = allowed["wykonawca"]
     resp = make_response(journey_contract_docx(lead, fields))
     resp.headers["Content-Type"] = journey.DOCX_MIME
     resp.headers["Content-Disposition"] = f'attachment; filename="{journey_contract_filename(lead)}"'
@@ -2851,7 +2884,8 @@ def crm_journey_send(lead_id):
         return jsonify({"error": bad}), 400
     if not subject or not body:
         return jsonify({"error": "Uzupełnij temat i treść."}), 400
-    fields = {k: f.get(f"pole_{k}", "") for k in journey_contract_fields(j, lead)} if kind in ("umowa", "umowa_baza") else None
+    fields = ({k: f.get(f"pole_{k}", None if k == "wykonawca" else "") for k in journey_contract_fields(j, lead)}
+              if kind in ("umowa", "umowa_baza") else None)
     err = journey_send(j, lead, kind, to_addr, subject, body, fields, get_current_user(request))
     if err:
         return jsonify({"error": f"Mail nie wyszedł: {err}"}), 502
@@ -2926,7 +2960,7 @@ def crm_journey_settings():
             msg = "Wrócono do wzoru z CRM."
     return render_template(
         "crm/journey_settings.html", cfg=journey_cfg(), owner=journey_owner(), msg=msg, err=err, unknown=unknown,
-        review_link=get_setting("jr_review_link") or "", vat=get_setting("umowa_vat") or "0",
+        review_link=get_setting("jr_review_link") or "", vat=get_setting("umowa_vat") or M()["contract_vat"],
         template_name=get_setting(mkey("jr_template_name")) or "", fields=journey.FIELDS_DOC,
         boxes=journey_mailboxes()[1], scan=_JOURNEY_SCAN, soffice=bool(journey.soffice_path()),
         bank_account=get_setting("jr_bank_account") or "", bank_name=get_setting("jr_bank_name") or "",
