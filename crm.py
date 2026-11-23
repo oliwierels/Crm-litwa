@@ -5,15 +5,16 @@ from datetime import datetime, date, timedelta, timezone
 from email.mime.text import MIMEText
 from urllib.parse import quote
 from werkzeug.middleware.proxy_fix import ProxyFix
-import hashlib, hmac, json, os, re, secrets, smtplib, threading, time
+import hashlib, hmac, json, os, re, secrets, smtplib, threading, time, unicodedata
 import requests
+import health
 import journey
 import logistics
 import market as markets
 import offers
 import poczta
-import health
 import pricing
+import robot_agent
 import sales_rules
 
 
@@ -69,6 +70,21 @@ WON_STAGES = ("Wygrany", "Zrealizowany")
 # obu CRM. Klienta prowadzi CRM LT/DE (maile, umowa, faktura) i on nadpisuje te leady; polski CRM nic do nich
 # nie wysyła (Customer Journey, kampanie), nie liczy ich jako nowych / straconych i nie robi z nimi automatyzacji.
 MARKET_COPY_SOURCES = ("CRM LT", "CRM DE")
+
+
+def own_leads():
+    """Filtr: leady polskiego CRM, bez kopii wygranych z CRM LT/DE (do automatyzacji i wszystkiego poza wygranymi)."""
+    return db.or_(Lead.source.is_(None), Lead.source.notin_(MARKET_COPY_SOURCES))
+
+
+def counted_leads():
+    """Filtr do zestawień wygranych: leady polskiego CRM + wygrane (Wygrany / Zrealizowany) z CRM LT/DE.
+    Kopia cofnięta w CRM LT/DE z wygranej (u nas Stracony) wypada — LT/DE dokłada tu tylko wygrane."""
+    return db.or_(own_leads(), Lead.stage.in_(WON_STAGES))
+
+
+def is_market_copy(lead):
+    return (lead.source or "") in MARKET_COPY_SOURCES
 STAGE_COLORS = {  # Kontakt/Negocjacje zostają tylko dla starych wpisów w historii etapów
     "Nowy": "#6366f1",
     "Kontakt": "#3b82f6",
@@ -98,7 +114,7 @@ ROBOT_MODEL_ALIASES = {
     "Unitree G1 + B2 (pakiet)": "Oba (G1 + piesek)",
 }
 
-CURRENCIES = ["EUR", "PLN", "USD", "GBP"]
+CURRENCIES = list(dict.fromkeys([markets.get(markets.DEFAULT)["currency"], "PLN", "EUR", "USD", "GBP"]))  # rynku 1.
 
 QUALITY_LEVELS = ["Dobry", "Średni", "Słaby"]
 QUALITY_COLORS = {"Dobry": "#22c55e", "Średni": "#f59e0b", "Słaby": "#ef4444"}
@@ -813,7 +829,8 @@ _DE_MARK_RE = re.compile(r"(?:\+|\b00)\s?(?:49|43|41)[\d\s/()-]{6,}|@[\w.-]+\.(?
 
 
 def clickup_de_configured():
-    """Czy niemiecka lista ClickUp jest podłączona w tym CRM (bez łączenia z ClickUp)."""
+    """Czy niemiecka lista ClickUp jest podłączona w tym CRM. Niemiecką listę czyta ten CRM, w którego ustawieniach
+    jest klucz CLICKUP_API_TOKEN_DE (albo CLICKUP_LIST_ID_DE) — docelowo CRM LT/DE, bez okrężnej drogi przez PL."""
     return bool(os.environ.get("CLICKUP_LIST_ID_DE", "").strip() or os.environ.get("CLICKUP_API_TOKEN_DE", "").strip())
 
 
@@ -1326,29 +1343,23 @@ def _closing_entry(lead, history=None):
     return found
 
 
-def own_leads():
-    """Filtr: leady polskiego CRM, bez kopii wygranych z CRM LT/DE (do automatyzacji i wszystkiego poza wygranymi)."""
-    return db.or_(Lead.source.is_(None), Lead.source.notin_(MARKET_COPY_SOURCES))
-
-
-def is_market_copy(lead):
-    return (lead.source or "") in MARKET_COPY_SOURCES
-
-
 def foreign_market(lead):
     return None
 
 
-def closed_lead_events(include_copies=False):
+def closed_lead_events(include_copies=True):
     """Leady zamknięte wg ich OBECNEGO etapu: [(lead, "Wygrany"|"Stracony", kiedy)] (czas
     warszawski). Zrealizowany liczy się jako wygrany, z datą wygranej. Lead wygrany, a potem
     przeniesiony na Stracony, liczy się tylko jako stracony (w miesiącu straty); lead cofnięty
-    z Wygranego np. do Oferty nie liczy się wcale. Każdy lead najwyżej raz."""
+    z Wygranego np. do Oferty nie liczy się wcale. Każdy lead najwyżej raz.
+    include_copies=True (domyślnie) dolicza wygrane z CRM LT/DE — z datą wygranej w tamtym CRM;
+    False — tylko leady polskiego CRM."""
     by_lead = {}
     for h in StageHistory.query.filter(StageHistory.changed_at.isnot(None)).all():
         by_lead.setdefault(h.lead_id, []).append(h)
     out = []
-    for lead in Lead.query.filter(Lead.stage.in_(CLOSED_STAGES), Lead.clickup_pending.isnot(True)).all():
+    q = Lead.query.filter(Lead.stage.in_(CLOSED_STAGES), Lead.clickup_pending.isnot(True))
+    for lead in q.filter(counted_leads() if include_copies else own_leads()).all():
         entry = _closing_entry(lead, by_lead.get(lead.id, []))
         if entry:
             out.append((lead, "Wygrany" if lead.stage in WON_STAGES else lead.stage, to_local(entry.changed_at)))
@@ -1866,8 +1877,8 @@ def _apply_clickup_review_fields(lead, form):
     val = form.get("value_pln", type=float)
     if val is not None:
         lead.value_pln = val
-    cur = form.get("currency", lead.currency or "EUR").strip().upper()
-    lead.currency = cur if cur in CURRENCIES else (lead.currency or "EUR")
+    cur = form.get("currency", lead.currency or M(lead_market(lead))["currency"]).strip().upper()
+    lead.currency = cur if cur in CURRENCIES else (lead.currency or M(lead_market(lead))["currency"])
     lead.location = form.get("location", lead.location or "").strip()
     try:
         assigned = int(form.get("assigned_to", lead.assigned_to or 1))
@@ -1946,8 +1957,8 @@ def _save_lead_fields(lead, form, actor_id=None):
     lead.robot_model = ROBOT_MODEL_ALIASES.get(robot, robot)
     lead.rental_days = form.get("rental_days", type=int)
     lead.value_pln = form.get("value_pln", type=float)
-    cur = form.get("currency", lead.currency or "EUR").strip().upper()
-    lead.currency = cur if cur in CURRENCIES else (lead.currency or "EUR")
+    cur = form.get("currency", lead.currency or M(lead_market(lead))["currency"]).strip().upper()
+    lead.currency = cur if cur in CURRENCIES else (lead.currency or M(lead_market(lead))["currency"])
     qual = form.get("quality", lead.quality or "Średni").strip()
     lead.quality = qual if qual in QUALITY_LEVELS else (lead.quality or "Średni")
     lead.notes = form.get("notes", "").strip()
@@ -2081,15 +2092,16 @@ def crm_offer_audit():
         last = json.loads(get_setting(OFFER_AUDIT_REPORT_KEY) or "{}")
     except ValueError:
         last = {}
-    code = current_market()  # strona pokazuje oglądany rynek (LT albo DE)
-    last["rows"] = [r for r in last.get("rows", []) if r.get("market") == code]
+    code = current_market()  # strona pokazuje oglądany rynek (przy kilku rynkach: LT albo DE)
+    last["rows"] = [r for r in last.get("rows", []) if r.get("market", DEFAULT_MARKET) == code]
     return render_template("crm/audyt_ofert.html", last=last, days=OFFER_AUDIT_DAYS,
                            rows=[r for r in audit_offer_second_steps(apply=False) if r["market"] == code])
 
 
 def offer_second_step_kind(lead):
-    """Drugi krok po ofercie w CRM LT/DE: follow-up mailem (CRM przygotuje go w języku klienta)."""
-    return "email"
+    """Drugi krok po ofercie (market.py: offer_second_step): CRM PL — telefon, CRM LT/DE — follow-up mailem
+    (CRM przygotuje go w języku klienta)."""
+    return M(lead_market(lead)).get("offer_second_step", "call")
 
 
 @app.route("/crm/skutecznosc", methods=["GET", "POST"])
@@ -6913,9 +6925,10 @@ def _notify_form_filled(lead_id, summary):
 
 
 # ---------- POCZTA: skrzynki firmowe w CRM + tłumaczenie na żywo ----------
-# Zakładka „Poczta”: Odebrane i Wysłane wszystkich skrzynek rynku (domyślnie o.latek@ i kontakt@33bots.lt),
-# razem z archiwum. CRM synchronizuje je w tle do tabeli mail_messages (tylko odczyt IMAP), każdy mail
-# pokazuje obok oryginału po polsku (Claude, tłumaczenie zapisane w bazie) i pozwala pisać maile po polsku
+# Zakładka „Poczta”: Odebrane i Wysłane wszystkich skrzynek rynku (CRM PL: skrzynki 33bots.pl z hasłem w Railway —
+# INBOX_IMAP_* dla kontakt@, SMTP_PASS_<IMIĘ> dla osób; CRM LT/DE: o.latek@ i kontakt@33bots.lt / .de), razem
+# z archiwum. CRM synchronizuje je w tle do tabeli mail_messages (tylko odczyt IMAP). Na rynkach z tłumaczeniem
+# (LT/DE) każdy mail ma obok oryginału wersję po polsku (Claude, zapisana w bazie), a maile pisze się po polsku
 # z tłumaczeniem na język klienta — wysyłka z wybranej skrzynki, z kopią w Wysłanych.
 MAIL_LANG_NAMES = {"pl": "polski", "lt": "litewski", "de": "niemiecki", "en": "angielski"}
 MAIL_LANG_FLAGS = {"pl": "🇵🇱", "lt": "🇱🇹", "de": "🇩🇪", "en": "🇬🇧"}

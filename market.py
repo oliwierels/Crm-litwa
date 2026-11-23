@@ -27,6 +27,7 @@ ALL = {
         # polski CRM dostaje też zapytania z zagranicy: język klienta rozpoznany z kraju / maila / telefonu
         # (litewskie i niemieckie leady przechodzą same do CRM LT/DE), maile w Poczcie bez tłumaczenia
         "detect_lang": True, "translate_mail": False,
+        "offer_second_step": "call",  # po ofercie: telefon
     },
     "lt": {
         "code": "lt", "lang": "lt", "flag": "🇱🇹", "name": "Litwa", "country": "LT", "domain": "33bots.lt",
@@ -42,6 +43,7 @@ ALL = {
         "mail_phone": True,  # numer telefonu nadawcy w podpisie maili
         "whatsapp_lang": "lt",
         "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
+        "offer_second_step": "email",  # po ofercie: follow-up mailem w języku klienta (CRM PL: telefon)
         "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         # --- formularz dla klienta (/f/…) ---
         "form": {
@@ -152,6 +154,7 @@ ALL = {
         "mail_phone": False,  # Niemcy: bez polskiego numeru w mailach — telefon tylko w PDF oferty
         "whatsapp_lang": "de",
         "detect_lang": False,  # język klienta = język rynku leada (nigdy po angielsku ani po polsku)
+        "offer_second_step": "email",  # po ofercie: follow-up mailem w języku klienta (CRM PL: telefon)
         "translate_mail": True,  # maile w Poczcie tłumaczone na polski (oryginał obok)
         "form": {
             "title": "33Bots – Angaben zur Veranstaltung",
