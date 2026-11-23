@@ -55,8 +55,9 @@ def _owner_worked(lead_id, uid):
     if db.session.query(ActivityComment.id).filter(ActivityComment.author_id == uid,
                                                    ActivityComment.activity_id.in_(acts)).first():
         return True
-    return db.session.query(StageHistory.id).filter(StageHistory.lead_id == lead_id,
-                                                    StageHistory.changed_by == uid).first() is not None
+    # wpis przy tworzeniu leada (from_stage puste) robi automat w imieniu osoby — to nie jest praca przy leadzie
+    return db.session.query(StageHistory.id).filter(StageHistory.lead_id == lead_id, StageHistory.changed_by == uid,
+                                                    StageHistory.from_stage.isnot(None)).first() is not None
 
 
 def owner_cleanup_once():

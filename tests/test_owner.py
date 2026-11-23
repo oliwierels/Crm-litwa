@@ -78,6 +78,9 @@ def test_one_time_cleanup(app):
             crm.db.session.delete(row)
     crm.db.session.commit()
     untouched = mk("Nikt Nie Ruszał", OLIWIER)
+    # wpis „utworzono leada” w imieniu Oliwiera (dawna skrzynka kontakt@) to nie jest praca przy leadzie
+    crm.db.session.add(crm.StageHistory(lead_id=untouched.id, from_stage=None, to_stage="Nowy", changed_by=OLIWIER))
+    crm.db.session.commit()
     auto = task(untouched, OLIWIER, notes="📞 Drugi krok: telefon po ofercie")
     worked = mk("Oliwier Prowadzi", OLIWIER, stage="Oferta")
     task(worked, OLIWIER, created_by=OLIWIER, done=True, notes="Rozmowa z klientem")
@@ -98,6 +101,27 @@ def test_one_time_cleanup(app):
     assert worked.assigned_to == OLIWIER and worked_open.assigned_to == OLIWIER, "lead prowadzony przez Oliwiera zostaje"
     assert crm.db.session.get(crm.Activity, lost_task.id) is None, "stracony lead bez otwartych zadań"
     assert stray.assigned_to == BARTEK, "zadanie automatu idzie do opiekuna leada"
+
+
+def test_inbox_lead_goes_to_market_owner_or_inbox_assign_to(app, monkeypatch):
+    from types import SimpleNamespace
+    calls = iter(["", "Bartek"])
+
+    def inquiry(*_a, **_kw):
+        n = len(MADE)
+        return {"is_inquiry": True, "company": f"Zapytanie Skrzynka {n}", "contact_email": f"skrzynka{n}@example.com",
+                "contact_phone": "", "summary": "Robot na event", "reason": "zapytanie"}
+
+    monkeypatch.setattr(crm, "_ai_forced_tool", inquiry)
+    for expected in (crm.default_owner(CODE), BARTEK):
+        monkeypatch.setenv("INBOX_ASSIGN_TO", next(calls))
+        rec = SimpleNamespace(from_addr="klient@example.com", subject="Zapytanie", body="Robot na event",
+                              received_at=datetime.utcnow(), market=CODE, status=None, lead_id=None, reason=None)
+        crm.process_inbox_message(rec, force=True)
+        crm.db.session.commit()
+        assert rec.status == "lead", rec.reason
+        MADE.append(rec.lead_id)
+        assert crm.db.session.get(crm.Lead, rec.lead_id).assigned_to == expected
 
 
 def test_new_task_defaults_to_logged_in_person(app):

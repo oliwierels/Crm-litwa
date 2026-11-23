@@ -4760,6 +4760,7 @@ def process_inbox_message(rec, force=False):
         "notes": res.get("summary") or None, "quality": res.get("quality"), "stage": "Nowy",
         "source": f"Formularz {markets.get(rec.market)['domain']}" if is_form else f"Mail kontakt@{markets.get(rec.market)['domain']}",
         "event_dates": res.get("event_dates") or None, "market": rec.market or DEFAULT_MARKET,
+        "assigned_to": assignee["id"],
     }
     if res.get("robot_model") in ROBOT_MODELS:
         fields["robot_model"] = res["robot_model"]
