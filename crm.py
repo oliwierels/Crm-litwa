@@ -5950,8 +5950,9 @@ def lt_auto_mail():
         return 0
     since_dt = datetime.fromisoformat(since)
     sent = 0
-    for lead in Lead.query.filter(Lead.created_at >= since_dt, Lead.lt_mail_at.is_(None),
-                                  Lead.stage == "Nowy").order_by(Lead.created_at).limit(50).all():
+    for lead in Lead.query.filter(Lead.created_at >= since_dt, Lead.lt_mail_at.is_(None), Lead.stage == "Nowy",
+                                  Lead.clickup_pending.isnot(True)  # czeka w „Z ClickUp” — nic do klienta przed akceptacją
+                                  ).order_by(Lead.created_at).limit(50).all():
         mc = lead_market(lead)
         if not lead.emails or not lt_mailbox_ready(mc):
             continue
