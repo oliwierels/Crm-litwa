@@ -679,6 +679,11 @@ def _realize_scheduler():
                 except Exception:
                     db.session.rollback()
                     app.logger.exception("one_task_per_lead")
+                try:  # raz: zaległe pokazy 🏆 cudzych wygranych nie wyskoczą na innych kontach
+                    quiet_team_celebrations_once()
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception("quiet_team_celebrations")
                 owner_cleanup_once()  # raz: leady z importu do domyślnego opiekuna rynku, zadania za opiekunem
                 owner_cleanup_v2_once()  # raz: to samo, liczą się tylko własne działania Oliwiera
                 clickup_release_waiting_once()  # raz: litewskie leady z „Z ClickUp” na tablicę (bez automatycznych maili)

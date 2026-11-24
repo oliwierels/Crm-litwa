@@ -130,7 +130,8 @@ def test_acceptance_mail_wins_lead_and_notifies_team(app):
     assert crm.db.session.get(crm.Activity, other.id).notes.startswith(crm.CLEAN_PREFIX)
     wins = notices(kind="win")
     assert {n.user_id for n in wins} == {u["id"] for u in crm.USERS}, "cały zespół dostaje powiadomienie o wygranej"
-    assert all(n.celebrate for n in wins) and all(n.lead_id == lead.id for n in wins)
+    assert all(n.lead_id == lead.id for n in wins)
+    assert [n.user_id for n in wins if n.celebrate] == [lead.assigned_to], "pokaz 🏆 tylko u opiekuna (jego wygrana)"
     notes = " ".join(a.notes for a in crm.Activity.query.filter_by(lead_id=lead.id, kind="note").all())
     assert "Wygrany z maila" in notes and "cofnij etap" in notes, "decyzja silnika jest opisana przy leadzie"
 
@@ -252,10 +253,10 @@ def test_human_win_notifies_others_and_bell_shows_it(app, client):
     assert sorted(n.user_id for n in notices(kind="win")) == sorted(u["id"] for u in crm.USERS if u["id"] != OLIWIER)
     html = client.get("/crm/").get_data(as_text=True)
     assert "Dzwonek Wygrana" in html and "Co się wydarzyło" in html
-    assert "/pokazane" in html, "Bartek zobaczy pokaz 🏆 wygranej kolegi"
+    assert "/pokazane" not in html, "wygrana Oliwiera: pokaz 🏆 tylko na jego koncie, u Bartka tylko dzwonek"
+    assert all(not n.celebrate for n in notices(kind="win"))
+    assert crm.notice_to_celebrate(BARTEK) is None and crm.notice_to_celebrate(JERZY) is None
     n = notices(BARTEK, "win")[0]
-    assert client.post(f"/crm/api/powiadomienia/{n.id}/pokazane").status_code == 200
-    assert crm.notice_to_celebrate(BARTEK) is None
     r = client.get(f"/crm/powiadomienia/{n.id}")
     assert r.status_code == 302 and f"/crm/leads/{lead.id}" in r.headers["Location"]
     assert crm.db.session.get(crm.Notice, n.id).read_at is not None
@@ -362,3 +363,22 @@ def test_one_task_per_lead_once(app):
     for x in own:
         crm.db.session.delete(x)
     crm.db.session.commit()
+
+
+def test_old_team_celebrations_are_quieted_once(app):
+    """Zaległe pokazy cudzych wygranych (sprzed zmiany zasady) nie wyskakują na innych kontach — raz po wdrożeniu."""
+    for key in (crm.QUIET_CELEBRATIONS_KEY, crm.QUIET_CELEBRATIONS_KEY + "_lock"):
+        crm.AppSetting.query.filter_by(key=key).delete()
+    lead = mk("Stary Pokaz", value_pln=5000, assigned_to=OLIWIER)
+    crm.notify([JERZY, BARTEK], "win", "🏆 Wygrana: Stary Pokaz", "Oliwier", lead, celebrate=True)
+    crm.db.session.commit()
+    assert crm.notice_to_celebrate(JERZY) is not None
+    assert crm.quiet_team_celebrations_once() >= 2
+    assert crm.notice_to_celebrate(JERZY) is None and crm.notice_to_celebrate(BARTEK) is None
+    assert len(notices(JERZY, "win")) == 1, "wpis w dzwonku zostaje"
+    assert crm.quiet_team_celebrations_once() is None, "tylko raz"
+
+
+def test_win_replay_script_is_per_account():
+    js = open("static/wygrana.js", encoding="utf-8").read()
+    assert "w.by === me" in js, "pokaz po przeładowaniu tylko dla tej samej osoby (nie po przelogowaniu)"

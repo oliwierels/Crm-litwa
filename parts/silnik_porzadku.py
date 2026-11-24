@@ -115,13 +115,33 @@ def _money(lead):
 
 
 def notify_team_win(lead, actor_id=None, how=""):
-    """Wygrana = powiadomienie z pokazem 🏆 dla całego zespołu (osoba, która sama przeciągnęła leada, widziała pokaz)."""
+    """Wygrana = wpis w dzwonku dla reszty zespołu. Pokaz 🏆 jest tylko na koncie osoby, której to wygrana: kto
+    przeciągnął leada, ten widział pokaz od razu (nikt inny go nie dostaje); wygraną z maila klienta (bez osoby)
+    pokazujemy opiekunowi leada przy następnym wejściu do CRM."""
     who = USERS_BY_ID.get(actor_id, {}).get("name", "") if actor_id else ""
     title = f"🏆 Wygrana: {lead.company}" + (f" · {_money(lead)}" if lead.value_pln else "")
     body = (how or "Lead oznaczony jako wygrany") + (f" — {who}" if who else "") + "."
     body = body[0].upper() + body[1:]
-    others = [u["id"] for u in USERS if u["id"] != actor_id]
-    notify(others, "win", title, body, lead, celebrate=True)
+    owner = lead.assigned_to if actor_id is None and lead.assigned_to in USERS_BY_ID else None
+    others = [u["id"] for u in USERS if u["id"] not in (actor_id, owner)]
+    notify(others, "win", title, body, lead)
+    if owner is not None:
+        notify(owner, "win", title, body, lead, celebrate=True)
+
+
+QUIET_CELEBRATIONS_KEY = "quiet_team_celebrations_v1"
+
+
+def quiet_team_celebrations_once():
+    """Raz po wdrożeniu: zaległe pokazy 🏆 cudzych wygranych (dawna zasada „pokaz dla całego zespołu”) nie wyskoczą
+    już na innych kontach — zostają tylko jako wpis w dzwonku. Zwraca liczbę wyciszonych albo None."""
+    if get_setting(QUIET_CELEBRATIONS_KEY) or not _claim_once(QUIET_CELEBRATIONS_KEY + "_lock"):
+        return None
+    n = Notice.query.filter(Notice.celebrate.is_(True), Notice.celebrated_at.is_(None)).update(
+        {Notice.celebrated_at: datetime.utcnow()}, synchronize_session=False)
+    set_setting(QUIET_CELEBRATIONS_KEY, f"{n} @ {datetime.utcnow():%Y-%m-%d %H:%M}")
+    db.session.commit()
+    return n
 
 
 # ---- zadania: nieaktualne zamiast skasowanych ----

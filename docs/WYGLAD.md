@@ -18,7 +18,8 @@
   „TEMAT ZAMKNIĘTY!” (armata pieniędzy, fajerwerki, fanfara) → tańczący robot, samoloty z banerami, smok i lampiony,
   oklaski oraz która to wygrana w miesiącu, suma miesiąca i „REKORD MIESIĄCA”. Dźwięk (syntezowany, bez plików)
   wyłącza 🔊 w rogu; Esc / „Dawaj następnego! 🚀” zamyka; przy ograniczonych animacjach w systemie — spokojna karta.
-  Reszta zespołu dostaje powiadomienie w dzwonku i ten sam pokaz przy następnym wejściu do CRM.
+  Pokaz jest tylko na koncie osoby, która zamknęła leada (wygrana z maila klienta — u opiekuna leada przy następnym
+  wejściu do CRM); reszta zespołu dostaje tylko wpis w dzwonku. Nic nie przechodzi między kontami.
 - **Leady z poczty** ✦: lead, który sam napisał (źródło „Formularz …”, „Mail kontakt@…”, „Mail”), ma na tablicy złotą
   ramkę z poświatą i plakietkę FORMULARZ / MAIL; na liście złoty pasek, w nagłówku leada złote źródło. Przycisk
   „✦ Z poczty” nad tablicą pokazuje tylko takie leady (`is_direct_lead` w `parts/wyglad.py`).

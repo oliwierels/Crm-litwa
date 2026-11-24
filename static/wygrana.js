@@ -748,10 +748,12 @@
     });
   };
 
-  // wygrana zapisana przed przeładowaniem strony (np. zapis formularza edycji leada) — pokaż po wczytaniu
+  // wygrana zapisana przed przeładowaniem strony (np. zapis formularza edycji leada) — pokaż po wczytaniu, ale tylko
+  // tej samej osobie (po przelogowaniu na inne konto w tej samej karcie pokaz nie wyskakuje)
   document.addEventListener('DOMContentLoaded', () => {
     let w = null;
     try { w = JSON.parse(sessionStorage.getItem('crm-win') || 'null'); sessionStorage.removeItem('crm-win'); } catch (e) {}
-    if (w) window.crmCelebrate(w, {self: true});
+    const me = (window.CRM_ME || {}).id;
+    if (w && (w.by === undefined || w.by === me)) window.crmCelebrate(w, {self: true});
   });
 })();
