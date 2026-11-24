@@ -6702,6 +6702,7 @@ PL_MOVE_LAST_KEY = "pl_move_last"
 PL_WON_LAST_KEY = "pl_won_last"
 _pl_move_lock = threading.Lock()
 _pl_won_lock = threading.Lock()
+_pl_won_kick = threading.Event()  # lead wszedł na wygraną / z niej wyszedł → kopia w CRM PL od razu, nie po 10 min
 _pl_count_cache = {"at": 0.0, "n": {}, "err": ""}
 
 
@@ -6914,7 +6915,30 @@ def crm_pl_move():
 
 
 PL_MOVE_EVERY = max(60, int(os.environ.get("PL_MOVE_EVERY", 120)))  # s — nowy lead LT/DE znika z polskiego CRM po ~2 min
-PL_WON_EVERY = 600  # s — wygrane do polskiego CRM
+PL_WON_EVERY = 600  # s — pełne odświeżenie wygranych w polskim CRM (zmiany dat, miejsc, kwot)
+
+from sqlalchemy import event as _pl_sa_event  # noqa: E402
+from sqlalchemy.orm import Session as _PlOrmSession, object_session as _pl_object_session  # noqa: E402
+
+
+@_pl_sa_event.listens_for(StageHistory, "after_insert")
+def _pl_won_mark(mapper, connection, target):
+    """Wpis historii na wygraną albo z wygranej — po zapisie (commit) wysyłka do CRM PL rusza od razu."""
+    if target.to_stage in WON_STAGES or target.from_stage in WON_STAGES:
+        s = _pl_object_session(target)
+        if s is not None:
+            s.info["pl_won_kick"] = True
+
+
+@_pl_sa_event.listens_for(_PlOrmSession, "after_commit")
+def _pl_won_kick_after_commit(session):
+    if session.info.pop("pl_won_kick", False):
+        _pl_won_kick.set()
+
+
+@_pl_sa_event.listens_for(_PlOrmSession, "after_rollback")
+def _pl_won_kick_rollback(session):
+    session.info.pop("pl_won_kick", None)
 
 
 def _pl_move_scheduler():
@@ -6930,7 +6954,8 @@ def _pl_move_scheduler():
         except Exception as e:
             app.logger.exception("pl_move")
             health_fail("pl_move", e)
-        if time.time() - last_won >= PL_WON_EVERY:
+        if _pl_won_kick.is_set() or time.time() - last_won >= PL_WON_EVERY:
+            _pl_won_kick.clear()
             last_won = time.time()
             try:
                 with app.app_context():
@@ -6941,7 +6966,7 @@ def _pl_move_scheduler():
             except Exception as e:
                 app.logger.exception("pl_won")
                 health_fail("pl_won", e)
-        time.sleep(PL_MOVE_EVERY)
+        _pl_won_kick.wait(PL_MOVE_EVERY)  # nowa wygrana budzi od razu (zwykle po kilku sekundach jest w CRM PL)
 
 
 if pl_move_configured() and os.environ.get("PL_MOVE", "1") != "0":

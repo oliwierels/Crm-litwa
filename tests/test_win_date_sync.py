@@ -75,3 +75,24 @@ def test_fix_and_sync_win_dates(app, pl_db):
     assert not errors and done == 1
     assert [d.date() for d in pl_win_dates(pl_db, grey.pl_copy_id)] == [date(2026, 11, 6)]
     assert crm.sync_won_to_pl() == (0, [])  # bez zmian — bez ponownej wysyłki
+
+
+def test_win_kicks_immediate_sync_to_pl(app):
+    """Wygrana w CRM LT/DE budzi wysyłkę do CRM PL od razu po zapisie (nie czeka 10 minut na pełny obieg)."""
+    crm._pl_won_kick.clear()
+    lead = crm.Lead(company="Florinus Drugi Event", stage="Oferta", assigned_to=1, currency="EUR", value_pln=2300,
+                    market="lt")
+    crm.db.session.add(lead)
+    crm.db.session.commit()
+    assert not crm._pl_won_kick.is_set(), "oferta to jeszcze nie wygrana"
+    crm.record_stage_change(lead, "Wygrany", 1)
+    crm.db.session.flush()
+    assert not crm._pl_won_kick.is_set(), "dopiero po zapisie w bazie"
+    crm.db.session.commit()
+    assert crm._pl_won_kick.is_set()
+    crm._pl_won_kick.clear()
+    crm.record_stage_change(lead, "Oferta", 1)
+    crm.db.session.rollback()
+    assert not crm._pl_won_kick.is_set(), "wycofana zmiana niczego nie budzi"
+    lead.stage = "Stracony"
+    crm.db.session.commit()
