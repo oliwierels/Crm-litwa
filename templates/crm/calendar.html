@@ -1,54 +1,136 @@
 {% extends "crm/base.html" %}
-{% block title %}Kalendarz – {{ crm_brand }}{% endblock %}
+{# Kalendarz (parts/kalendarz.py) — wspólny szablon CRM PL i LT/DE. Dwa widoki: „Zlecenia” (domyślny, same zlecenia)
+   i „Wszystko” (zadania + wszystkie terminy). Kolory tylko ze zmiennych motywu — działają w jasnym i ciemnym. #}
+{% set cal_lang = ui_lang if ui_lang is defined else 'pl' %}
+{% set orders_view = cal_view == 'zlecenia' %}
+{% block title %}Kalendarz – {{ crm_brand if crm_brand is defined else 'RoboRent CRM' }}{% endblock %}
 {% block page_title %}Kalendarz{% endblock %}
 
 {% block extra_head %}
 <style>
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.cal-switch { display: inline-flex; padding: 3px; gap: 2px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; }
+.cal-switch a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  color: var(--muted); text-decoration: none; }
+.cal-switch a:hover { color: var(--text); }
+.cal-switch a.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.cal-count { font-size: 12.5px; color: var(--muted); }
+.cal-count b { color: var(--text); }
+.legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.leg { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.leg-dot { width: 12px; height: 12px; border-radius: 4px; }
+.leg-dot.order { background: var(--accent); }
+.leg-dot.order-done { background: var(--green-soft); box-shadow: inset 0 0 0 1px var(--green); }
+.leg-dot.tentative { background: var(--purple-soft); box-shadow: inset 0 0 0 1px var(--purple); border: 1px dashed var(--purple); }
+.leg-dot.task { background: var(--panel2); border-left: 3px solid var(--muted); border-radius: 3px; }
+.leg-dot.overdue { border-left-color: var(--red); background: var(--red-soft); }
+.leg-dot.today { border-left-color: var(--yellow); background: var(--yellow-soft); }
+.leg-dot.soon { border-left-color: var(--blue); background: var(--blue-soft); }
+
 #cal-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
-.fc { --fc-border-color: var(--border); --fc-page-bg-color: transparent; --fc-neutral-bg-color: var(--panel2); }
-.fc .fc-toolbar-title { font-size: 15px; font-weight: 700; color: var(--text); }
-.fc .fc-button { background: var(--panel2) !important; border-color: var(--border) !important; color: var(--text) !important; border-radius: 6px !important; font-size: 12px !important; box-shadow: none !important; }
+.fc { --fc-border-color: var(--border); --fc-page-bg-color: transparent; --fc-neutral-bg-color: var(--panel2);
+  --fc-today-bg-color: var(--accent-soft); --fc-list-event-hover-bg-color: var(--panel2); font-size: 12.5px; }
+.fc .fc-toolbar-title { font-size: 16px; font-weight: 700; color: var(--text); text-transform: capitalize; }
+.fc .fc-button { background: var(--panel2) !important; border-color: var(--border) !important; color: var(--text) !important;
+  border-radius: 8px !important; font-size: 12px !important; font-weight: 600 !important; box-shadow: none !important; text-transform: capitalize; }
 .fc .fc-button:hover { border-color: var(--accent) !important; }
-.fc .fc-button-active { border-color: var(--accent) !important; }
-.fc-col-header-cell, .fc-daygrid-day-number { color: var(--muted) !important; font-size: 12px !important; }
-.fc-daygrid-day.fc-day-today { background: rgba(91,94,244,.06) !important; }
-.fc-event { border-radius: 4px !important; font-size: 11px !important; }
-.done-event { opacity: .35 !important; text-decoration: line-through !important; }
+.fc .fc-button-active { background: var(--accent-soft) !important; border-color: var(--accent) !important; color: var(--accent) !important; }
+.fc .fc-col-header-cell-cushion { color: var(--muted); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.fc .fc-daygrid-day-number { color: var(--muted); font-size: 12px; }
+.fc .fc-day-today .fc-daygrid-day-number { color: var(--accent); font-weight: 700; }
+.fc .fc-day-other .fc-daygrid-day-number { opacity: .45; }
+.fc .fc-daygrid-more-link { color: var(--accent); font-weight: 600; font-size: 11px; }
+.fc .fc-list-day-cushion { background: var(--panel2) !important; }
+.fc .fc-list-event td { border-color: var(--border); }
 
-#ep { display:none; position:fixed; z-index:300; background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; width:280px; box-shadow:0 4px 24px rgba(0,0,0,.5); }
-#ep h4 { font-size:13px; font-weight:700; margin-bottom:10px; }
-#ep .row { font-size:12px; color:var(--muted); margin-bottom:4px; }
-#ep .row span { color:var(--text); }
+/* wydarzenia — kolory ze zmiennych motywu */
+.fc .fc-event { border-radius: 6px; border: 0; padding: 1px 2px; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.fc .fc-h-event .fc-event-main { color: inherit; }
+.fc .fc-event.ev-order { background: var(--accent); color: #fff; }
+.fc .fc-event.ev-order-done { background: var(--green-soft); color: var(--green); }
+.fc .fc-event.ev-tentative { background: var(--purple-soft); color: var(--purple); outline: 1px dashed var(--purple); outline-offset: -1px; }
+.fc .fc-event.ev-task { background: var(--panel2); color: var(--text); border-left: 3px solid var(--muted); border-radius: 4px; font-weight: 500; }
+.fc .fc-event.ev-overdue { background: var(--red-soft); border-left-color: var(--red); }
+.fc .fc-event.ev-today { background: var(--yellow-soft); border-left-color: var(--yellow); }
+.fc .fc-event.ev-soon { background: var(--blue-soft); border-left-color: var(--blue); }
+.fc .fc-event.ev-future { border-left-color: var(--muted); }
+.fc .fc-event.done-event { opacity: .45; text-decoration: line-through; }
+.fc .fc-list-event.ev-order .fc-list-event-dot { border-color: var(--accent); }
+.fc .fc-list-event.ev-order-done .fc-list-event-dot { border-color: var(--green); }
+.fc .fc-list-event.ev-tentative .fc-list-event-dot { border-color: var(--purple); }
+.fc .fc-list-event.ev-overdue .fc-list-event-dot { border-color: var(--red); }
+.fc .fc-list-event.ev-today .fc-list-event-dot { border-color: var(--yellow); }
+.fc .fc-list-event.ev-soon .fc-list-event-dot { border-color: var(--blue); }
+.fc .fc-list-event.ev-future .fc-list-event-dot, .fc .fc-list-event.ev-done .fc-list-event-dot { border-color: var(--muted); }
+.fc .fc-list-event, .fc .fc-list-event.ev-order, .fc .fc-list-event.ev-task { background: transparent; color: var(--text); outline: 0; }
 
-.legend { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-.leg { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
-.leg-dot { width:10px; height:10px; border-radius:3px; }
+.undated { margin-top: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.undated h3 { font-size: 13.5px; font-weight: 700; margin: 0 0 8px; }
+.undated-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.undated-item { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft);
+  color: var(--text); font-size: 12.5px; text-decoration: none; border: 1px solid transparent; }
+.undated-item:hover { border-color: var(--accent); }
+.undated-item small { color: var(--muted); }
+
+#ep { display: none; position: fixed; z-index: 300; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; width: 300px; box-shadow: var(--shadow-lg, 0 8px 28px rgba(0,0,0,.35)); }
+#ep h4 { font-size: 13.5px; font-weight: 700; margin: 0; }
+#ep .row { font-size: 12.5px; color: var(--muted); margin-bottom: 5px; }
+#ep .row span, #ep .row a { color: var(--text); }
+#ep .ep-tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; margin-bottom: 8px; }
 </style>
 {% endblock %}
 
-{% block topbar_actions %}
-<div class="legend">
-  <div class="leg"><div class="leg-dot" style="background:#ef4444"></div>Przeterminowane</div>
-  <div class="leg"><div class="leg-dot" style="background:#eab308"></div>Dziś</div>
-  <div class="leg"><div class="leg-dot" style="background:#5b5ef4"></div>Wkrótce</div>
-  <div class="leg"><div class="leg-dot" style="background:#22c55e"></div>Planowane</div>
-  <div class="leg"><div class="leg-dot" style="background:#7c3aed"></div>Wynajem (w toku)</div>
-  <div class="leg"><div class="leg-dot" style="background:#db2777"></div>Wynajem (wygrany)</div>
-</div>
-{% endblock %}
-
 {% block content %}
+<div class="cal-head">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div class="cal-switch" role="tablist">
+      <a href="{{ url_for('crm_calendar') }}" class="{{ 'on' if orders_view }}" role="tab"><i class="bi bi-briefcase"></i> Zlecenia</a>
+      <a href="{{ url_for('crm_calendar', widok='wszystko') }}" class="{{ 'on' if not orders_view }}" role="tab"><i class="bi bi-list-check"></i> Wszystko</a>
+    </div>
+    <span class="cal-count" id="cal-count"></span>
+  </div>
+  <div class="legend">
+    {% if orders_view %}
+    <div class="leg"><div class="leg-dot order"></div>Zlecenie do realizacji</div>
+    <div class="leg"><div class="leg-dot order-done"></div>Zrealizowane</div>
+    <div class="leg">📝 Umowa niepodpisana</div>
+    {% else %}
+    <div class="leg"><div class="leg-dot order"></div>Zlecenie</div>
+    <div class="leg"><div class="leg-dot tentative"></div>Termin z oferty</div>
+    <div class="leg"><div class="leg-dot task overdue"></div>Przeterminowane</div>
+    <div class="leg"><div class="leg-dot task today"></div>Dziś</div>
+    <div class="leg"><div class="leg-dot task soon"></div>Wkrótce</div>
+    <div class="leg"><div class="leg-dot task"></div>Planowane</div>
+    {% endif %}
+  </div>
+</div>
+
 <div id="cal-wrap"><div id="calendar"></div></div>
 
-<div id="ep">
-  <div style="display:flex;justify-content:space-between;margin-bottom:10px">
-    <h4 id="ep-title"></h4>
-    <button onclick="document.getElementById('ep').style.display='none'" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">×</button>
+{% if orders_view and undated %}
+<div class="undated">
+  <h3>📅 Zlecenia z terminem do ustalenia ({{ undated|length }})</h3>
+  <div class="undated-list">
+    {% for l in undated %}
+    <a class="undated-item" href="{{ url_for('crm_lead_detail', lead_id=l.id) }}">{{ l.company }}
+      {% if l.value_pln %}<small>{{ l.value_pln|pln }} {{ l.currency or '' }}</small>{% endif %}</a>
+    {% endfor %}
   </div>
-  <div class="row"><span id="ep-company"></span></div>
+</div>
+{% endif %}
+
+<div id="ep">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;gap:8px">
+    <h4 id="ep-title"></h4>
+    <button onclick="document.getElementById('ep').style.display='none'" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1">×</button>
+  </div>
+  <div id="ep-tag" class="ep-tag"></div>
+  <div class="row"><span id="ep-company" style="font-weight:600"></span></div>
   <div class="row" id="ep-contact-row">Osoba: <span id="ep-contact"></span></div>
+  <div class="row" id="ep-phone-row">Telefon: <a id="ep-phone"></a></div>
   <div class="row">Data: <span id="ep-date"></span></div>
-  <div class="row" id="ep-notes-row">Notatka: <span id="ep-notes"></span></div>
+  <div class="row" id="ep-notes-row"><span id="ep-notes"></span></div>
   <div style="display:flex;gap:6px;margin-top:12px">
     <a id="ep-link" class="btn btn-primary btn-sm" style="flex:1;text-align:center">Otwórz</a>
     <button id="ep-done" class="btn btn-secondary btn-sm" onclick="markDonePopup()">✓ Zrobione</button>
@@ -58,67 +140,94 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='vendor/fullcalendar/index.global.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/fullcalendar/locales/' ~ ui_lang ~ '.global.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/fullcalendar/locales/' ~ cal_lang ~ '.global.min.js') }}"></script>
 <script>
+const CAL_VIEW = {{ cal_view|tojson }};
+const DATE_LOCALE = {{ ('lt-LT' if cal_lang == 'lt' else 'pl-PL')|tojson }};
 let curId = null;
 const ep = document.getElementById('ep');
+const $ = id => document.getElementById(id);
 
 function markDonePopup() {
   if (!curId) return;
-  crmTaskDone(curId).then(res => { if (res && res.ok) { cal.refetchEvents(); ep.style.display='none'; } });
+  crmTaskDone(curId).then(res => { if (res && res.ok) { cal.refetchEvents(); ep.style.display = 'none'; } });
 }
 
-const cal = new FullCalendar.Calendar(document.getElementById('calendar'), {
-  locale: '{{ ui_lang }}',
+function fmtDate(d) { return new Date(d).toLocaleDateString(DATE_LOCALE); }
+
+function updateCount() {
+  const v = cal.view, a = v.activeStart, b = v.activeEnd;
+  const evs = cal.getEvents().filter(e => e.start < b && (e.end || e.start) >= a);
+  const orders = evs.filter(e => e.extendedProps.event_type === 'lead_event' && e.extendedProps.order);
+  const todo = orders.filter(e => e.extendedProps.stage !== 'Zrealizowany').length;
+  $('cal-count').innerHTML = CAL_VIEW === 'zlecenia'
+    ? `W tym widoku: <b>${orders.length}</b> zleceń` + (todo && todo !== orders.length ? ` · do realizacji <b>${todo}</b>` : '')
+    : `W tym widoku: <b>${orders.length}</b> zleceń · <b>${evs.length - orders.length}</b> innych terminów i zadań`;
+}
+
+const cal = new FullCalendar.Calendar($('calendar'), {
+  locale: {{ cal_lang|tojson }},
   initialView: 'dayGridMonth',
-  headerToolbar: { left:'prev,next today', center:'title', right:'dayGridMonth,listWeek' },
+  headerToolbar: { left: 'prev,next today', center: 'title', right: CAL_VIEW === 'zlecenia' ? 'dayGridMonth,listMonth' : 'dayGridMonth,listWeek' },
   height: 'auto',
-  events: '/crm/api/activities',
+  dayMaxEvents: CAL_VIEW === 'zlecenia' ? 5 : 4,
+  eventDisplay: 'block',
+  {% if cal_lang == 'pl' %}views: { listMonth: { buttonText: 'Lista' }, listWeek: { buttonText: 'Lista tygodnia' } },{% endif %}
+  events: '/crm/api/activities?widok=' + encodeURIComponent(CAL_VIEW),
+  eventsSet: updateCount,
+  datesSet: () => setTimeout(updateCount, 0),
   eventClick(info) {
     const p = info.event.extendedProps;
-    const icons = {call:'📞',email:'✉️',online:'💻',meeting:'🤝',task:'📌',note:'📝'};
-
+    const icons = {call: '📞', email: '✉️', online: '💻', meeting: '🤝', task: '📌', note: '📝', sms: '💬', decision: '⚖️'};
+    const tag = $('ep-tag');
     if (p.event_type === 'lead_event') {
       curId = null;
-      document.getElementById('ep-title').textContent = '🗓️ Wydarzenie';
-      document.getElementById('ep-company').textContent = p.lead_company;
-      document.getElementById('ep-contact-row').style.display = p.lead_contact ? '' : 'none';
-      document.getElementById('ep-contact').textContent = p.lead_contact;
-      let dateTxt = new Date(info.event.start).toLocaleDateString('{{ 'lt-LT' if ui_lang == 'lt' else 'pl-PL' }}');
-      if (info.event.end) {
-        const endD = new Date(info.event.end); endD.setDate(endD.getDate() - 1); // end wyłączny
-        dateTxt += ' – ' + endD.toLocaleDateString('{{ 'lt-LT' if ui_lang == 'lt' else 'pl-PL' }}');
-      }
-      document.getElementById('ep-date').textContent = dateTxt;
-      const notes = [p.rental_days > 1 ? p.rental_days+' dni' : '', p.location ? '📍 '+p.location : '', p.robot_model, p.stage, p.value_pln ? p.value_pln+' '+(p.currency||'EUR') : ''].filter(Boolean).join(' · ');
-      document.getElementById('ep-notes-row').style.display = notes ? '' : 'none';
-      document.getElementById('ep-notes').textContent = notes;
-      document.getElementById('ep-done').style.display = 'none';
+      $('ep-title').textContent = p.order ? '🤖 Zlecenie' : '🗓️ Termin z oferty';
+      tag.textContent = p.order ? (p.stage === 'Zrealizowany' ? 'Zrealizowane' : (p.contract_signed ? 'Umowa podpisana' : '📝 Umowa niepodpisana')) : p.stage;
+      tag.style.cssText = p.order && p.stage !== 'Zrealizowany'
+        ? (p.contract_signed ? 'background:var(--green-soft);color:var(--green)' : 'background:var(--yellow-soft);color:var(--yellow)')
+        : (p.order ? 'background:var(--green-soft);color:var(--green)' : 'background:var(--purple-soft);color:var(--purple)');
+      $('ep-company').textContent = p.lead_company;
+      $('ep-contact-row').style.display = p.lead_contact ? '' : 'none';
+      $('ep-contact').textContent = p.lead_contact;
+      $('ep-phone-row').style.display = p.contact_phone ? '' : 'none';
+      $('ep-phone').textContent = p.contact_phone || '';
+      $('ep-phone').href = p.contact_phone ? 'tel:' + p.contact_phone.replace(/[^\d+]/g, '') : '#';
+      let dateTxt = fmtDate(info.event.start);
+      if (info.event.end) { const endD = new Date(info.event.end); endD.setDate(endD.getDate() - 1); dateTxt += ' – ' + fmtDate(endD); }
+      $('ep-date').textContent = dateTxt;
+      const notes = [p.rental_days > 1 ? p.rental_days + ' dni' : '', p.location ? '📍 ' + p.location : '', p.robot_model,
+        p.value_pln ? Math.round(p.value_pln).toLocaleString(DATE_LOCALE) + ' ' + (p.currency || '') : '', p.owner ? '👤 ' + p.owner : ''].filter(Boolean).join(' · ');
+      $('ep-notes-row').style.display = notes ? '' : 'none';
+      $('ep-notes').textContent = notes;
+      $('ep-done').style.display = 'none';
     } else {
       curId = p.id;
-      document.getElementById('ep-title').textContent = (icons[p.kind]||'•') + ' ' + p.kind.toUpperCase();
-      document.getElementById('ep-company').textContent = p.lead_company || 'Zadanie własne';
-      document.getElementById('ep-contact-row').style.display = p.lead_contact ? '' : 'none';
-      document.getElementById('ep-contact').textContent = p.lead_contact;
-      document.getElementById('ep-date').textContent = p.due_date_display;
-      document.getElementById('ep-notes-row').style.display = p.notes ? '' : 'none';
-      document.getElementById('ep-notes').textContent = p.notes;
-      document.getElementById('ep-done').style.display = '';
-      document.getElementById('ep-done').textContent = p.done ? '↩ Cofnij' : '✓ Zrobione';
+      $('ep-title').textContent = (icons[p.kind] || '•') + ' ' + (p.kind || '').toUpperCase();
+      tag.textContent = ''; tag.style.cssText = 'display:none';
+      $('ep-company').textContent = p.lead_company || 'Zadanie własne';
+      $('ep-contact-row').style.display = p.lead_contact ? '' : 'none';
+      $('ep-contact').textContent = p.lead_contact;
+      $('ep-phone-row').style.display = 'none';
+      $('ep-date').textContent = p.due_date_display + (p.assigned_name ? ' · 👤 ' + p.assigned_name : '');
+      $('ep-notes-row').style.display = p.notes ? '' : 'none';
+      $('ep-notes').textContent = p.notes;
+      $('ep-done').style.display = '';
+      $('ep-done').textContent = p.done ? '↩ Cofnij' : '✓ Zrobione';
     }
-
-    const epLink = document.getElementById('ep-link');
+    if (tag.textContent) tag.style.display = 'inline-block';
+    const epLink = $('ep-link');
     epLink.style.display = p.lead_id ? '' : 'none';
     if (p.lead_id) epLink.href = `/crm/leads/${p.lead_id}`;
     const r = info.el.getBoundingClientRect();
     ep.style.display = 'block';
-    ep.style.top = Math.min(r.bottom+6, window.innerHeight-240)+'px';
-    ep.style.left = Math.min(r.left, window.innerWidth-296)+'px';
+    ep.style.top = Math.max(8, Math.min(r.bottom + 6, window.innerHeight - 280)) + 'px';
+    ep.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 316)) + 'px';
     info.jsEvent.stopPropagation();
   }
 });
 cal.render();
-document.addEventListener('click', () => ep.style.display='none');
+document.addEventListener('click', () => ep.style.display = 'none');
 ep.addEventListener('click', e => e.stopPropagation());
 </script>
 {% endblock %}

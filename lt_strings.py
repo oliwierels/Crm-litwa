@@ -1111,4 +1111,17 @@ LT = {
     'Formularz': 'Forma',
     'Pokaż tylko leady, które same do nas napisały (formularz na stronie, mail) — bez leadów z reklam w ClickUp': 'Rodyti tik užklausas, kurios parašė mums pačios (svetainės forma, el. laiškas) — be užklausų iš ClickUp reklamų',
     'Sam do nas napisał — lead z poczty, zwykle lepszy niż z reklamy w ClickUp': 'Parašė mums pats — užklausa iš pašto, paprastai geresnė nei iš ClickUp reklamos',
+    # --- kalendarz: zlecenia / wszystko ---
+    'Zlecenia': 'Užsakymai',
+    'Wszystko': 'Viskas',
+    'Zlecenie': 'Užsakymas',
+    'Zlecenie do realizacji': 'Užsakymas vykdymui',
+    'Zrealizowane': 'Įvykdyta',
+    'Umowa niepodpisana': 'Sutartis nepasirašyta',
+    'Umowa podpisana': 'Sutartis pasirašyta',
+    'Termin z oferty': 'Data iš pasiūlymo',
+    'Zlecenia z terminem do ustalenia': 'Užsakymai, kurių data dar bus suderinta',
+    'W tym widoku:': 'Šiame rodinyje:',
+    'innych terminów i zadań': 'kitų terminų ir užduočių',
+    'Termin do ustalenia': 'Data bus suderinta',
 }
