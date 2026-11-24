@@ -101,7 +101,7 @@ def data_cleanup_report():
 @app.route("/crm/porzadki")
 def crm_data_cleanup():
     return render_template("crm/porzadki.html", r=data_cleanup_report(), labels={
-        "won_no_date": "Wygrane bez daty wydarzenia", "bad_dates": "Daty spoza 2020–2041 (np. rok 0002)",
+        "won_no_date": "Wygrane — termin do ustalenia (wpisz datę, gdy klient ją poda)","bad_dates": "Daty spoza 2020–2041 (np. rok 0002)",
         "value_vs_offer": "Wartość inna niż w ofercie / notatce", "no_value": "Oferta / wygrana bez wartości",
         "long_range": "Zakres dni dłuższy niż 14 dni", "won_no_type": "Wygrane bez typu klienta"})
 

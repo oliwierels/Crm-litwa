@@ -3473,7 +3473,7 @@ ASSISTANT_TOOLS = [
     {
         "name": "update_lead",
         "description": "Zmienia istniejącego leada. Podawaj TYLKO pola do zmiany — reszta zostaje bez zmian. event_dates (jeśli podane) ZASTĘPUJE cały zestaw dni wynajmu. "
-                       "Bramki etapów: Stracony wymaga lost_reason; Wygrany wymaga win_confirmation (umowa/mail), client_type, dnia wynajmu od 2025 i wartości > 0; "
+                       "Bramki etapów: Stracony wymaga lost_reason; Wygrany wymaga win_confirmation (umowa/mail), client_type i wartości > 0 (data wydarzenia może przyjść później);"
                        "Oferta (z Nowy) wymaga client_type. Bez nich zwraca błąd po polsku i nic nie zmienia.",
         "input_schema": {
             "type": "object",

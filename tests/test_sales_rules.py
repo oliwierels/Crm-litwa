@@ -20,13 +20,15 @@ def test_lost_requires_reason_and_comment_for_other():
     assert not sr.stage_gate(lead(), "Stracony", {"lost_reason": "cena"})["message"]
 
 
-def test_win_requires_confirmation_date_value_type():
+def test_win_requires_confirmation_value_type_but_not_date():
     g = sr.stage_gate(lead(), "Wygrany", {})
     assert set(g["need"]) == {"win_confirmation", "client_type"}
-    assert len(g["errors"]) == 2  # data + wartość
+    assert len(g["errors"]) == 1 and "wartości" in g["errors"][0]  # tylko wartość — data nie jest wymagana
     ok = sr.stage_gate(lead(value_pln=5000, client_type="firma"), "Wygrany", {"win_confirmation": "mail"},
                        event_dates=[date(2026, 12, 1)])
     assert not ok["message"]
+    no_date = sr.stage_gate(lead(value_pln=5000, client_type="firma"), "Wygrany", {"win_confirmation": "umowa"})
+    assert not no_date["message"], "umowa podpisana, dzień do ustalenia później — lead jest wygrany"
 
 
 def test_win_with_signed_contract_needs_no_confirmation():
@@ -35,10 +37,10 @@ def test_win_with_signed_contract_needs_no_confirmation():
     assert not g["message"]
 
 
-def test_win_rejects_year_0002_and_warns_on_offer_mismatch():
+def test_win_does_not_need_good_date_and_warns_on_offer_mismatch():
     g = sr.stage_gate(lead(value_pln=6000, client_type="firma"), "Wygrany", {"win_confirmation": "umowa"},
                       event_dates=[date(2, 1, 1)])
-    assert g["errors"] and "daty" in g["errors"][0]
+    assert not g["errors"], "data nie jest wymagana (błędne „0002” odrzuca już zapis dni wynajmu)"
     g = sr.stage_gate(lead(value_pln=6000, client_type="firma"), "Wygrany", {"win_confirmation": "umowa"},
                       event_dates=[date(2026, 12, 1)], last_offer_value=68600)
     assert g["warnings"] and "68 600" in g["warnings"][0]

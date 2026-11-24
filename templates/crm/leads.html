@@ -82,7 +82,7 @@
           {{ '✅ Umowa podpisana' if lead.contract_signed else '📝 Umowa niepodpisana' }}
         </div>
         {% if not lead.event_date %}
-        <div class="k-meta" style="color:var(--yellow)" title="Bez dnia wynajmu CRM nie przeniesie leada do Zrealizowanych — ustaw datę albo przeciągnij ręcznie">⚠️ Brak daty wynajmu</div>
+        <div class="k-meta" style="color:var(--yellow)" title="Dzień wydarzenia do ustalenia z klientem. Gdy wpiszesz datę, CRM sam przeniesie leada do Zrealizowanych po wydarzeniu; bez daty — przeciągnij ręcznie">📅 Termin do ustalenia</div>
         {% endif %}
         {% endif %}
         <div class="k-foot">

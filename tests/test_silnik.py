@@ -135,13 +135,22 @@ def test_acceptance_mail_wins_lead_and_notifies_team(app):
     assert "Wygrany z maila" in notes and "cofnij etap" in notes, "decyzja silnika jest opisana przy leadzie"
 
 
-def test_acceptance_without_event_date_only_notifies_owner(app):
+def test_acceptance_without_event_date_still_wins(app):
+    """Klient przyjmuje ofertę, a dzień ustali później — lead i tak jest wygrany (data nie jest wymagana)."""
     lead = mk("Bez Daty", email="biuro@bez-daty-test.pl", value_pln=5000, client_type="firma")
+    out = crm.handle_client_mail(mail(lead), lead, dict(ACCEPT))
+    crm.db.session.commit()
+    assert crm.db.session.get(crm.Lead, lead.id).stage == "Wygrany", out
+    assert not notices(kind="blocked")
+
+
+def test_acceptance_without_value_only_notifies_owner(app):
+    lead = mk("Bez Kwoty", email="biuro@bez-kwoty-test.pl", client_type="firma")
     out = crm.handle_client_mail(mail(lead), lead, dict(ACCEPT))
     crm.db.session.commit()
     assert crm.db.session.get(crm.Lead, lead.id).stage == "Oferta", out
     blocked = notices(kind="blocked")
-    assert [n.user_id for n in blocked] == [JERZY] and "daty wydarzenia" in blocked[0].body
+    assert [n.user_id for n in blocked] == [JERZY] and "wartości" in blocked[0].body
     assert not notices(kind="win")
 
 

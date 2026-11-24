@@ -57,7 +57,7 @@ Te pliki są identyczne w obu repozytoriach (różnice rynku robią warunki: `al
 ## Silnik porządku (`parts/silnik_porzadku.py`)
 
 - Co 2 minuty (po synchronizacji poczty) każdy **nowy mail klienta przypisany do leada** czyta Claude:
-  akceptacja / prośba o umowę (pewna) → lead na **Wygrany** (bramki jak u człowieka: data, kwota; potwierdzenie „mail”),
+  akceptacja / prośba o umowę (pewna) → lead na **Wygrany** (bramki jak u człowieka: kwota, typ klienta; potwierdzenie „mail”; data nie jest wymagana),
   przy brakach — powiadomienie, czego brakuje; rezygnacja → powiadomienie z propozycją „Stracony” (zamyka człowiek);
   pytanie → „klient czeka na odpowiedź”. Stracony lead, który pisze → „odezwał się”.
 - Zadania „pogoni” (follow-up, przypomnienie, telefon po ofercie) sprzed maila klienta stają się nieaktualne.

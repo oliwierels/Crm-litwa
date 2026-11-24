@@ -57,7 +57,7 @@ def test_lost_requires_reason_ui_api(client):
 def test_win_gate_dates_value_confirmation(client):
     lead = mk("Wygrana Bez Danych", client_type="firma")
     r = post_stage(client, lead, "Wygrany", win_confirmation="mail")
-    assert r.status_code == 422 and len(r.json["errors"]) == 2
+    assert r.status_code == 422 and len(r.json["errors"]) == 1 and "wartości" in r.json["errors"][0]
     lead.value_pln = 8000
     crm.db.session.commit()
     days(lead, date(2026, 12, 5))
@@ -68,6 +68,15 @@ def test_win_gate_dates_value_confirmation(client):
     lead = crm.db.session.get(crm.Lead, lead.id)
     assert lead.stage == "Wygrany" and lead.win_confirmation == "umowa" and lead.contract_signed
     assert lead.journey is not None and lead.journey.contract_status == "podpisana"
+
+
+def test_win_without_event_date(client):
+    """Umowa podpisana, dzień wydarzenia klient ustali później (np. „marzec”) — lead wchodzi na Wygrany bez daty."""
+    lead = mk("Wygrana Termin Później", client_type="firma", value_pln=6500, currency="EUR")
+    r = post_stage(client, lead, "Wygrany", win_confirmation="umowa")
+    assert r.status_code == 200 and r.json["ok"], r.json
+    lead = crm.db.session.get(crm.Lead, lead.id)
+    assert lead.stage == "Wygrany" and not lead.event_days
 
 
 def test_won_to_realized_and_auto_realize_not_blocked(client):

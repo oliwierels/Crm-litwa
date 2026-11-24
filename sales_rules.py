@@ -6,8 +6,9 @@ wysyłce oferty, odhaczaniu zadań i w statystykach — dzięki temu UI, API i M
 
 Decyzje (Krok 2), które tu są zapisane — zmiana = edycja stałych poniżej:
 - powody straty: LOST_REASONS („inne” wymaga komentarza),
-- Wygrany: umowa podpisana ALBO pisemne potwierdzenie mailem + co najmniej jeden dzień wynajmu od 2025 r.
-  + wartość > 0 + typ klienta; wartość różna od ostatniej wysłanej oferty = ostrzeżenie do potwierdzenia,
+- Wygrany: umowa podpisana ALBO pisemne potwierdzenie mailem + wartość > 0 + typ klienta (data wydarzenia NIE jest
+  wymagana — umowa bywa podpisana, a dokładny dzień klient ustala później); wartość różna od ostatniej wysłanej
+  oferty = ostrzeżenie do potwierdzenia,
 - typ klienta wymagany najpóźniej przy wysłaniu oferty (i przy ręcznym przejściu na Oferta),
 - telefon potwierdzający: następny dzień roboczy po ofercie, dla firm / agencji / partnerów i każdej oferty
   od 10 000 zł (równowartość w EUR po kursie), dzwonimy pn–pt 9:00–17:00,
@@ -167,7 +168,7 @@ def stage_gate(lead, new_stage, data, *, event_dates=(), last_offer_value=None, 
     """Sprawdza przejście `lead` na `new_stage`. data = pola z formularza / API / MCP (lost_reason, lost_comment,
     win_confirmation, client_type, confirm_warning). Zwraca dict:
       need     — brakujące pola do uzupełnienia w okienku (lost_reason, lost_comment, win_confirmation, client_type),
-      errors   — braki, których okienko nie załatwi (data wydarzenia, wartość) — trzeba poprawić leada,
+      errors   — braki, których okienko nie załatwi (wartość) — trzeba poprawić leada,
       warnings — ostrzeżenia do potwierdzenia (confirm_warning=1),
       message  — czytelny komunikat po polsku (pusty = można zmieniać)."""
     data = data or {}
@@ -186,9 +187,7 @@ def stage_gate(lead, new_stage, data, *, event_dates=(), last_offer_value=None, 
             need.append("win_confirmation")
         if client_type not in CLIENT_TYPES:
             need.append("client_type")
-        good_days = [d for d in event_dates if d and d.year >= MIN_NEW_EVENT_YEAR]
-        if not good_days:
-            errors.append("brak daty wydarzenia — dodaj w leadzie co najmniej jeden dzień wynajmu (od 2025 r.)")
+        # data wydarzenia nie jest wymagana: umowa bywa podpisana, a dokładny dzień klient ustala później
         value = getattr(lead, "value_pln", None)
         if not value or value <= 0:
             errors.append("brak wartości zlecenia — wpisz w leadzie kwotę netto większą od zera")

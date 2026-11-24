@@ -52,7 +52,7 @@ Przyjęte według propozycji z briefu. Zmiana decyzji to zmiana stałej w `sales
    - inne (komentarz obowiązkowy).
 2. **Wygrany:**
    - umowa podpisana **albo** pisemne potwierdzenie mailem, do wyboru przy zmianie etapu,
-   - do tego dzień wynajmu od 2025 r., wartość > 0 i typ klienta,
+   - do tego wartość > 0 i typ klienta; data wydarzenia nie jest wymagana (dzień bywa ustalany po podpisaniu umowy),
    - wartość różna od ostatniej oferty daje ostrzeżenie do potwierdzenia,
    - brak zaliczki bez zmian.
 3. **Typ klienta:** firma/instytucja, osoba prywatna, agencja eventowa, firma robotyczna/partner. Wymagany najpóźniej przy wysłaniu oferty.
@@ -80,7 +80,7 @@ Przyjęte według propozycji z briefu. Zmiana decyzji to zmiana stałej w `sales
 ## Co zmienia się w codziennej pracy (do wiki)
 
 1. **Stracony = powód.** Przy przeciągnięciu na Stracony CRM pyta o powód, a przy „inne” o komentarz. Bez powodu lead nie zmieni etapu (w MCP też).
-2. **Wygrany = umowa albo pisemne potwierdzenie mailem, data wydarzenia i kwota.** Bez nich lead nie wejdzie na Wygrany. Gdy kwota różni się od wysłanej oferty, CRM pyta, czy to na pewno dobrze.
+2. **Wygrany = umowa albo pisemne potwierdzenie mailem i kwota.** Bez nich lead nie wejdzie na Wygrany. Data wydarzenia nie jest wymagana — klient może ją ustalić później (na tablicy: „📅 Termin do ustalenia”). Gdy kwota różni się od wysłanej oferty, CRM pyta, czy to na pewno dobrze.
 3. **Typ klienta przed ofertą.** Firma, osoba prywatna, agencja albo partner. CRM podpowiada typ, ale bez wybranego typu oferta nie wyjdzie.
 4. **Dzień po ofercie dzwonimy** do firm, agencji i partnerów oraz przy ofertach od 10 000 zł. Zadanie ma 4 pytania: czy dotarła, kiedy decyzja, kto decyduje, z kim nas porównują. Odpowiedzi wpisujemy przy odhaczaniu.
 5. **Każdy telefon, SMS i mail odhaczamy z wynikiem:** odebrał / nie odebrał albo odpisał / bez odpowiedzi. Po 3 nieudanych próbach z rzędu CRM daje zadanie „⚖️ Zdecyduj”: zamykamy jako Stracony (brak kontaktu) albo zmieniamy kanał.

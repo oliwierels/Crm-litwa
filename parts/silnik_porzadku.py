@@ -4,7 +4,7 @@
 #
 # 1) Poczta → leady. Każdy nowy mail od klienta, który pasuje do leada (adres z leada), czyta Claude i rozpoznaje:
 #    - akceptacja / zamówienie (przyjmuje ofertę, prosi o umowę, fakturę, potwierdza termin i cenę) → lead na „Wygrany”
-#      (gdy są data i kwota — bramki etapu jak przy człowieku; inaczej powiadomienie, czego brakuje),
+#      (bramki etapu jak przy człowieku — np. bez kwoty powiadomienie, czego brakuje; data nie jest wymagana),
 #    - rezygnacja → powiadomienie z propozycją „Stracony” (sam nie zamyka — decyduje człowiek),
 #    - pytanie / prośba → powiadomienie „klient czeka na odpowiedź”.
 #    Zawsze: zadania „pogoni” (follow-up, przypomnienie, telefon po ofercie, drugi krok), które powstały PRZED tym mailem,
