@@ -102,6 +102,45 @@
 </div>
 {% endif %}
 
+{% set fc_rows = first_call_leads(user.id) %}
+{% if fc_rows %}
+<!-- PILNE: nowe leady bez kontaktu — do oddzwonienia jeszcze dziś (parts/nastepny_krok.py → first_call_leads) -->
+<div class="panel" id="fc-panel" style="margin-bottom:14px;border-color:color-mix(in srgb, var(--red) 40%, var(--border));border-left:4px solid var(--red)">
+  <div class="panel-header" style="color:var(--red)"><i class="bi bi-telephone-outbound"></i> 🔥 Pilne — oddzwoń do nowych leadów ({{ fc_rows|length }})
+    <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)">· każdy nowy lead obsługujemy tego samego dnia</span></div>
+  <div class="panel-body" style="padding:0 16px">
+    {% for l in fc_rows %}
+    <div class="act-row" data-fc="{{ l.id }}">
+      <div class="act-icon">📞</div>
+      <div class="act-body">
+        <a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" class="act-title u-overdue">{{ l.flag ~ ' ' if l.flag }}{{ l.company }}</a>
+        {% if l.source and is_direct_lead(l.source) %} <span class="direct-tag"><span class="direct-spark">✦</span> {{ direct_label(l.source) }}</span>{% endif %}
+        <div class="act-meta">{{ l.contact }}{% if l.phone %}{{ ' · ' if l.contact }}📞 <a href="tel:{{ l.phone|replace(' ', '') }}" style="text-decoration:underline;font-weight:600;color:var(--text)">{{ l.phone }}</a>{% endif %}{% if not l.phone and l.email %}{{ ' · ' if l.contact }}✉️ {{ l.email }}{% endif %}</div>
+        <div class="act-meta">wpadł {{ l.when }}{% if l.age_h < 24 %} ({{ l.age_h|round|int }} h temu){% endif %}{% if not l.mine and l.owner %} · 👤 {{ l.owner }}{% endif %}{% if l.source %} · {{ l.source }}{% endif %}</div>
+      </div>
+      <div class="act-right">
+        <div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">
+          <a class="btn btn-secondary btn-sm" style="font-size:11px" href="{{ url_for('crm_lead_detail', lead_id=l.id) }}">Otwórz</a>
+          <button class="btn btn-primary btn-sm" style="font-size:11px" title="Rozmowa odbyta — lead obsłużony" onclick="fcCalled({{ l.id }}, this)">✅ Zadzwoniłem</button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+<script>
+function fcCalled(id, btn) {
+  btn.disabled = true;
+  const fd = new FormData(); fd.append('how', 'telefon');
+  fetch('/crm/leads/' + id + '/obsluzony', {method: 'POST', body: fd, headers: {'X-Requested-With': 'fetch'}})
+    .then(r => r.json()).then(() => {
+      const row = document.querySelector('[data-fc="' + id + '"]'); if (row) row.remove();
+      if (!document.querySelector('[data-fc]')) { const p = document.getElementById('fc-panel'); if (p) p.remove(); }
+    }).catch(() => { btn.disabled = false; });
+}
+</script>
+{% endif %}
+
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
 
   <!-- LEFT: OVERDUE + TODAY -->

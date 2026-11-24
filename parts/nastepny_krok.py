@@ -26,16 +26,43 @@ def clear_open_tasks(lead, reason="lead wygrany (dalej Customer Journey)"):
     return retire_tasks(lead, lead_open_tasks(lead.id).all(), reason)
 
 
+def lead_needs_first_call(lead):
+    """Nowy lead, z którym nikt się jeszcze nie skontaktował: na karcie najpierw „📞 Pierwszy telefon” (numer na wierzchu),
+    a nie okno „Ustal następny krok” — następny krok planuje się dopiero po pierwszym kontakcie."""
+    try:
+        return bool(lead is not None and lead.id and lead.stage == "Nowy" and lead.handled_at is None
+                    and not lead.clickup_pending and not is_market_copy(lead))
+    except Exception:
+        db.session.rollback()
+        return False
+
+
 def lead_needs_next_step(lead):
     """Czy na karcie leada trzeba ustalić następny krok: aktywny etap, lead już w CRM (nie w „Z ClickUp”, nie kopia
-    z CRM LT/DE) i ani jednego otwartego zadania."""
+    z CRM LT/DE), po pierwszym kontakcie i ani jednego otwartego zadania."""
     try:
         if lead is None or not lead.id or lead.stage not in ACTIVE_STAGES or lead.clickup_pending or is_market_copy(lead):
+            return False
+        if lead_needs_first_call(lead):
             return False
         return lead_open_tasks(lead.id).first() is None
     except Exception:
         db.session.rollback()
         return False
+
+
+def first_call_leads(user_id=None):
+    """„🔥 Pilne — oddzwoń do nowych leadów” w Moim dniu: nowe leady bez kontaktu (te same co w oknie alarmów),
+    najpierw leady tej osoby i bez opiekuna, potem cudze; w każdej grupie najstarsze na górze."""
+    try:
+        leads = unhandled_leads()
+        rows = [dict(_lead_alert_row(l), owner=USERS_BY_ID.get(l.assigned_to, {}).get("name", ""),
+                     mine=user_id is None or l.assigned_to in (None, user_id), created=l.created_at or datetime.min)
+                for l in leads]
+    except Exception:
+        db.session.rollback()
+        return []
+    return sorted(rows, key=lambda r: (not r["mine"], r["created"]))
 
 
 def cleanup_won_tasks_once():
@@ -52,4 +79,5 @@ def cleanup_won_tasks_once():
     return removed
 
 
-app.jinja_env.globals.update(lead_needs_next_step=lead_needs_next_step, auto_tasks_on=auto_tasks_on)
+app.jinja_env.globals.update(lead_needs_next_step=lead_needs_next_step, auto_tasks_on=auto_tasks_on,
+                             lead_needs_first_call=lead_needs_first_call, first_call_leads=first_call_leads)

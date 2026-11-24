@@ -1,0 +1,57 @@
+{# Nowy lead bez kontaktu (parts/nastepny_krok.py → lead_needs_first_call): na górze karty pierwszy telefon z numerem
+   na wierzchu. Nic nie zasłania strony; po „Zadzwoniłem” lead jest obsłużony i dopiero wtedy CRM pyta o następny krok. #}
+{% if lead_needs_first_call(lead) %}
+{% set fc_phone = (lead.contact_phone or '')|trim %}
+{% set fc_ask = "Napisz maila do nowego klienta: podziękuj za zapytanie o wynajem humanoidalnego robota Unitree G1 i poproś o brakujące informacje potrzebne do wyceny (data, miasto i miejsce, godziny od–do, rodzaj wydarzenia, liczba gości) — pytaj tylko o to, czego nie ma w danych leada. " %}
+{% set fc_nocall = "Dzwoniliśmy do klienta w sprawie jego zapytania, ale nie odebrał. " ~ fc_ask %}
+<style>
+.fc-card { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin: 0 0 14px; padding: 16px 18px; border-radius: var(--radius);
+  background: var(--panel); border: 1px solid color-mix(in srgb, var(--red) 35%, var(--border)); border-left: 4px solid var(--red);
+  box-shadow: var(--shadow-sm); }
+.fc-main { flex: 1 1 320px; min-width: 0; }
+.fc-kicker { font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--red); }
+.fc-who { font-size: 15px; font-weight: 700; margin: 4px 0 6px; color: var(--text); }
+.fc-who span { font-weight: 500; color: var(--muted); }
+.fc-phone-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fc-phone { font-size: 24px; font-weight: 800; letter-spacing: .01em; color: var(--accent); text-decoration: none; }
+.fc-phone:hover { text-decoration: underline; }
+.fc-nophone { font-size: 13px; color: var(--yellow); font-weight: 600; }
+.fc-meta { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+.fc-acts { flex: 1 1 300px; display: flex; flex-direction: column; gap: 8px; }
+.fc-acts form { display: flex; gap: 6px; flex-wrap: wrap; }
+.fc-acts input[type=text] { flex: 1 1 160px; min-width: 0; }
+.fc-row { display: flex; gap: 6px; flex-wrap: wrap; }
+</style>
+<div class="fc-card" id="first-call">
+  <div class="fc-main">
+    <div class="fc-kicker">📞 Pierwszy kontakt — nowy lead czeka na telefon</div>
+    <div class="fc-who">{{ lead.contact_name or lead.company }}{% if lead.contact_name and lead.company and lead.company != lead.contact_name %} <span>· {{ lead.company }}</span>{% endif %}</div>
+    {% if fc_phone %}
+    <div class="fc-phone-row">
+      <a class="fc-phone" href="tel:{{ fc_phone|replace(' ', '')|replace('-', '') }}">{{ fc_phone }}</a>
+      <button type="button" class="btn btn-ghost btn-sm" onclick='navigator.clipboard && navigator.clipboard.writeText({{ fc_phone|tojson }}).then(function () { crmToast("Skopiowano numer"); })'>Kopiuj</button>
+    </div>
+    {% else %}
+    <div class="fc-nophone">Brak numeru telefonu{% if lead.emails %} — napisz maila z prośbą o kontakt{% else %} i e-maila — uzupełnij kontakt w „Edytuj”{% endif %}.</div>
+    {% endif %}
+    <div class="fc-meta">{% if lead.emails %}✉️ {{ lead.emails|join(', ') }}{% endif %}{% if lead.source %}{{ ' · ' if lead.emails }}{{ lead.source }}{% endif %}</div>
+  </div>
+  <div class="fc-acts">
+    <form method="POST" action="{{ url_for('crm_lead_handled', lead_id=lead.id) }}">
+      <input type="hidden" name="how" value="telefon">
+      <input type="text" name="note" maxlength="1000" placeholder="Krótko z rozmowy (opcjonalnie)">
+      <button class="btn btn-primary" type="submit">✅ Zadzwoniłem — rozmowa odbyta</button>
+    </form>
+    <div class="fc-row">
+      {% if lead.emails %}
+      <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail_compose', lead=lead.id, auto=1, ai=fc_nocall) }}">📵 Nie odebrał → mail</a>
+      <a class="btn btn-secondary btn-sm" href="{{ url_for('crm_mail_compose', lead=lead.id, auto=1, ai=fc_ask) }}">✉️ Mail z prośbą o dane</a>
+      {% endif %}
+      <form method="POST" action="{{ url_for('crm_lead_handled', lead_id=lead.id) }}" style="display:inline">
+        <input type="hidden" name="how" value="inne">
+        <button class="btn btn-ghost btn-sm" type="submit" title="Kontakt był poza CRM (np. WhatsApp) — lead obsłużony">✅ Obsłużony inaczej</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}

@@ -8,6 +8,13 @@
       <b style="color:var(--text)">{{ lead.company }}</b> ({{ lead.stage }}) nie ma zaplanowanego kroku. CRM nie dodaje zadań sam —
       wpisz, co i kiedy dzieje się dalej z tym klientem.
     </div>
+    {% if lead.contact_phone or lead.emails %}
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:8px 10px;border-radius:8px;background:var(--panel2);font-size:13px">
+      <span style="color:var(--muted)">{{ lead.contact_name or 'Kontakt' }}:</span>
+      {% if lead.contact_phone %}<a href="tel:{{ lead.contact_phone|replace(' ', '')|replace('-', '') }}" style="font-size:16px;font-weight:700;color:var(--accent)">📞 {{ lead.contact_phone }}</a>{% endif %}
+      {% if lead.emails %}<span>✉️ {{ lead.emails|join(', ') }}</span>{% endif %}
+    </div>
+    {% endif %}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <div style="flex:1;min-width:150px">
         <label>Co</label>
@@ -33,13 +40,21 @@
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-primary" type="submit">Zapisz krok</button>
+      <button class="btn btn-secondary" type="button" onclick="nsLater()"
+              title="Okno wróci przy następnym wejściu do leada, dopóki nie będzie zaplanowanego kroku">Najpierw zadzwonię — później</button>
       <button class="btn btn-secondary" type="button"
               onclick="document.getElementById('ns-gate').remove(); var p=document.getElementById('lead-stage-panel'); if(p) p.scrollIntoView({behavior:'smooth'});"
               title="Gdy lead jest już wygrany albo stracony — zmień etap zamiast planować krok">Lead zamknięty — zmień etap</button>
     </div>
   </form>
 </div>
+<div id="ns-bar" class="notice notice-warn" style="display:none;margin:0 0 12px;align-items:center;gap:10px">
+  ➡️ <span><b>{{ lead.company }}</b> nie ma zaplanowanego następnego kroku.</span>
+  <button class="btn btn-primary btn-sm" type="button" style="margin-left:auto" onclick="nsOpen()">Ustal teraz</button>
+</div>
 <script>
+function nsLater() { var g = document.getElementById('ns-gate'), b = document.getElementById('ns-bar'); if (g) g.style.display = 'none'; if (b) b.style.display = 'flex'; }
+function nsOpen() { var g = document.getElementById('ns-gate'), b = document.getElementById('ns-bar'); if (g) g.style.display = 'flex'; if (b) b.style.display = 'none'; }
 (function () {
   var d = document.getElementById('ns-due');
   if (d && !d.value) { var t = new Date(); d.value = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); }

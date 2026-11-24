@@ -8369,13 +8369,15 @@ def alerts_state(code=None, user_id=None):
         return user_id is None or lead.assigned_to in (None, user_id)
     waiting = unhandled_leads(code)
     leads = [_lead_alert_row(l) for l in waiting if mine(l)]
+    # cudze nowe leady (np. Jerzego) — reszta zespołu widzi je na pasku i w liście, ale okno ich nie blokuje
+    team = [dict(_lead_alert_row(l), owner=USERS_BY_ID.get(l.assigned_to, {}).get("name", "")) for l in waiting if not mine(l)]
     others = {mc: len([l for l in unhandled_leads(mc) if mine(l)]) for mc in markets.MARKETS if mc != code}
     tasks = mail_tasks_open(code)
     show_tasks = mail_tasks_visible()
     # pasek „klienci z błędnym linkiem” wyłączony — sprawa zamknięta (lista zostaje pod /crm/poprawki, bez przypominania)
     return {"leads": leads, "other": {mc: n for mc, n in others.items() if n}, "badlinks": 0,
             "tasks": [_mail_task_row(t) for t in tasks] if show_tasks else [], "tasks_waiting": len(tasks),
-            "show_tasks": show_tasks, "show_from": MAIL_TASKS_SHOW_FROM, "team_waiting": len(waiting) - len(leads)}
+            "show_tasks": show_tasks, "show_from": MAIL_TASKS_SHOW_FROM, "team_waiting": len(team), "team_leads": team}
 
 
 def _mail_task_row(t):

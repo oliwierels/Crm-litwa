@@ -124,10 +124,16 @@ def test_one_time_cleanup_of_already_won_leads(app):
 
 
 def test_lead_page_asks_a_person_for_the_next_step(app):
-    lead = mk("Bez Kroku", stage="Nowy")
+    lead = mk("Bez Kroku", stage="Nowy", contact_phone="600 700 800", contact_name="Jan Testowy")
     c = client()
     html = c.get(f"/crm/leads/{lead.id}").get_data(as_text=True)
+    assert "Pierwszy kontakt" in html and 'href="tel:600700800"' in html, "nowy lead: numer na wierzchu"
+    assert "Ustal następny krok" not in html, "najpierw pierwszy telefon — okno kroku nie zasłania numeru"
+    assert c.post(f"/crm/leads/{lead.id}/obsluzony", data={"how": "telefon", "note": "chcą wycenę"}).status_code == 302
+    html = c.get(f"/crm/leads/{lead.id}").get_data(as_text=True)
+    assert "Pierwszy kontakt" not in html
     assert "Ustal następny krok" in html and f"/crm/leads/{lead.id}/activities/add" in html
+    assert "tel:600700800" in html and "Najpierw zadzwonię" in html, "w oknie kroku też numer i „później”"
     due = (date.today() + timedelta(days=2)).isoformat()
     r = c.post(f"/crm/leads/{lead.id}/activities/add",
                data={"kind": "call", "due_date": due, "notes": "Zadzwonić o termin", "assigned_to": "1"})
@@ -139,3 +145,26 @@ def test_lead_page_asks_a_person_for_the_next_step(app):
                   mk("W Poczekalni", stage="Nowy", clickup_pending=True)):
         assert not crm.lead_needs_next_step(other)
         assert "Ustal następny krok" not in c.get(f"/crm/leads/{other.id}").get_data(as_text=True)
+
+
+def test_new_leads_to_call_are_urgent_for_everyone(app):
+    """„🔥 Pilne — oddzwoń do nowych leadów” w Moim dniu i pasek alarmu także u osób, które nie są opiekunem
+    (okno blokuje tylko opiekuna)."""
+    lead = mk("Pilny Nowy Lead", stage="Nowy", contact_phone="600 111 222", contact_name="Anna Pilna")
+    lead.assigned_to = 3  # Jerzy — opiekun nowych leadów
+    crm.db.session.commit()
+    c = client()
+    c.set_cookie("crm_user", "2")  # Bartek
+    html = c.get("/crm/").get_data(as_text=True)
+    assert "Pilne — oddzwoń do nowych leadów" in html and "Pilny Nowy Lead" in html and "tel:600111222" in html
+    assert "czeka na telefon" in html or "czekają na telefon" in html, "pasek alarmu z cudzymi nowymi leadami"
+    i = html.find('id="al-overlay"')
+    assert i > 0 and "hidden" in html[i:i + 80], "cudze leady nie blokują okna"
+    st = crm.alerts_state(user_id=2)
+    assert any(r["id"] == lead.id and r["owner"] == "Jerzy" for r in st["team_leads"])
+    assert all(r["id"] != lead.id for r in st["leads"])
+    rows = crm.first_call_leads(3)
+    assert rows and rows[0]["mine"] and any(r["id"] == lead.id for r in rows)
+    crm.mark_lead_handled(lead, 3, "telefon")
+    crm.db.session.commit()
+    assert all(r["id"] != lead.id for r in crm.first_call_leads(2)), "po telefonie znika z pilnych"
