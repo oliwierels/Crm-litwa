@@ -1851,6 +1851,9 @@ def crm_leads():
     assigned = request.args.get("assigned", "")
 
     leads = _filtered_leads(search, assigned)
+    origin = request.args.get("zrodlo", "")  # ✦ z poczty / ClickUp / inne (parts/wyglad.py)
+    counts = origin_counts(leads)
+    leads = filter_by_origin(leads, origin)
     by_stage = {s: [] for s in STAGES}
     for lead in leads:
         by_stage.get(lead.stage, by_stage["Nowy"]).append(lead)
@@ -1865,7 +1868,7 @@ def crm_leads():
         leads=leads, by_stage=by_stage,
         list_leads=list_leads, show_lost=show_lost,
         stages=STAGES, stage_colors=STAGE_COLORS,
-        view=view, search=search, assigned=assigned,
+        view=view, search=search, assigned=assigned, origin=origin, origin_counts=counts,
         robot_models=ROBOT_MODELS,
         inactivity_fn=lead_inactivity,
         inactivity_color_fn=lead_inactivity_color,
@@ -1949,7 +1952,7 @@ def crm_export_leads():
 
     search = request.args.get("q", "").strip()
     assigned = request.args.get("assigned", "")
-    leads = _filtered_leads(search, assigned)
+    leads = filter_by_origin(_filtered_leads(search, assigned), request.args.get("zrodlo", ""))
 
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";")

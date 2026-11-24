@@ -1142,4 +1142,11 @@ LT = {
     'Zadzwoniłem': 'Paskambinau',
     'Nowe leady innych osób — czekają na telefon': 'Kitų asmenų naujos užklausos — laukia skambučio',
     'pilne, do oddzwonienia jeszcze dziś.': 'skubu, paskambinti dar šiandien.',
+    # --- filtr źródła leadów ---
+    'Wszystkie źródła': 'Visi šaltiniai',
+    'ClickUp (reklamy)': 'ClickUp (reklamos)',
+    'Skąd przyszedł lead — ✦ Z poczty: sami do nas napisali (formularz na stronie, mail), złota ramka': 'Iš kur atėjo užklausa — ✦ Iš pašto: parašė patys (svetainės forma, el. laiškas), auksinis rėmelis',
+    'Inne źródła': 'Kiti šaltiniai',
+    'Skąd przyszedł lead': 'Iš kur atėjo užklausa',
+    'Pokaż wszystkie leady': 'Rodyti visas užklausas',
 }

@@ -9,12 +9,18 @@
     <option value="">Wszyscy opiekunowie</option>
     {% for u in users %}<option value="{{ u.id }}" {% if assigned==u.id|string %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
   </select>
+  {% set oc = origin_counts or {} %}
+  <select name="zrodlo" onchange="this.form.submit()" style="width:auto{{ ';border-color:#e3a63b;color:var(--yellow);font-weight:600' if origin == 'poczta' }}"
+          title="Skąd przyszedł lead — ✦ Z poczty: sami do nas napisali (formularz na stronie, mail), złota ramka">
+    <option value="">Wszystkie źródła</option>
+    {% for k, label in lead_origins %}<option value="{{ k }}" {{ 'selected' if origin == k }}>{{ label }} ({{ oc.get(k, 0) }})</option>{% endfor %}
+  </select>
   <input type="hidden" name="view" value="{{ view }}">
   {% if show_lost %}<input type="hidden" name="show_lost" value="1">{% endif %}
   {% if german_view %}<input type="hidden" name="de" value="1">{% endif %}
 </form>
 {% if view == 'list' %}
-<a href="{{ url_for('crm_leads') }}?view=list&q={{ search|urlencode }}&assigned={{ assigned }}{% if not show_lost %}&show_lost=1{% endif %}"
+<a href="{{ url_for('crm_leads') }}?view=list&q={{ search|urlencode }}&assigned={{ assigned }}&zrodlo={{ origin }}{% if not show_lost %}&show_lost=1{% endif %}"
    class="btn btn-{{ 'primary' if show_lost else 'secondary' }} btn-sm" title="Pokaż / ukryj leady na etapie Stracony">
   {{ '✓ Ze straconymi' if show_lost else 'Bez straconych' }}
 </a>
@@ -25,10 +31,7 @@
 <a href="{{ url_for('crm_leads') }}?view={{ view }}&assigned={{ assigned }}&de=1" class="btn btn-secondary btn-sm"
    title="Nowe leady z Niemiec / Austrii / Szwajcarii bez oferty — ukryte tutaj, żeby nie mieszały się z polskimi. Zaofertowane są na tablicy normalnie.">🇩🇪 Niemieckie nowe <span class="k-count">{{ german_count }}</span></a>
 {% endif %}
-<button type="button" class="btn btn-secondary btn-sm direct-filter" id="directFilter" hidden onclick="crmOnlyDirect()"
-        title="Pokaż tylko leady, które same do nas napisały (formularz na stronie, mail) — bez leadów z reklam w ClickUp">
-  <span class="direct-spark">✦</span> Z poczty <span class="k-count" id="directCount"></span></button>
-<a href="{{ url_for('crm_export_leads') }}?q={{ search|urlencode }}&assigned={{ assigned }}" class="btn btn-secondary btn-sm btn-icon" title="Eksport do CSV (uwzględnia filtry)">
+<a href="{{ url_for('crm_export_leads') }}?q={{ search|urlencode }}&assigned={{ assigned }}&zrodlo={{ origin }}" class="btn btn-secondary btn-sm btn-icon" title="Eksport do CSV (uwzględnia filtry)">
   <i class="bi bi-download"></i>
 </a>
 {% endblock %}
@@ -222,18 +225,5 @@ document.querySelectorAll('.k-body').forEach(col => {
   });
 });
 </script>
-<script>
-(function () {
-  const n = document.querySelectorAll('.k-card.k-direct, tr.row-direct').length;
-  const btn = document.getElementById('directFilter');
-  if (!btn || !n) return;
-  btn.hidden = false;
-  document.getElementById('directCount').textContent = n;
-  let on = false;
-  try { on = localStorage.getItem('crm-only-direct') === '1'; } catch (e) {}
-  const apply = () => { document.body.classList.toggle('only-direct', on); btn.classList.toggle('btn-primary', on); btn.classList.toggle('btn-secondary', !on); };
-  window.crmOnlyDirect = () => { on = !on; try { localStorage.setItem('crm-only-direct', on ? '1' : '0'); } catch (e) {} apply(); };
-  apply();
-})();
-</script>
+<script>try { localStorage.removeItem('crm-only-direct'); } catch (e) {}  // dawny filtr w przeglądarce — teraz w adresie (?zrodlo=poczta)</script>
 {% endblock %}

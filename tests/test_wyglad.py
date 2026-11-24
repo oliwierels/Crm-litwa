@@ -135,7 +135,7 @@ def test_direct_leads_from_mail_and_form_stand_out(client):
         cls = {int(i): c for c, i in re.findall(r'<div class="k-card([^"]*)"[^>]*data-lead="(\d+)"', board)}
         assert "k-direct" in cls[made[0].id], "karta leada z formularza ma złotą ramkę"
         assert "k-direct" not in cls[made[1].id], "lead z ClickUp bez wyróżnienia"
-        assert 'id="directFilter"' in board
+        assert 'name="zrodlo"' in board and '<option value="poczta"' in board, "filtr „✦ Z poczty” (parts/wyglad.py)"
         listing = client.get("/crm/leads?view=list").get_data(as_text=True)
         assert "row-direct" in listing
         header = client.get(f"/crm/leads/{made[0].id}").get_data(as_text=True)

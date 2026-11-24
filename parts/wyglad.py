@@ -80,6 +80,33 @@ def direct_label(lead_or_source):
     return "Formularz" if _FORM_SOURCE.search(src or "") else "Mail"
 
 
+# filtr „Źródło” (Leady, Do obdzwonienia, eksport): ?zrodlo=poczta | clickup | inne
+LEAD_ORIGINS = (("poczta", "✦ Z poczty"), ("clickup", "ClickUp (reklamy)"), ("inne", "Inne źródła"))
+
+
+def lead_origin(lead):
+    """Skąd lead: „poczta” (sam napisał — złota ramka), „clickup” (reklamy przez ClickUp) albo „inne” (SEO, telefon…)."""
+    if is_direct_lead(lead):
+        return "poczta"
+    if "clickup" in (getattr(lead, "source", None) or "").lower() or getattr(lead, "clickup_task_id", None):
+        return "clickup"
+    return "inne"
+
+
+def filter_by_origin(leads, origin):
+    """Leady z danego źródła; nieznane / puste źródło filtra = wszystkie."""
+    if origin not in dict(LEAD_ORIGINS):
+        return list(leads)
+    return [l for l in leads if lead_origin(l) == origin]
+
+
+def origin_counts(leads):
+    counts = {k: 0 for k, _ in LEAD_ORIGINS}
+    for l in leads:
+        counts[lead_origin(l)] += 1
+    return counts
+
+
 @app.template_filter("money_parts")
 def money_parts(totals):
     """['503 715 PLN', '16 300 EUR'] — kafelki pokazują główną walutę dużo, pozostałe małą linią pod spodem."""
@@ -116,4 +143,4 @@ def crm_api_search():
 
 
 app.jinja_env.globals.update(has_route=has_route, av_style=av_style, page_usage=page_usage, is_direct_lead=is_direct_lead,
-                             direct_label=direct_label)
+                             direct_label=direct_label, lead_origins=LEAD_ORIGINS, lead_origin=lead_origin)
