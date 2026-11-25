@@ -8342,6 +8342,7 @@ def _lead_alert_row(lead):
     lang = lead_language(lead)  # flaga tylko przy kliencie w innym języku niż rynek (np. zagraniczny lead w CRM PL)
     return {"id": lead.id, "company": lead.company, "contact": lead.contact_name or "", "phone": lead.contact_phone or "",
             "email": ", ".join(lead.emails), "has_email": bool(lead.emails), "source": lead.source or "",
+            "direct": is_direct_lead(lead),  # sam napisał (formularz / Formspree / mail) — na górę listy i na złoto
             "when": f"{created:%d.%m %H:%M}" if created else "", "age_h": round(age_h, 1),
             "old": bool(created and created.date() < to_local(datetime.utcnow()).date()),
             "notes": " ".join((lead.notes or "").split())[:220], "market": lead.market,
@@ -8371,9 +8372,11 @@ def alerts_state(code=None, user_id=None):
     def mine(lead):
         return user_id is None or lead.assigned_to in (None, user_id)
     waiting = unhandled_leads(code)
-    leads = [_lead_alert_row(l) for l in waiting if mine(l)]
+    # leady, które same napisały (formularz / Formspree / mail), na górze — obsługujemy je w pierwszej kolejności
+    leads = sorted((_lead_alert_row(l) for l in waiting if mine(l)), key=lambda r: not r["direct"])
     # cudze nowe leady (np. Jerzego) — reszta zespołu widzi je na pasku i w liście, ale okno ich nie blokuje
-    team = [dict(_lead_alert_row(l), owner=USERS_BY_ID.get(l.assigned_to, {}).get("name", "")) for l in waiting if not mine(l)]
+    team = sorted((dict(_lead_alert_row(l), owner=USERS_BY_ID.get(l.assigned_to, {}).get("name", ""))
+                   for l in waiting if not mine(l)), key=lambda r: not r["direct"])
     others = {mc: len([l for l in unhandled_leads(mc) if mine(l)]) for mc in markets.MARKETS if mc != code}
     tasks = mail_tasks_open(code)
     show_tasks = mail_tasks_visible()

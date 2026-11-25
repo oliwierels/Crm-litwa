@@ -168,3 +168,25 @@ def test_new_leads_to_call_are_urgent_for_everyone(app):
     crm.mark_lead_handled(lead, 3, "telefon")
     crm.db.session.commit()
     assert all(r["id"] != lead.id for r in crm.first_call_leads(2)), "po telefonie znika z pilnych"
+
+
+def test_direct_new_leads_first_and_gold_in_alerts(app):
+    """W oknie nowych leadów i w „Pilne” leady, które same napisały (formularz / Formspree / mail), są na górze
+    i podświetlone na złoto jak na tablicy — ClickUp niżej."""
+    old = datetime.utcnow() - timedelta(hours=3)
+    ad = mk("Z Reklamy Najstarszy", stage="Nowy", source="ClickUp", contact_phone="600 222 333", created_at=old)
+    form = mk("Z Formspree Nowszy", stage="Nowy", source="Formularz 33bots.pl", contact_phone="600 444 555")
+    for lead in (ad, form):
+        lead.assigned_to = 1
+    crm.db.session.commit()
+    ids = [r["id"] for r in crm.alerts_state(user_id=1)["leads"]]
+    assert ids.index(form.id) < ids.index(ad.id), "formularz przed ClickUp, choć wpadł później"
+    rows = [r["id"] for r in crm.first_call_leads(1)]
+    assert rows.index(form.id) < rows.index(ad.id)
+    c = client()
+    c.set_cookie("crm_user", "1")
+    html = c.get("/crm/").get_data(as_text=True)
+    i = html.find(f'data-lead="{form.id}"')
+    assert i > 0 and "al-direct" in html[max(0, i - 120):i], "złota ramka w oknie nowych leadów"
+    assert "al-direct" not in html[max(0, html.find(f'data-lead="{ad.id}"') - 120):html.find(f'data-lead="{ad.id}"')]
+    assert "z poczty / formularza — najpierw te" in html

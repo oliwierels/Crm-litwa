@@ -110,7 +110,8 @@
     <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)">· każdy nowy lead obsługujemy tego samego dnia</span></div>
   <div class="panel-body" style="padding:0 16px">
     {% for l in fc_rows %}
-    <div class="act-row" data-fc="{{ l.id }}">
+    <div class="act-row" data-fc="{{ l.id }}" {% if l.direct %}style="margin:6px -10px;padding:10px;border-radius:10px;border:1px solid rgba(227,166,59,.55);border-left:4px solid #e3a63b;background:linear-gradient(90deg, rgba(227,166,59,.10), transparent 55%);box-shadow:0 10px 26px -16px rgba(227,166,59,.7)"
+         title="Sam do nas napisał (formularz / mail) — obsłuż w pierwszej kolejności"{% endif %}>
       <div class="act-icon">📞</div>
       <div class="act-body">
         <a href="{{ url_for('crm_lead_detail', lead_id=l.id) }}" class="act-title u-overdue">{{ l.flag ~ ' ' if l.flag }}{{ l.company }}</a>

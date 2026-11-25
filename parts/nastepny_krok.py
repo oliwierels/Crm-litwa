@@ -53,7 +53,8 @@ def lead_needs_next_step(lead):
 
 def first_call_leads(user_id=None):
     """„🔥 Pilne — oddzwoń do nowych leadów” w Moim dniu: nowe leady bez kontaktu (te same co w oknie alarmów),
-    najpierw leady tej osoby i bez opiekuna, potem cudze; w każdej grupie najstarsze na górze."""
+    najpierw leady tej osoby i bez opiekuna, potem cudze; w każdej grupie najpierw ✦ z poczty / formularza
+    (sami napisali), potem najstarsze."""
     try:
         leads = unhandled_leads()
         rows = [dict(_lead_alert_row(l), owner=USERS_BY_ID.get(l.assigned_to, {}).get("name", ""),
@@ -62,7 +63,7 @@ def first_call_leads(user_id=None):
     except Exception:
         db.session.rollback()
         return []
-    return sorted(rows, key=lambda r: (not r["mine"], r["created"]))
+    return sorted(rows, key=lambda r: (not r["mine"], not r["direct"], r["created"]))  # ✦ z poczty na górze
 
 
 def cleanup_won_tasks_once():
